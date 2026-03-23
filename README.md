@@ -1,5 +1,5 @@
 # PoggioAI/MSc
-### Proof-Oriented Generative General Intelligence Orchestration: Agentic Investigation / Multi-agent Scientific Collaboration
+### Proof-Oriented Generative General Intelligence Orchestration: Agentic Investigation / Multi-agent Scientific Consortium
 
 [Website](https://PoggioAI.github.io) | [Discord](https://discord.gg/Pz7spPPY) | [Paper](https://PoggioAI.github.io) | [GitHub](https://github.com/PierBeneventano/OpenPI)
 
