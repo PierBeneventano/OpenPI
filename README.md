@@ -9,7 +9,7 @@
 
 The system implements a fixed workflow that decomposes work into 23+ specialist nodes across literature, theory, experiment, synthesis, and writing phases, with repair and follow-up routes when artifacts are incomplete, inconsistent, not novel, or not adequately established. Progress is represented by named intermediate outputs and stage-level validation gates (the *artifact contract*) rather than by free-form dialogue alone. Optional rigor-enhancing components include theorem-oriented reasoning, multi-model debate counsel, and tree-search-based exploration.
 
-(The core Python package is named `consortium`; **PoggioAI/MSc** is the project name.)
+(The core Python package is named `consortium`; **pAI/MSc** is the project name.)
 
 - License: MIT (`LICENSE`)
 - Runtime: Python 3.11 (recommended via conda)
@@ -22,9 +22,9 @@ The system implements a fixed workflow that decomposes work into 23+ specialist 
 
 This project was entirely vibecoded in about 3 weeks (Claude Code + Cursor). However, our cumulative years of beliefs of how ML research should be done are hard-coded into the `md` files. In the prehistory of this project, we were inspired by [freephdlabor](https://github.com/ltjed/freephdlabor) and [OpenClaw](https://docs.openclaw.ai/).
 
-Make sure you deeply read and review the papers that PoggioAI develops, run some sanity-check thorough deep researches to check novelty and related work, and ask your reasoning model of choice to deeply and thoroughly proofcheck all the claims!
+Make sure you deeply read and review the papers that pAI develops, run some sanity-check thorough deep researches to check novelty and related work, and ask your reasoning model of choice to deeply and thoroughly proofcheck all the claims!
 
-We hope this will be helpful for you! If you like this project please support us on social media! If PoggioAI helped you with your research please acknowledge us!
+We hope this will be helpful for you! If you like this project please support us on social media! If pAI helped you with your research please acknowledge us!
 
 ---
 
@@ -123,7 +123,7 @@ Runs are resumable through LangGraph checkpoints (`checkpoints.db`) and can be s
 
 ## Guarantees and Non-Guarantees
 
-### What PoggioAI/MSc Guarantees
+### What pAI/MSc Guarantees
 
 - **Workflow execution**: Given valid API keys and a task prompt, the pipeline will execute every stage in the fixed workflow graph and produce the documented artifacts.
 - **Artifact generation**: Each stage produces its mandatory output files (see [Quality Gates and Artifact Contracts](#quality-gates-and-artifact-contracts)).
@@ -131,7 +131,7 @@ Runs are resumable through LangGraph checkpoints (`checkpoints.db`) and can be s
 - **Checkpointing**: Every completed stage is persisted to SQLite. A crashed run can be resumed from the last checkpoint.
 - **Validation gates**: When `--enforce-paper-artifacts` or `--enforce-editorial-artifacts` are enabled, the pipeline will not report success unless the specified artifacts exist and pass structural checks.
 
-### What PoggioAI/MSc Does NOT Guarantee
+### What pAI/MSc Does NOT Guarantee
 
 - **Scientific correctness**: All generated claims, proofs, experimental results, and literature citations require human verification before any submission or publication.
 - **Reproducibility across runs**: LLM outputs are stochastic. Two runs with the same task and model will produce different papers.
@@ -1084,7 +1084,7 @@ The proofreading and reviewer agents produce `.tex`/`.pdf` report artifacts; the
 
 ## Submission Checklist (NeurIPS / ICML / ICLR)
 
-PoggioAI/MSc produces a paper draft, not a submission-ready manuscript. Before submitting to any venue, complete this human verification checklist:
+pAI/MSc produces a paper draft, not a submission-ready manuscript. Before submitting to any venue, complete this human verification checklist:
 
 ### Novelty and Positioning
 - [ ] Verify the core claim is genuinely novel by searching recent proceedings (not just arXiv) for the same or equivalent result.
@@ -1410,7 +1410,7 @@ export CONSORTIUM_SEARCH_MAX_MATCHES=200
 
 ## Empirical Quality Evidence
 
-_This section is a placeholder for benchmark results measuring the quality of PoggioAI/MSc-generated papers._
+_This section is a placeholder for benchmark results measuring the quality of pAI/MSc-generated papers._
 
 Planned metrics:
 - **Artifact completion rate**: Fraction of runs that produce all required artifacts without manual intervention.
