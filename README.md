@@ -1,11 +1,11 @@
-# PoggioAI/MSc
-### Proof-Oriented Generative General Intelligence Orchestration: Agentic Investigation / Multi-agent Scientific Consortium
+# pAI/MSc
+### Principal (Agentic) Investigation / Multi-agent Scientific Consortium
 
 [Website](https://PoggioAI.github.io) | [Discord](https://discord.gg/Pz7spPPY) | [Paper](https://PoggioAI.github.io) | [GitHub](https://github.com/PierBeneventano/OpenPI)
 
 **Goal:** In our experience, moving from a strong human-developed idea to a solid machine-learning-theory manuscript still often takes on the order of $10^2$ to $10^3$ prompts---if possible at all---with frontier reasoning models and agentic systems as Claude Code or GPT Pro. The goal here is to bring this down to 0-10 user prompts (steers).
 
-**PoggioAI/MSc** is an open-source, customizable, modular multi-agent system for academic research workflows. Our goal is not autonomous scientific ideation, nor fully automated research. It is narrower and more practical: to reduce by orders of magnitude the human steering required to turn a specified hypothesis into a literature-grounded, mathematically established, experimentally supported, submission-oriented manuscript draft. Built with a current emphasis on machine learning theory and adjacent quantitative fields.
+**pAI/MSc** is an open-source, customizable, modular multi-agent system for academic research workflows. Our goal is not autonomous scientific ideation, nor fully automated research. It is narrower and more practical: to reduce by orders of magnitude the human steering required to turn a specified hypothesis into a literature-grounded, mathematically established, experimentally supported, submission-oriented manuscript draft. Built with a current emphasis on machine learning theory and adjacent quantitative fields.
 
 The system implements a fixed workflow that decomposes work into 23+ specialist nodes across literature, theory, experiment, synthesis, and writing phases, with repair and follow-up routes when artifacts are incomplete, inconsistent, not novel, or not adequately established. Progress is represented by named intermediate outputs and stage-level validation gates (the *artifact contract*) rather than by free-form dialogue alone. Optional rigor-enhancing components include theorem-oriented reasoning, multi-model debate counsel, and tree-search-based exploration.
 
