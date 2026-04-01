@@ -45,19 +45,12 @@ class IdeaStandardizationTool(BaseTool):
         self._configure_api_keys()
 
     def _configure_api_keys(self):
-        """Configure API keys for litellm from environment variables."""
+        """Configure API keys for litellm — all models routed through OpenRouter."""
         import os
 
-        # Set Google/Gemini API key if available
-        google_key = os.getenv('GOOGLE_API_KEY') or os.getenv('GOOGLEAI_API_KEY')
-        if google_key:
-            litellm.api_key = google_key
-
-        # Set other API keys that might be needed
-        if os.getenv('OPENAI_API_KEY'):
-            litellm.openai_key = os.getenv('OPENAI_API_KEY')
-        if os.getenv('ANTHROPIC_API_KEY'):
-            litellm.anthropic_key = os.getenv('ANTHROPIC_API_KEY')
+        or_key = os.getenv('OPENROUTER_API_KEY')
+        if or_key:
+            litellm.api_key = or_key
 
     def _run(self, idea_json: str) -> str:
         """

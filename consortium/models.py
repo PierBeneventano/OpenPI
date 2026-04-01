@@ -1,9 +1,18 @@
 """
 Canonical model registry — single source of truth for supported models,
-context limits, and provider mappings.
+context limits, provider mappings, and OpenRouter model names.
 """
 
 from __future__ import annotations
+
+# Maps internal provider names to OpenRouter provider prefixes.
+_OPENROUTER_PROVIDER_MAP: dict[str, str] = {
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "google": "google",
+    "deepseek": "deepseek",
+    "xai": "x-ai",
+}
 
 MODEL_REGISTRY: dict[str, dict] = {
     # OpenAI GPT-5 models
@@ -79,3 +88,19 @@ def get_provider(model_id: str) -> str:
     if "llama" in model_id:
         return "openrouter"
     return "unknown"
+
+
+def get_openrouter_name(model_id: str) -> str:
+    """Return the OpenRouter model string for a model (e.g. 'anthropic/claude-opus-4-6').
+
+    Uses the provider from the registry to build '{or_provider}/{model_id}'.
+    Falls back to the raw model_id if provider is unknown.
+    """
+    # If already prefixed (e.g. 'meta-llama/llama-3.1-405b-instruct'), pass through.
+    if "/" in model_id:
+        return model_id
+    provider = get_provider(model_id)
+    or_provider = _OPENROUTER_PROVIDER_MAP.get(provider)
+    if or_provider:
+        return f"{or_provider}/{model_id}"
+    return model_id

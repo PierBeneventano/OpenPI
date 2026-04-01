@@ -10,38 +10,38 @@ from unittest.mock import patch
 
 
 class TestValidateApiKeys:
-    def test_no_error_when_key_set(self, monkeypatch):
+    def test_no_error_when_openrouter_key_set(self, monkeypatch):
         from consortium.runner import _validate_api_keys
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
         errors = _validate_api_keys("claude-opus-4-6")
         assert errors == []
 
-    def test_error_when_anthropic_key_missing(self, monkeypatch):
+    def test_error_when_openrouter_key_missing(self, monkeypatch):
         from consortium.runner import _validate_api_keys
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         errors = _validate_api_keys("claude-opus-4-6")
         assert len(errors) == 1
-        assert "ANTHROPIC_API_KEY" in errors[0]
+        assert "OPENROUTER_API_KEY" in errors[0]
 
-    def test_error_when_openai_key_missing(self, monkeypatch):
+    def test_no_error_for_gpt_when_openrouter_set(self, monkeypatch):
         from consortium.runner import _validate_api_keys
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        errors = _validate_api_keys("gpt-5")
-        assert len(errors) == 1
-        assert "OPENAI_API_KEY" in errors[0]
-
-    def test_no_error_when_openai_key_set(self, monkeypatch):
-        from consortium.runner import _validate_api_keys
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
         errors = _validate_api_keys("gpt-5")
         assert errors == []
 
-    def test_gemini_requires_google_key(self, monkeypatch):
+    def test_error_for_gpt_when_openrouter_missing(self, monkeypatch):
         from consortium.runner import _validate_api_keys
-        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        errors = _validate_api_keys("gpt-5")
+        assert len(errors) == 1
+        assert "OPENROUTER_API_KEY" in errors[0]
+
+    def test_gemini_uses_openrouter(self, monkeypatch):
+        from consortium.runner import _validate_api_keys
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         errors = _validate_api_keys("gemini-2.5-pro")
         assert len(errors) == 1
-        assert "GOOGLE_API_KEY" in errors[0]
+        assert "OPENROUTER_API_KEY" in errors[0]
 
 
 class TestListRuns:

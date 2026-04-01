@@ -250,16 +250,10 @@ def main() -> int:
             "Install ffmpeg for audio transcription features."
         )
 
-    api_key_names = [
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GOOGLE_API_KEY",
-        "OPENROUTER_API_KEY",
-        "DEEPSEEK_API_KEY",
-    ]
-    if not any(os.getenv(name) for name in api_key_names):
+    if not os.getenv("OPENROUTER_API_KEY"):
         warnings.append(
-            "No API key detected in environment. Add at least one key in .env or shell env vars."
+            "OPENROUTER_API_KEY not set. All LLM calls are routed through OpenRouter.\n"
+            "  Add it to your .env file:  OPENROUTER_API_KEY=your_key_here"
         )
 
     llm_cfg = REPO_ROOT / ".llm_config.yaml"

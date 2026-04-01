@@ -270,39 +270,18 @@ def _resolve_start_stage_index(stage_name: str, pipeline_stages: list[str]) -> i
     return pipeline_stages.index(canonical)
 
 
-_MODEL_KEY_MAP = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "claude": "ANTHROPIC_API_KEY",
-    "gpt": "OPENAI_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "o3": "OPENAI_API_KEY",
-    "o4": "OPENAI_API_KEY",
-    "gemini": "GOOGLE_API_KEY",
-    "google": "GOOGLE_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
-    "grok": "XAI_API_KEY",
-    "xai": "XAI_API_KEY",
-}
-
-
 def _validate_api_keys(model_name: str) -> list[str]:
     """Return a list of error messages for missing API keys given a model name.
 
+    All models are routed through OpenRouter, so only OPENROUTER_API_KEY is required.
     Returns an empty list if all required keys are present.
     """
     errors = []
-    model_lower = model_name.lower()
-    required_key = None
-    for prefix, env_var in _MODEL_KEY_MAP.items():
-        if prefix in model_lower:
-            required_key = env_var
-            break
-    if required_key and not os.getenv(required_key):
+    if not os.getenv("OPENROUTER_API_KEY"):
         errors.append(
-            f"Model '{model_name}' requires {required_key} but it is not set.\n"
-            f"  Add it to your .env file:  {required_key}=your_key_here"
+            f"OPENROUTER_API_KEY is required for model '{model_name}' but is not set.\n"
+            f"  Add it to your .env file:  OPENROUTER_API_KEY=your_key_here"
         )
-    # Counsel mode needs three keys; check is done lazily if counsel is enabled.
     return errors
 
 

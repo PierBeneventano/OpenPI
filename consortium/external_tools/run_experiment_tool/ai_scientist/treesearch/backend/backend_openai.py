@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 
 from .utils import FunctionSpec, OutputType, opt_messages_to_list, backoff_create
@@ -8,6 +9,8 @@ import openai
 from rich import print
 
 logger = logging.getLogger("ai-scientist")
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 _client: openai.OpenAI = None  # type: ignore
 
@@ -22,7 +25,11 @@ OPENAI_TIMEOUT_EXCEPTIONS = (
 @once
 def _setup_openai_client():
     global _client
-    _client = openai.OpenAI(max_retries=0)
+    _client = openai.OpenAI(
+        api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+        base_url=OPENROUTER_BASE_URL,
+        max_retries=0,
+    )
 
 
 def query(

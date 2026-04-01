@@ -599,26 +599,27 @@ def cmd_launchable(args, spec, status, campaign_dir: str) -> int:
 
 
 def cmd_check_credits(args, spec, status, campaign_dir: str) -> int:
-    """Check if the Anthropic API is accessible (validates credits/auth)."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    """Check if the OpenRouter API is accessible (validates credits/auth)."""
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
     if not api_key:
         return _json_out({
             "api_accessible": False,
-            "error": "ANTHROPIC_API_KEY not set in environment",
+            "error": "OPENROUTER_API_KEY not set in environment",
         }, 1)
 
     try:
         import litellm
-        # Minimal API call to verify access
+        # Minimal API call to verify access via OpenRouter
         resp = litellm.completion(
-            model="claude-haiku-4-5-20251001",
+            model="openrouter/anthropic/claude-haiku-4-5-20251001",
             messages=[{"role": "user", "content": "ping"}],
             max_tokens=5,
+            api_key=api_key,
         )
         return _json_out({
             "api_accessible": True,
-            "model_used": "claude-haiku-4-5-20251001",
-            "message": "API access verified.",
+            "model_used": "openrouter/anthropic/claude-haiku-4-5-20251001",
+            "message": "OpenRouter API access verified.",
         })
     except Exception as e:
         err_str = str(e)

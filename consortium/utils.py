@@ -16,15 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 def normalize_model_for_litellm(model: str) -> str:
-    """Add provider prefix for direct litellm.completion() calls.
+    """Add OpenRouter provider prefix for direct litellm.completion() calls.
 
     The LangChain ChatLiteLLM wrapper (create_model) already handles this,
     but direct litellm.completion() calls need the prefix to route correctly.
-    Without ``gemini/``, litellm routes to Vertex AI (requires google.auth).
+    All models are routed through OpenRouter.
     """
-    if "gemini" in model and not model.startswith("gemini/"):
-        return f"gemini/{model}"
-    return model
+    if model.startswith("openrouter/"):
+        return model
+    from .models import get_openrouter_name
+    return f"openrouter/{get_openrouter_name(model)}"
 
 
 def _require_env(key: str, model_name: str) -> str:
@@ -73,73 +74,36 @@ def create_model(
     """
     model_kwargs: dict = {}
 
+    # --- Provider-specific model_kwargs setup ---
     if "claude" in model_name:
         if budget_tokens is not None:
             model_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget_tokens}
         if effort is not None and model_name in {"claude-opus-4-6", "claude-sonnet-4-6"}:
             model_kwargs["reasoning_effort"] = effort
 
-        base_model = ChatLiteLLM(
-            model=f"anthropic/{model_name}",
-            api_key=_require_env("ANTHROPIC_API_KEY", model_name),
-            model_kwargs=model_kwargs if model_kwargs else None,
-        )
-
     elif "codex" in model_name:
-        base_model = ChatLiteLLM(
-            model=model_name,
-            api_key=_require_env("OPENAI_API_KEY", model_name),
-            model_kwargs={"reasoning_effort": reasoning_effort},
-        )
+        model_kwargs["reasoning_effort"] = reasoning_effort
 
-    elif model_name.startswith("gpt-5"):
-        base_model = ChatLiteLLM(
-            model=model_name,
-            api_key=_require_env("OPENAI_API_KEY", model_name),
-            model_kwargs={"reasoning_effort": reasoning_effort, "verbosity": verbosity},
-        )
-
-    elif "gpt" in model_name or model_name.startswith(("o1-", "o3-", "o4-")):
-        base_model = ChatLiteLLM(
-            model=model_name,
-            api_key=_require_env("OPENAI_API_KEY", model_name),
-        )
-
-    elif "deepseek" in model_name:
-        base_model = ChatLiteLLM(
-            model=model_name,
-            api_key=_require_env("DEEPSEEK_API_KEY", model_name),
-            api_base="https://api.deepseek.com",
-        )
-
-    elif "llama" in model_name:
-        base_model = ChatLiteLLM(
-            model=f"openrouter/{model_name}",
-            api_key=_require_env("OPENROUTER_API_KEY", model_name),
-        )
+    elif "gpt-5" in model_name:
+        model_kwargs["reasoning_effort"] = reasoning_effort
+        model_kwargs["verbosity"] = verbosity
 
     elif "gemini" in model_name:
         if "gemini-3-pro" in model_name:
             model_kwargs["thinking_budget"] = 65536
         elif "gemini-2.5-pro" in model_name:
             model_kwargs["thinking_budget"] = 32768
-        base_model = ChatLiteLLM(
-            model=f"gemini/{model_name}",
-            api_key=_require_env("GOOGLE_API_KEY", model_name),
-            model_kwargs=model_kwargs if model_kwargs else None,
-        )
 
-    elif "grok" in model_name:
-        base_model = ChatLiteLLM(
-            model=model_name,
-            api_key=os.environ.get("XAI_API_KEY", ""),
-        )
+    # --- Unified OpenRouter routing for all models ---
+    from .models import get_openrouter_name
+    or_model_name = f"openrouter/{get_openrouter_name(model_name)}"
+    api_key = _require_env("OPENROUTER_API_KEY", model_name)
 
-    else:
-        base_model = ChatLiteLLM(
-            model=model_name,
-            api_key=os.environ.get("OPENAI_API_KEY", ""),
-        )
+    base_model = ChatLiteLLM(
+        model=or_model_name,
+        api_key=api_key,
+        model_kwargs=model_kwargs if model_kwargs else None,
+    )
 
     # Optional hard budget enforcement wrapper
     if budget_config and budget_config.get("usd_limit"):

@@ -4,11 +4,12 @@ import re
 from typing import Any
 from ai_scientist.utils.token_tracker import track_token_usage
 
-import anthropic
 import backoff
 import openai
 
 MAX_NUM_TOKENS = 4096
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 AVAILABLE_LLMS = [
     "claude-opus-4-6",
@@ -68,7 +69,6 @@ AVAILABLE_LLMS = [
         openai.RateLimitError,
         openai.APITimeoutError,
         openai.InternalServerError,
-        anthropic.RateLimitError,
     ),
 )
 @track_token_usage
@@ -220,7 +220,6 @@ def make_llm_call(client, model, temperature, system_message, prompt):
         openai.RateLimitError,
         openai.APITimeoutError,
         openai.InternalServerError,
-        anthropic.RateLimitError,
     ),
 )
 def get_response_from_llm(
@@ -237,37 +236,19 @@ def get_response_from_llm(
         msg_history = []
 
     if "claude" in model:
-        new_msg_history = msg_history + [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": msg,
-                    }
-                ],
-            }
-        ]
-        response = client.messages.create(
+        new_msg_history = msg_history + [{"role": "user", "content": msg}]
+        response = client.chat.completions.create(
             model=model,
-            max_tokens=MAX_NUM_TOKENS,
+            messages=[
+                {"role": "system", "content": system_message},
+                *new_msg_history,
+            ],
             temperature=temperature,
-            system=system_message,
-            messages=new_msg_history,
+            max_tokens=MAX_NUM_TOKENS,
+            n=1,
         )
-        # response = make_llm_call(client, model, temperature, system_message=system_message, prompt=new_msg_history)
-        content = response.content[0].text
-        new_msg_history = new_msg_history + [
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": content,
-                    }
-                ],
-            }
-        ]
+        content = response.choices[0].message.content
+        new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
     elif "gpt" in model:
         new_msg_history = msg_history + [{"role": "user", "content": msg}]
         response = make_llm_call(
@@ -421,65 +402,37 @@ def extract_json_between_markers(llm_output: str) -> dict | None:
     return None  # No valid JSON found
 
 
+def _get_openrouter_model_name(model: str) -> str:
+    """Map internal model names to OpenRouter model strings."""
+    # Models that already have a provider prefix
+    if "/" in model:
+        return model
+    # Provider mappings for OpenRouter
+    if model.startswith("claude"):
+        return f"anthropic/{model}"
+    if "gpt" in model or "codex" in model or model.startswith(("o1", "o3", "o4")):
+        return f"openai/{model}"
+    if "gemini" in model:
+        return f"google/{model}"
+    if "deepseek" in model:
+        return f"deepseek/{model}"
+    if "grok" in model:
+        return f"x-ai/{model}"
+    if model == "llama3.1-405b":
+        return "meta-llama/llama-3.1-405b-instruct"
+    if model == "deepcoder-14b":
+        return "agentica-org/DeepCoder-14B-Preview"
+    return model
+
+
 def create_client(model) -> tuple[Any, str]:
-    if model.startswith("claude-"):
-        print(f"Using Anthropic API with model {model}.")
-        return anthropic.Anthropic(), model
-    elif model.startswith("bedrock") and "claude" in model:
-        client_model = model.split("/")[-1]
-        print(f"Using Amazon Bedrock with model {client_model}.")
-        return anthropic.AnthropicBedrock(), client_model
-    elif model.startswith("vertex_ai") and "claude" in model:
-        client_model = model.split("/")[-1]
-        print(f"Using Vertex AI with model {client_model}.")
-        return anthropic.AnthropicVertex(), client_model
-    elif "codex" in model:
-        print(f"Using OpenAI API with model {model}.")
-        return openai.OpenAI(), model
-    elif "gpt" in model:
-        print(f"Using OpenAI API with model {model}.")
-        return openai.OpenAI(), model
-    elif "o1" in model or "o3" in model:
-        print(f"Using OpenAI API with model {model}.")
-        return openai.OpenAI(), model
-    elif model == "deepseek-coder-v2-0724":
-        print(f"Using OpenAI API with {model}.")
-        return (
-            openai.OpenAI(
-                api_key=os.environ["DEEPSEEK_API_KEY"],
-                base_url="https://api.deepseek.com",
-            ),
-            model,
-        )
-    elif model == "deepcoder-14b":
-        print(f"Using HuggingFace API with {model}.")
-        # Using OpenAI client with HuggingFace API
-        if "HUGGINGFACE_API_KEY" not in os.environ:
-            raise ValueError("HUGGINGFACE_API_KEY environment variable not set")
-        return (
-            openai.OpenAI(
-                api_key=os.environ["HUGGINGFACE_API_KEY"],
-                base_url="https://api-inference.huggingface.co/models/agentica-org/DeepCoder-14B-Preview",
-            ),
-            model,
-        )
-    elif model == "llama3.1-405b":
-        print(f"Using OpenAI API with {model}.")
-        return (
-            openai.OpenAI(
-                api_key=os.environ["OPENROUTER_API_KEY"],
-                base_url="https://openrouter.ai/api/v1",
-            ),
-            "meta-llama/llama-3.1-405b-instruct",
-        )
-    elif 'gemini' in model:
-        print(f"Using OpenAI API with {model}.")
-        return (
-            openai.OpenAI(
-                api_key=os.environ["GEMINI_API_KEY"],
-                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            ),
-            model,
-        )
-    else:
-        raise ValueError(f"Model {model} not supported.")
+    """Create an OpenAI client pointed at OpenRouter for any model."""
+    or_model = _get_openrouter_model_name(model)
+    print(f"Using OpenRouter with model {or_model}.")
+    return (
+        openai.OpenAI(
+            api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+            base_url=OPENROUTER_BASE_URL,
+        ),
+        or_model,
+    )

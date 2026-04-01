@@ -164,7 +164,7 @@ def visualizer(image_path: str, question: str | None = None) -> str:
     base64_image = encode_image(image_path)
 
     payload = {
-        "model": "gpt-4o",  # Use proven GPT-4o for reliable vision performance
+        "model": "openai/gpt-4o",  # Use proven GPT-4o via OpenRouter for reliable vision performance
         "messages": [
             {
                 "role": "user",
@@ -176,8 +176,8 @@ def visualizer(image_path: str, question: str | None = None) -> str:
         ],
         "max_tokens": 1000,
     }
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"}
-    response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}"}
+    response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
     body = response.json()
 
     # Track token usage for this direct OpenAI call, if usage is available.

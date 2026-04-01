@@ -1,9 +1,11 @@
 """
-VLM utility functions — vision-language model calls via raw Anthropic/OpenAI clients.
+VLM utility functions — vision-language model calls via OpenRouter (OpenAI-compatible).
 
 These helpers are used by toolkits that need direct multimodal API access
 (e.g. VLMDocumentAnalysisTool). For LangGraph agent model creation, use
 utils.create_model() instead.
+
+All VLM calls are routed through OpenRouter using the OpenAI client.
 """
 
 import base64
@@ -11,14 +13,15 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Union
 
-import anthropic
 import backoff
 import openai
 
 logger = logging.getLogger(__name__)
 
-from .models import get_provider
+from .models import get_openrouter_name
 from .token_usage_tracker import record_token_usage
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 def _record_response_token_usage(response: Any, model_id: str, source: str) -> None:
@@ -82,7 +85,7 @@ def encode_image_to_base64(image_data: Union[str, bytes, List[bytes]]) -> str:
 
 @backoff.on_exception(
     backoff.expo,
-    (openai.RateLimitError, openai.APITimeoutError, anthropic.RateLimitError),
+    (openai.RateLimitError, openai.APITimeoutError),
     max_tries=5,
 )
 def get_response_from_vlm(
@@ -96,13 +99,13 @@ def get_response_from_vlm(
     temperature: float = 0.75,
 ) -> tuple[str, List[Dict]]:
     """
-    Get a response from a Vision-Language Model with image inputs.
+    Get a response from a Vision-Language Model with image inputs via OpenRouter.
 
     Args:
         prompt:         Text prompt for the VLM.
         images:         List of image file paths.
-        client:         OpenAI or Anthropic client instance.
-        model:          Vision-capable model name.
+        client:         OpenAI client instance (pointed at OpenRouter).
+        model:          Vision-capable model name (OpenRouter format, e.g. 'anthropic/claude-sonnet-4-5').
         system_message: System message for the conversation.
         print_debug:    Print full message history when True.
         msg_history:    Prior conversation turns.
@@ -127,59 +130,23 @@ def get_response_from_vlm(
 
     new_msg_history = msg_history + [{"role": "user", "content": content}]
 
-    provider = get_provider(model)
+    messages: List[Dict] = []
+    if system_message:
+        messages.append({"role": "system", "content": system_message})
+    messages.extend(new_msg_history)
 
-    if provider == "openai":
-        messages: List[Dict] = []
-        if system_message:
-            messages.append({"role": "system", "content": system_message})
-        messages.extend(new_msg_history)
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=4096,
-            n=1,
-            seed=0,
-            timeout=180,
-        )
-        _record_response_token_usage(response, model, "vlm")
-        content_response = response.choices[0].message.content
-        new_msg_history = new_msg_history + [{"role": "assistant", "content": content_response}]
-
-    elif provider == "anthropic":
-        anthropic_content: List[Dict] = [{"type": "text", "text": prompt}]
-        for image_path in images:
-            try:
-                b64 = encode_image_to_base64(image_path)
-                anthropic_content.append({
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-                })
-            except Exception as e:
-                logger.warning("Failed to encode image %s: %s", image_path, e)
-
-        response = client.messages.create(
-            model=model,
-            system=system_message,
-            messages=[{"role": "user", "content": anthropic_content}],
-            max_tokens=4096,
-            timeout=180,
-        )
-        _record_response_token_usage(response, model, "vlm")
-        text_blocks = [
-            block.text
-            for block in getattr(response, "content", [])
-            if getattr(block, "type", None) == "text"
-        ]
-        content_response = "\n".join(text_blocks).strip()
-        new_msg_history = new_msg_history + [{"role": "assistant", "content": content_response}]
-
-    else:
-        raise ValueError(
-            f"VLM model '{model}' (provider={provider}) not supported. "
-            "Supported providers: openai, anthropic."
-        )
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=4096,
+        n=1,
+        seed=0,
+        timeout=180,
+    )
+    _record_response_token_usage(response, model, "vlm")
+    content_response = response.choices[0].message.content
+    new_msg_history = new_msg_history + [{"role": "assistant", "content": content_response}]
 
     if print_debug:
         logger.debug("VLM START")
@@ -193,16 +160,13 @@ def get_response_from_vlm(
 
 def create_vlm_client(model: str = "gpt-4o-2024-05-13"):
     """
-    Create a VLM client for vision tasks.
+    Create a VLM client for vision tasks via OpenRouter.
 
     Returns:
-        (client, model_name) tuple.
+        (client, openrouter_model_name) tuple.
     """
-    provider = get_provider(model)
-    if provider == "openai":
-        return openai.OpenAI(), model
-    elif provider == "anthropic":
-        return anthropic.Anthropic(), model
-    else:
-        logger.warning("Model '%s' not supported for VLM. Defaulting to gpt-4o-2024-05-13.", model)
-        return openai.OpenAI(), "gpt-4o-2024-05-13"
+    or_model = get_openrouter_name(model)
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        logger.warning("OPENROUTER_API_KEY not set — VLM calls will fail.")
+    return openai.OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL), or_model

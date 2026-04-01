@@ -67,7 +67,7 @@ def filter_model_params(original_func):
 
         # --- Parameter filtering per model family ---
         final_args = args
-        if isinstance(model, str) and (model.startswith('gpt-5') or "codex" in model):
+        if isinstance(model, str) and ('gpt-5' in model or "codex" in model):
             # GPT-5/Codex specific filtering
             unsupported_params = {
                 'stop', 'temperature', 'top_p', 'presence_penalty',
