@@ -1,0 +1,67 @@
+{
+  "overall_score": 6,
+  "soundness": 3,
+  "presentation": 4,
+  "contribution": 3,
+  "clarity": 4,
+  "concision": 3,
+  "ai_voice_risk": "low",
+  "hard_blockers": [
+    {
+      "id": "B1",
+      "evidence": "Introduction lists five contributions (design claims) but does not include explicit research questions. Contributions are framed as 'we introduce X' rather than 'we test whether X improves Y'. The pre-registered hypotheses (H1-H5) in Section 11.4 serve this role but are absent from the introduction. Partial blocker: the hypotheses exist in the paper but not where B1 requires them (the intro).",
+      "severity": "partial",
+      "note": "Borderline - hypotheses exist in Section 11.4 but intro lacks explicit RQs. Scored as partial blocker; does not trigger hard cap to <=4 given the hypotheses appear later."
+    }
+  ],
+  "must_fix_actions": [
+    {
+      "priority": 1,
+      "action": "Add minimal empirical proof-of-concept: run gravity-only (B3) vs. gravity + surprise_contr + rho-routing (partial B5) on existing 185-KO corpus with 10-20 queries across 2-3 contexts. Report epistemic precision@10 and surprise recall.",
+      "target_files": ["final_paper.tex"],
+      "acceptance_test": "Paper reports at least one quantitative comparison between gravity-only and salience-augmented retrieval on real data with numerical results.",
+      "fix_type": "experiment"
+    },
+    {
+      "priority": 2,
+      "action": "Add a worked numerical example showing end-to-end computation: gravity scores, modulator signals, surprise values, rho-routing, final ranking for 5-10 KOs on a concrete query.",
+      "target_files": ["final_paper.tex"],
+      "acceptance_test": "A new section or extended example with real numerical values for all intermediate computations appears in the paper.",
+      "fix_type": "writeup"
+    },
+    {
+      "priority": 3,
+      "action": "Reframe contributions in the introduction as testable hypotheses with pointers to pre-registered tests in Section 11.4. Align intro framing with paper's actual epistemic status (architecture proposal, not validated system).",
+      "target_files": ["final_paper.tex"],
+      "acceptance_test": "Introduction includes at least 3 explicit, falsifiable research hypotheses.",
+      "fix_type": "writeup"
+    }
+  ],
+  "nice_to_fix_actions": [
+    {
+      "action": "Conduct parameter sensitivity analysis: perturb epistemic weights by +/-50%, measure ranking stability via Kendall tau. Can be simulation-based."
+    },
+    {
+      "action": "Add computational complexity discussion in Limitations section (scaling properties, practical limits)."
+    },
+    {
+      "action": "Formalize dialectic-salience mapping in Section 10 with functional forms instead of verbal descriptions."
+    },
+    {
+      "action": "Relabel Proposition 1 as 'Design Guarantee' or 'Invariant' to accurately reflect it follows from clamp definition."
+    },
+    {
+      "action": "Address H(q,i)=0 limitation in Eq. 9: discuss or mitigate that multiplicative ranking prevents surprise from surfacing semantically unrelated but epistemically critical KOs."
+    },
+    {
+      "action": "Address surprise saturation: what happens when many unresolved contradictions exist simultaneously? Consider normalization or top-K surprise selection."
+    }
+  ],
+  "intro_compliance": {
+    "has_questions": false,
+    "has_takeaways": true,
+    "has_spine_sentence_early": true,
+    "questions_answered": false,
+    "takeaways_supported": true
+  }
+}

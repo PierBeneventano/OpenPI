@@ -1,0 +1,181 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+\usepackage{geometry}
+\geometry{margin=1in}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\title{\textbf{Review Report}\\[0.3cm]
+\large Paper: ``Beyond Relevance: Dual-Salience Retrieval for Epistemically-Structured Knowledge Bases''}
+\author{Automated Reviewer Agent (PoggioAI/MSc)}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+
+% ============================================================
+\section{Summary}
+% ============================================================
+
+This paper introduces \textbf{dual-salience retrieval}, a framework that decomposes retrieval ranking into epistemic salience (model-update pressure) and action salience (action-guidance pressure), modulating a pre-existing gravity score from the OIDA Knowledge Gravity Engine. The core contributions are: (1) a formal separation of structural importance (gravity) and situated emergence pressure (salience); (2) a Surprise Engine with three surprise types that inverts classical retrieval by promoting contradictory or anomalous content; (3) regime-aware retrieval across four Knowledge Regimes (WORKING, EVENT, CANONICAL, TACIT); (4) context-dependent $\rho$-routing for mixing epistemic and action salience; and (5) bounded modulation guarantees preventing both epistemic amnesia and attentional fixation.
+
+The paper is \textbf{architecture-only}: no experiments have been executed. The experimental design is pre-registered but all metrics are unmeasured. The system is partially deployed (gravity layer only); the salience engine is specified but not implemented.
+
+\textbf{Verdict:} The conceptual framework is intellectually compelling and the formalization is thorough, but the absence of any empirical validation---combined with a high parameter count and single-site design provenance---means the paper cannot currently support its claims. The honest disclosure of what is and is not established is commendable and unusual. With targeted revisions (primarily tightening scope claims and adding at minimum a simulation-based proof-of-concept), this could become a strong contribution.
+
+% ============================================================
+\section{Strengths}
+% ============================================================
+
+\begin{enumerate}[label=\textbf{S\arabic*.}, leftmargin=2em]
+
+\item \textbf{Novel and well-motivated problem decomposition.} The separation of epistemic salience from action salience is a genuinely new conceptual contribution. The motivating example (\S1) is concrete and immediately clarifies why semantic similarity alone is insufficient. The paper makes a persuasive case that retrieval in epistemically structured knowledge bases requires a fundamentally different objective function.
+
+\item \textbf{Surprise-as-signal inversion.} The idea that incoherent retrieval results should rank \emph{higher} in epistemic contexts (contradiction surprise, \S5.1) is the paper's most distinctive contribution. This directly challenges a core assumption of information retrieval and is well-grounded in the epistemic vigilance literature~\cite{sperber2010epistemic}.
+
+\item \textbf{Formal rigor with bounded guarantees.} The bounded modulation mechanism (\S7) provides concrete, verifiable properties: anti-amnesia ($S_x \geq 0.5G$), anti-fixation ($S_x \leq 3.0G$), and neutrality ($M=1$ when signals are zero). These are clean, falsifiable design invariants---not vague claims.
+
+\item \textbf{Exceptional intellectual honesty.} The paper clearly demarcates what is established (formal properties, design guarantees) from what is not (experimental validation). The yellow-boxed status indicators (\S11, \S12) are unusually transparent. The falsification commitment in \S11.4 (``If A5 finds that tag-and-boost achieves epistemic precision within one standard error\ldots the dynamic salience machinery is not justified'') sets a high standard for self-accountability.
+
+\item \textbf{Comprehensive experimental design.} The pre-registered experiment plan (\S11) is well-structured: five baselines (B1--B5), five metrics including novel ones (epistemic precision, surprise recall), five ablation studies, and explicit falsification conditions for each hypothesis. This demonstrates maturity in experimental thinking even without execution.
+
+\item \textbf{Strong positioning against related work.} Table~1 provides a clear, honest capability comparison. The related work section (\S2) is thorough and well-organized, covering RAG, active retrieval, agent memory, knowledge graphs, cognitive architectures, and commercial systems without padding.
+
+\end{enumerate}
+
+% ============================================================
+\section{Weaknesses}
+% ============================================================
+
+\begin{enumerate}[label=\textbf{W\arabic*.}, leftmargin=2em]
+
+\item \textbf{No empirical validation whatsoever (critical).} The paper presents a complete architecture with 18 weight parameters, 8 decay rates, 11 routing values, and multiple interacting subsystems---but reports zero experimental results. Not a simulation, not a synthetic benchmark, not a case study walk-through with real numbers. The experimental design is pre-registered but not executed. This is the paper's decisive weakness. A system this parameterized \emph{requires} at least proof-of-concept validation to demonstrate that the machinery produces meaningfully different retrieval rankings than simpler baselines. Without it, the contribution is a blueprint, not evidence.
+
+\item \textbf{High parameter sensitivity risk.} The system has $\sim$37 free parameters (Table~3 weights, Table~6 decay rates, Table~4 routing values, Eq.~6 bounds, Eq.~7 surprise sub-weights). All are ``design priors'' with no empirical grounding. On a corpus of $\sim$185--500 KOs, the risk of overfitting or underdetermination is substantial. The paper acknowledges this (\S13) but does not provide sensitivity analysis, parameter importance ranking, or reduced-parameter variants. At minimum, a perturbation analysis showing which parameters matter most would strengthen confidence in the design.
+
+\item \textbf{Circular validation risk from single-site deployment.} All design decisions originate from observing the same organization where the system is deployed. The ``deployment observations'' (\S12) that motivate salience (contradiction invisibility, context-blind ranking, TACIT erasure) are self-reported design-level observations, not independent measurements. This creates a risk of circular reasoning: the system is designed to fix problems that were identified by the system's designers within their own organization.
+
+\item \textbf{TACIT regime depends on unimplemented infrastructure.} Surprise-by-deviation (\S5.2) requires TACIT KO detection (Knowledge Regimes Phase~5, not implemented). Actor epistemic mismatch requires per-actor access logging (not built). These are not peripheral features---TACIT knowledge is presented as ``the most epistemically interesting operation'' (\S6) and surprise is the largest salience signal ($\alpha_e = 0.35$). The paper's most distinctive capabilities depend on infrastructure that does not yet exist.
+
+\item \textbf{The ``Proposition'' in \S7.1 is not a theorem.} Proposition~1 (Bounded Modulation) follows trivially from the clamp definition. Calling it a ``proposition'' with a formal statement overstates its mathematical content. It is a design specification, not a derived result. Similarly, Definition~1 (Gravity) and Definition~2 (Salience) are stipulative definitions, not formal definitions with axiomatic grounding. The theorem-like formatting creates an impression of mathematical depth that the actual content does not fully support.
+
+\item \textbf{Questionable generalizability of $\rho$ routing values.} The 11-row routing table (Table~4) maps cognitive contexts to $\rho$ values with high precision (e.g., sprint planning = 0.35, mobile quick assist = 0.15). These values are acknowledged as ``design hypotheses'' but are calibrated for a small, fast-moving venture studio. The paper provides no theoretical justification for why these specific values should hold, no sensitivity analysis around them, and no mechanism for automatic $\rho$ calibration. The actor override mechanism (Eq.~4) is limited to $\pm 30\%$---itself an arbitrary bound.
+
+\item \textbf{Incomplete treatment of computational cost.} The paper does not discuss the computational overhead of dual-salience computation. Gravity is computed every 6 hours; salience every 2 hours or event-driven. For a 500-KO corpus this is tractable. For a 50,000-KO enterprise deployment, the pairwise contradiction checking, cross-domain rarity computation, and per-actor mismatch tracking may become prohibitive. No complexity analysis is provided.
+
+\item \textbf{The dialectic-salience integration (\S10) is underspecified.} Table~8 maps dialectic outputs to salience signals, but the mapping functions are not formalized. How exactly does an ``Active Tension Field (unresolved)'' produce a specific surprise$_{\text{contr}}$ value? What is the functional form of ``gap\_adjacency boost for adjacent KOs''? This section reads as a roadmap rather than a specification.
+
+\end{enumerate}
+
+% ============================================================
+\section{Detailed Comments}
+% ============================================================
+
+\subsection{Intro Audit}
+
+The introduction is well-structured and effective. The opening vignette (sprint planning agent) immediately grounds the problem. The ``problem is not relevance'' paragraph clearly positions the contribution. The three-capability enumeration (dual salience, surprise, regime-aware retrieval) provides a clear roadmap.
+
+\textbf{Issues:}
+\begin{itemize}[nosep]
+\item The introduction states five contributions but does not provide explicit \emph{research questions}. The contributions are design claims, not empirical questions. For a paper with no experiments, framing contributions as testable hypotheses (as done later in \S11.4) would be more appropriate in the intro itself.
+\item The ``relationship to OIDA'' paragraph is necessary but could be more concise---the gravity vs.\ salience distinction is repeated in \S3.1.
+\end{itemize}
+
+\subsection{Rigor Audit}
+
+\begin{itemize}[nosep]
+\item \textbf{Eq.~1 (core relationship):} Clean and well-motivated. The multiplicative modulation is the right design choice---additive would allow salience to create importance from zero gravity.
+\item \textbf{Eqs.~2--3 (modulators):} The linear combination of six signals with a clamp is straightforward. The weights sum to 1.0 for both modulators (verified: $0.35+0.20+0.15+0.15+0.10+0.05 = 1.0$; $0.30+0.25+0.20+0.10+0.10+0.05 = 1.0$). This is good practice.
+\item \textbf{Eq.~5 (surprise by contradiction):} The $\max$ aggregation over contradicting neighbors is sensible but loses information---the \emph{number} of contradictions is ignored. A KO contradicting five high-gravity beliefs gets the same score as one contradicting a single belief.
+\item \textbf{Eq.~6 (surprise by deviation):} The binary activation (threshold at sem\_prox $\geq 0.50$) creates a cliff effect. A continuous activation function would be more robust.
+\item \textbf{Eq.~9 (final ranking):} Multiplying hybrid similarity $H(q,i)$ by salience-modulated gravity means that a KO with zero semantic relevance gets zero retrieval score regardless of salience. This is correct for query-driven retrieval but means the Surprise Engine cannot surface ``unknown unknowns'' that have no semantic connection to the query. This is a significant limitation that should be discussed.
+\end{itemize}
+
+\subsection{AI-Voice Audit}
+
+The writing is generally strong, precise, and domain-appropriate. The paper reads as authored by researchers with deep domain expertise, not as LLM-generated text.
+
+\textbf{Minor flags:}
+\begin{itemize}[nosep]
+\item The final sentence of the conclusion (``It may be time to improve what `relevant' means---before the agent reads it'') is stylistically effective but borders on promotional. Consider whether a venue would view this as appropriate.
+\item Some paragraph openings are slightly formulaic (``We propose that\ldots'', ``We formalize\ldots'', ``We present\ldots''). Varying sentence structure would improve flow.
+\end{itemize}
+
+\textbf{Overall AI-voice risk: LOW.} The paper exhibits genuine intellectual engagement, non-obvious design choices, and honest self-criticism that are hallmarks of human authorship.
+
+% ============================================================
+\section{Questions for Authors}
+% ============================================================
+
+\begin{enumerate}[label=\textbf{Q\arabic*.}, leftmargin=2em]
+
+\item \textbf{Why not a minimal viable experiment?} Given that the gravity layer is deployed, could you not run a controlled comparison between gravity-only (B3) and gravity + surprise$_{\text{contr}}$ (partial B5) on the existing 185-KO corpus? Even a small-scale A/B test with 10 queries would provide \emph{some} empirical signal and dramatically strengthen the paper.
+
+\item \textbf{What happens when surprise saturates?} If an organization has many unresolved contradictions (common in fast-moving startups), does the Surprise Engine saturate, making everything ``surprising'' and thus nothing discriminative? What is the effective dynamic range of surprise scores in your deployed corpus?
+
+\item \textbf{How do you validate TACIT KO classification?} TACIT knowledge is by definition unarticulated. How do you validate that LLM-assisted TACIT detection correctly identifies genuine implicit patterns vs.\ spurious correlations in small organizational corpora?
+
+\item \textbf{Can you provide a worked example with real numbers?} A single end-to-end example showing gravity scores, modulator values, surprise signals, and final retrieval rankings for a concrete query against 5--10 real KOs would make the architecture tangible and reveal whether the parameter choices produce sensible orderings.
+
+\item \textbf{What is the interaction between the stability floor and bounded modulation?} Eq.~8 applies a floor \emph{after} bounded modulation. Could this create a situation where the stability floor overrides the anti-fixation ceiling? Specifically: if a CANONICAL KO has very high gravity, its stability floor ($0.60 \times G$) could exceed the salience of most other KOs, effectively monopolizing retrieval slots.
+
+\item \textbf{How does the system handle regime misclassification?} If a KO is incorrectly classified as CANONICAL (receiving 1.4$\times$ gravity multiplier and stability floor), what mechanism corrects this? The demotion path (CANONICAL $\to$ EVENT, Appendix B) exists but what triggers it?
+
+\end{enumerate}
+
+% ============================================================
+\section{Recommendation}
+% ============================================================
+
+\subsection{Decision}
+
+\textbf{Score: 6/10 --- Borderline, leaning toward revision required.}
+
+The conceptual contribution is strong and the formalization is thorough. The paper introduces a genuinely novel decomposition (epistemic vs.\ action salience), a counterintuitive but well-motivated mechanism (surprise-as-positive-signal), and clean formal guarantees (bounded modulation). The intellectual honesty is exemplary.
+
+However, the complete absence of empirical validation is a critical gap. The paper has $\sim$37 free parameters, all set by design intuition. The most distinctive capabilities (TACIT surprise, actor mismatch) depend on unimplemented infrastructure. The single-site provenance creates circular validation risk.
+
+\subsection{Ranked Revision Plan}
+
+\begin{enumerate}[label=\textbf{R\arabic*.}, leftmargin=2em]
+
+\item \textbf{(Must-fix) Add a minimal empirical proof-of-concept.}
+Run B3 (gravity-only) vs.\ partial B5 (gravity + surprise$_{\text{contr}}$ + $\rho$-routing) on the existing 185-KO corpus with 10--20 queries across 2--3 contexts. Report epistemic precision@10 and surprise recall. This does not require the full experimental design---just enough to show the machinery produces meaningfully different rankings.
+\emph{Acceptance test:} Paper reports at least one quantitative comparison between gravity-only and salience-augmented retrieval on real data.
+
+\item \textbf{(Must-fix) Add a worked numerical example.}
+Show end-to-end computation for one query: gravity scores, modulator signals, surprise values, $\rho$-routing, and final ranking for 5--10 KOs. This makes the architecture concrete and reveals whether parameter choices produce sensible orderings.
+\emph{Acceptance test:} A new section or extended example with real numerical values for all intermediate computations.
+
+\item \textbf{(Must-fix) Reframe contributions as testable hypotheses in the introduction.}
+The current contributions are design claims. Reframe them as: ``We hypothesize that\ldots'' with pointers to the pre-registered tests. This aligns the intro with the paper's actual epistemic status.
+\emph{Acceptance test:} Introduction includes at least 3 explicit, falsifiable research hypotheses.
+
+\item \textbf{(Should-fix) Conduct parameter sensitivity analysis.}
+Perturb the 6 epistemic weights ($\alpha_e$--$\zeta_e$) by $\pm 50\%$ and measure ranking stability (e.g., Kendall's $\tau$ of top-20 results). Identify which parameters most affect output. This can be done via simulation even without full implementation.
+\emph{Acceptance test:} A sensitivity table or figure showing ranking stability under parameter perturbation.
+
+\item \textbf{(Should-fix) Discuss computational complexity.}
+Add a paragraph in \S13 analyzing the scaling properties: pairwise contradiction checking is $O(|E_{\text{contr}}|)$ not $O(n^2)$ (if indexed), cross-domain rarity requires access count tracking per domain, etc. State the practical limits of the current design.
+\emph{Acceptance test:} Complexity analysis paragraph in Limitations section.
+
+\item \textbf{(Nice-to-fix) Formalize dialectic-salience mapping (\S10).}
+Replace Table~8's verbal descriptions with functional forms. If the mapping is not yet defined, state this explicitly rather than implying specification completeness.
+
+\item \textbf{(Nice-to-fix) Soften Proposition~1 framing.}
+Relabel as ``Design Guarantee'' or ``Invariant'' rather than ``Proposition'' to accurately reflect that it follows directly from the clamp definition rather than being a derived mathematical result.
+
+\item \textbf{(Nice-to-fix) Address the $H(q,i) = 0$ limitation in Eq.~9.}
+Discuss or mitigate the fact that the multiplicative final ranking prevents surprise from surfacing semantically unrelated but epistemically critical KOs. Consider an additive surprise bonus term or a separate surprise-only retrieval slot.
+
+\end{enumerate}
+
+\end{document}
