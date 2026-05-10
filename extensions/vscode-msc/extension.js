@@ -53,6 +53,7 @@ function initialState(root) {
     capabilities: null,
     openclaude: null,
     openclaudeEnv: null,
+    openclaw: null,
     setupState: null,
     tutorialPlan: null
   };
@@ -107,6 +108,9 @@ async function collectDashboardData(root) {
   const openclaudeEnv = await runJson(root, ['openclaude', 'env', '--json']);
   state.openclaudeEnv = unwrap(openclaudeEnv, 'openclaudeEnv');
 
+  const openclaw = await runJson(root, ['openclaw', 'readiness', '--json']);
+  state.openclaw = unwrap(openclaw, 'openclaw');
+
   state.errors = [
     ...readiness.errors,
     ...project.errors,
@@ -118,7 +122,8 @@ async function collectDashboardData(root) {
     ...setupState.errors,
     ...tutorialPlan.errors,
     ...openclaude.errors,
-    ...openclaudeEnv.errors
+    ...openclaudeEnv.errors,
+    ...openclaw.errors
   ];
   state.generatedAt = new Date().toISOString();
   return state;
@@ -508,9 +513,12 @@ function renderHtml(webview, state) {
       const checks = state.readiness && state.readiness.checks ? Object.entries(state.readiness.checks) : [];
       const capabilities = state.capabilities && state.capabilities.capabilities ? state.capabilities.capabilities : [];
       const setup = state.setupState && state.setupState.setup ? state.setupState.setup : {};
+      const openclaw = state.openclaw || {};
       const setupRows = Object.entries(setup)
         .filter(([key, value]) => typeof value === 'boolean' || key === 'credential_source' || key === 'config_dir')
         .map(([key, value]) => [key, typeof value === 'boolean' ? (value ? 'ok' : 'missing') : value || '-']);
+      setupRows.push(['openclaw_config', openclaw.configured ? openclaw.config_path : 'not configured']);
+      setupRows.push(['openclaw_profile', openclaw.default_profile || 'read_only']);
       const planRows = state.tutorialPlan && Array.isArray(state.tutorialPlan.steps)
         ? state.tutorialPlan.steps.map((step) => [step.id, step.command])
         : [];

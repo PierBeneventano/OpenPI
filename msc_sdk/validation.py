@@ -46,6 +46,9 @@ PUBLIC_COMMANDS = [
     CommandSpec("openclaude.readiness", "msc openclaude readiness --json", "openclaude_readiness(...)", "read.project"),
     CommandSpec("openclaude.env", "msc openclaude env --json", "openclaude_env_contract(...)", "read.project"),
     CommandSpec("openclaude.launch_plan", "msc openclaude launch --json", "openclaude_launch_plan(...)", "read.project"),
+    CommandSpec("openclaw.readiness", "msc openclaw readiness --json", "openclaw_readiness(...)", "read.project"),
+    CommandSpec("openclaw.profiles", "msc openclaw profiles --json", "OPENCLAW_PROFILES", "read.capabilities"),
+    CommandSpec("openclaw.launch_plan", "msc openclaw launch-plan --json", "openclaw_launch_plan(...)", "read.project"),
 ]
 
 

@@ -10,6 +10,7 @@ from consortium.cli.core.config_manager import get_config_dir
 from consortium.cli.core.env_manager import build_runtime_env, get_runtime_env_sources
 from consortium.cli.core.paths import find_project_root, find_results_dir
 from msc_sdk.openclaude import openclaude_readiness
+from msc_sdk.openclaw import openclaw_readiness
 from msc_sdk.project import ProjectClient
 from msc_sdk.setup_state import build_setup_state, tutorial_plan
 
@@ -60,6 +61,7 @@ def project_setup_state(ctx: click.Context, as_json: bool) -> None:
         openrouter_configured=bool(env.get("OPENROUTER_API_KEY")),
         openrouter_source=sources.get("OPENROUTER_API_KEY"),
     )
+    openclaw = openclaw_readiness()
     state = build_setup_state(
         project_root=project_root,
         config_dir=get_config_dir(config_dir_override),
@@ -69,7 +71,7 @@ def project_setup_state(ctx: click.Context, as_json: bool) -> None:
         openclaude_available=openclaude.openclaude_available,
         openclaude_launch_ready=openclaude.launch_ready,
         telegram_enabled=bool(env.get("TELEGRAM_BOT_TOKEN") and env.get("TELEGRAM_CHAT_ID")),
-        openclaw_enabled=False,
+        openclaw_enabled=openclaw.configured,
     )
     data = {"ok": True, "setup": state.to_dict()}
     if as_json:

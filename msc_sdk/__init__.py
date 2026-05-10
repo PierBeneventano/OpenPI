@@ -12,6 +12,7 @@ from .events import EventStore
 from .harness import ActionRequest, OrchestratorHarness
 from .manifest import ManifestImportResult, import_manifest, read_manifest, write_manifest
 from .openclaude import OpenClaudeReadiness
+from .openclaw import OpenClawReadiness
 from .project import ProjectClient, inspect_project, project_readiness
 from .read_models import (
     ArtifactReadModel,
@@ -37,6 +38,7 @@ __all__ = [
     "ManifestImportResult",
     "OrchestratorHarness",
     "OpenClaudeReadiness",
+    "OpenClawReadiness",
     "ProjectClient",
     "RunClient",
     "RunReadModel",

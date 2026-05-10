@@ -10,6 +10,13 @@ import click
 from rich.console import Console
 
 from consortium.cli.core.paths import find_script_path
+from msc_sdk.openclaw import (
+    OPENCLAW_PROFILES,
+    openclaw_config_path,
+    openclaw_launch_plan,
+    openclaw_readiness,
+    read_openclaw_config,
+)
 
 console = Console()
 
@@ -28,6 +35,45 @@ def openclaw() -> None:
       msc openclaw start    # Start the gateway
       msc openclaw status   # Check gateway health
     """
+
+
+def _emit_json(data: object) -> None:
+    click.echo(json.dumps(data, indent=2, sort_keys=True))
+
+
+@openclaw.command("readiness")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def openclaw_readiness_cmd(as_json: bool) -> None:
+    """Show OpenClaw readiness without starting automation."""
+    launch_script = _find_launch_script()
+    data = openclaw_readiness(launch_script=launch_script).to_dict()
+    if as_json:
+        _emit_json(data)
+        return
+    console.print("[blue]configured[/]" if data["configured"] else "[dim]not configured[/]")
+
+
+@openclaw.command("profiles")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def openclaw_profiles(as_json: bool) -> None:
+    """Show OpenClaw capability profiles."""
+    data = {"ok": True, "profiles": OPENCLAW_PROFILES}
+    if as_json:
+        _emit_json(data)
+        return
+    for name in OPENCLAW_PROFILES:
+        click.echo(name)
+
+
+@openclaw.command("launch-plan")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def openclaw_launch_plan_cmd(as_json: bool) -> None:
+    """Show the OpenClaw launch command without executing it."""
+    data = openclaw_launch_plan(_find_launch_script())
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(" ".join(data["command"]) if data.get("command") else "launch script not found")
 
 
 @openclaw.command("setup")
@@ -133,19 +179,29 @@ def openclaw_stop() -> None:
 
 
 @openclaw.command("status")
-def openclaw_status() -> None:
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def openclaw_status(as_json: bool) -> None:
     """Check OpenClaw gateway health."""
-    config_file = Path.home() / ".openclaw" / "openclaw.json"
+    config_file = openclaw_config_path()
     if not config_file.exists():
+        if as_json:
+            _emit_json({
+                "ok": True,
+                "configured": False,
+                "running": False,
+                "config_path": str(config_file),
+            })
+            return
         console.print("[yellow]OpenClaw not configured.[/] Run [bold]msc openclaw setup[/]")
         return
 
     try:
-        with open(config_file, "r") as f:
-            config = json.load(f)
+        config = read_openclaw_config(config_file)
         port = config.get("gateway", {}).get("port", 18789)
-        console.print(f"  Config: {config_file}")
-        console.print(f"  Port: {port}")
+        running = False
+        if not as_json:
+            console.print(f"  Config: {config_file}")
+            console.print(f"  Port: {port}")
 
         # Try to connect
         import socket
@@ -153,6 +209,17 @@ def openclaw_status() -> None:
         sock.settimeout(2)
         result = sock.connect_ex(("127.0.0.1", port))
         sock.close()
+        running = result == 0
+        if as_json:
+            _emit_json({
+                "ok": True,
+                "configured": True,
+                "running": running,
+                "port": port,
+                "config_path": str(config_file),
+                "config": config,
+            })
+            return
         if result == 0:
             console.print(f"  Status: [blue]running[/] (port {port} open)")
         else:

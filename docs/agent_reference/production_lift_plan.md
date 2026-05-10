@@ -1229,3 +1229,34 @@ factual errors with an explicit correction note.
   tutorial defaults.
 - Next action: commit and push Stage 7, then continue to optional OpenClaw
   automation hardening if the user wants Stage 8 next.
+
+### 2026-05-10 16:37 EDT: Stage 8 OpenClaw Safety Surface Implemented
+
+- Stage: Stage 8, Optional OpenClaw Automation
+- Work completed: added `msc_sdk.openclaw`, OpenClaw readiness/profile/launch
+  plan contracts, `msc openclaw readiness --json`,
+  `msc openclaw profiles --json`, `msc openclaw launch-plan --json`, and
+  redacted `msc openclaw status --json`; setup state and VS Code readiness now
+  display OpenClaw optionality.
+- Decisions made: do not enable OpenClaw automatically; keep read-only as the
+  default capability profile; make launch planning explicit and non-executing;
+  redact tokens from config-derived JSON; preserve existing OpenClaw start/stop
+  commands for compatibility but steer product surfaces toward readiness and
+  dry-run planning first.
+- Evidence/tests: focused Stage 8 suite passed
+  (`tests/test_openclaw_optional.py`, `tests/test_guided_setup.py`,
+  `tests/test_openclaude_integration.py`, `tests/test_msc_sdk_harness.py`,
+  `tests/test_msc_sdk_cli_surface.py`, and `tests/test_cli_contracts.py`: 40
+  passed); `npm test --prefix extensions/vscode-msc` passed;
+  `scripts/validation/contract_tests.sh` passed (`17 passed`);
+  `scripts/validation/cheap_dry_run.sh` passed. No paid full smoke was run per
+  the revised validation policy.
+- Risks discovered: existing compatibility start/stop commands still perform
+  process actions; future UI/OpenClaude/OpenClaw flows should prefer the new
+  readiness/profile/launch-plan surfaces and move confirmed execution behind
+  the Stage 4 harness.
+- User review status: ready for review of OpenClaw optionality, profile shape,
+  and whether legacy start/stop should later be confirmation-gated.
+- Next action: commit and push Stage 8, then continue to Stage 9 Slack/webapp
+  planning only as docs/scaffolding unless the user wants hosted integration
+  work.

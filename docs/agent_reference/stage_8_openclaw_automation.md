@@ -4,7 +4,11 @@ This document defines OpenClaw as an optional, capability-limited cluster
 automation add-on for users who want away-from-keyboard oversight through
 Telegram or similar channels.
 
-Status: drafted on 2026-05-10. Pending user review before implementation.
+Status: first safety/checkpoint implementation completed on 2026-05-10. The
+initial product surface is read-only/dry-run oriented: OpenClaw readiness,
+capability profiles, launch-plan JSON, redacted status JSON, and VS Code setup
+visibility. Existing start/stop commands remain for compatibility but are not
+the preferred product path.
 
 ## Decision
 

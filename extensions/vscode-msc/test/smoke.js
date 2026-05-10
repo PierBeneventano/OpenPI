@@ -28,3 +28,4 @@ assert(extension.includes("['openclaude', 'readiness', '--json']"));
 assert(extension.includes("['openclaude', 'env', '--json']"));
 assert(extension.includes("['project', 'setup-state', '--json']"));
 assert(extension.includes("['project', 'tutorial-plan', '--json']"));
+assert(extension.includes("['openclaw', 'readiness', '--json']"));
