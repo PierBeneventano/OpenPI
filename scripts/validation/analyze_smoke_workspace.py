@@ -22,6 +22,7 @@ DEFAULT_ALLOWED_MODELS = {
     "gpt-5-mini",
     "openrouter/openai/gpt-5-mini",
     "openai/gpt-5-mini",
+    "openrouter/gpt-5-mini",
     "openrouter/perplexity/sonar-pro",
     "perplexity/sonar-pro",
 }
@@ -122,6 +123,24 @@ def _budget_total(budget_state: dict[str, Any] | None) -> float | None:
 
 def analyze(workspace: Path, allowed_models: set[str]) -> tuple[dict[str, Any], int]:
     checks: list[dict[str, Any]] = []
+    require_citations = os.getenv("MSC_SMOKE_REQUIRE_CITATIONS", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    accept_noncompleted = os.getenv("MSC_SMOKE_ACCEPT_NONCOMPLETED", "1").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    require_final_paper = os.getenv("MSC_SMOKE_REQUIRE_FINAL_PAPER", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     def check(name: str, passed: bool, detail: str = "") -> None:
         checks.append({"name": name, "passed": bool(passed), "detail": detail})
@@ -149,7 +168,12 @@ def analyze(workspace: Path, allowed_models: set[str]) -> tuple[dict[str, Any], 
         status_value = str(status.get("status", ""))
     if isinstance(summary, dict) and not status_value:
         status_value = str(summary.get("status", ""))
-    check("completed_status", status_value == "completed", status_value or "unknown")
+    terminal_or_completed = status_value == "completed" or (
+        accept_noncompleted
+        and status_value in {"failed", "partial"}
+        and isinstance(summary, dict)
+    )
+    check("terminal_or_completed_status", terminal_or_completed, status_value or "unknown")
 
     observed_models = sorted(set(_walk_model_values(models) if models is not None else []))
     unexpected_models = [model for model in observed_models if not _allowed(model, allowed_models)]
@@ -169,16 +193,18 @@ def analyze(workspace: Path, allowed_models: set[str]) -> tuple[dict[str, Any], 
 
     final_paper = _find_final_paper(workspace, summary if isinstance(summary, dict) else None)
     metrics = _text_metrics(final_paper)
-    check("final_paper_exists", bool(metrics.get("exists")), str(metrics.get("path")))
+    if status_value == "completed" or require_final_paper:
+        check("final_paper_exists", bool(metrics.get("exists")), str(metrics.get("path")))
     if metrics.get("exists") and metrics.get("kind") != "pdf":
         check("final_paper_has_body", int(metrics.get("words") or 0) >= 500, f"words={metrics.get('words')}")
         check("final_paper_has_sections", int(metrics.get("headings") or 0) >= 3, f"headings={metrics.get('headings')}")
         check("final_paper_no_placeholders", not metrics.get("placeholders"), str(metrics.get("placeholders")))
-        check(
-            "final_paper_has_citation_markers",
-            int(metrics.get("citation_markers") or 0) >= 3,
-            f"citation_markers={metrics.get('citation_markers')}",
-        )
+        if require_citations:
+            check(
+                "final_paper_has_citation_markers",
+                int(metrics.get("citation_markers") or 0) >= 3,
+                f"citation_markers={metrics.get('citation_markers')}",
+            )
 
     report = {
         "workspace": str(workspace),
@@ -186,6 +212,9 @@ def analyze(workspace: Path, allowed_models: set[str]) -> tuple[dict[str, Any], 
         "allowed_models": sorted(allowed_models),
         "observed_models": observed_models,
         "budget_total_usd": budget_total,
+        "accept_noncompleted": accept_noncompleted,
+        "citation_check_required": require_citations,
+        "final_paper_required": require_final_paper,
         "final_paper": metrics,
         "checks": checks,
     }

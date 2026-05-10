@@ -30,6 +30,7 @@ venv/
 .cache/
 cache/
 huggingface/
+.lit_rate_state/
 
 
 

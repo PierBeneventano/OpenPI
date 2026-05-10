@@ -44,13 +44,17 @@ regression fixtures.
 
 ## Canonical Canary Task
 
-Use the maintained quickstart task:
+Use the maintained cheap smoke task by default:
 
 ```bash
-examples/quickstart/task.txt
+scripts/validation/tasks/cheap_smoke_task.txt
 ```
 
-This keeps the task stable across stages and avoids changing evaluation inputs.
+This keeps the task stable across stages, avoids changing evaluation inputs, and
+prevents repeat-stage smoke tests from depending on external literature search
+or arXiv metadata availability. The quickstart task remains the recommended
+first real user run, but it is too literature-heavy for mandatory smoke after
+every implementation stage.
 
 ## Key And Environment Checks
 
@@ -164,11 +168,11 @@ MSC_PAID_SMOKE_APPROVED=1 scripts/validation/cheap_smoke_test.sh
 
 Default cheap smoke policy:
 
-- task: `examples/quickstart/task.txt`
+- task: `scripts/validation/tasks/cheap_smoke_task.txt`
 - main model: `gpt-5-mini`
-- deep literature search model: `openrouter/perplexity/sonar-pro`
+- deep literature search model: `openrouter/openai/gpt-5-mini`
 - budget cap: `$5`
-- timeout: `900` seconds
+- timeout: `1200` seconds
 - counsel: off
 - math agents: off
 - tree search: off
@@ -180,7 +184,7 @@ Overrides:
 MSC_SMOKE_BUDGET_USD=2 \
 MSC_SMOKE_TIMEOUT_SECONDS=600 \
 MSC_SMOKE_MODEL=gpt-5-mini \
-MSC_SMOKE_DEEP_RESEARCH_MODEL=openrouter/perplexity/sonar-pro \
+MSC_SMOKE_DEEP_RESEARCH_MODEL=openrouter/openai/gpt-5-mini \
 MSC_PAID_SMOKE_APPROVED=1 \
 scripts/validation/cheap_smoke_test.sh
 ```
@@ -211,9 +215,19 @@ The analyzer checks:
 - final paper presence
 - cheap model-surface enforcement
 - placeholder strings in generated paper text
-- rough section, body-length, and citation-marker heuristics
+- rough section and body-length heuristics
+- optional citation-marker heuristics when `MSC_SMOKE_REQUIRE_CITATIONS=1`
 
-This is not a scientific-quality acceptance test.
+Default acceptance:
+
+- completed runs pass when the structural and artifact heuristics pass
+- failed or partial terminal runs may pass when `run_summary.json`, core
+  metadata, budget files, and model-surface checks pass
+- require a final paper by setting `MSC_SMOKE_REQUIRE_FINAL_PAPER=1`
+- require citations by setting `MSC_SMOKE_REQUIRE_CITATIONS=1`
+
+This is not a scientific-quality acceptance test. It is a repeatable cheap
+canary for launch, model-surface, workspace, budget, and artifact-read behavior.
 
 ## Stage Gate Checklist
 

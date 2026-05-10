@@ -1,0 +1,15 @@
+Produce a concise self-contained Markdown research note for a validation smoke test.
+
+Topic: analyze whether normalizing hidden activations in a tiny two-layer ReLU
+network could change gradient scale and training stability on a synthetic
+classification task.
+
+Constraints for this smoke test:
+- Keep the result short and practical.
+- Use only general reasoning and the information in this prompt.
+- Do not perform external literature search.
+- Do not include arXiv identifiers, DOI lookups, or external citations.
+- Include a clear hypothesis, a minimal synthetic experiment design, expected
+  observations, limitations, and next steps.
+- The goal is to exercise the full pipeline cheaply, not to produce a
+  publication-quality survey.

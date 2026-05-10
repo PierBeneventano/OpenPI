@@ -128,4 +128,4 @@ Homepage = "https://github.com/PoggioAI/PoggioAI_MSc"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["consortium*"]
+include = ["consortium*", "msc_sdk*"]
