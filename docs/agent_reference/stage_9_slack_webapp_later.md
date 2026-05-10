@@ -4,7 +4,10 @@ This document defines Slack and webapp work as later product stages that should
 reuse the SDK/CLI/harness contracts after the local/Remote-SSH product
 experience is stable.
 
-Status: drafted on 2026-05-10. Pending user review before implementation.
+Status: planning checkpoint completed on 2026-05-10. No Slack or hosted webapp
+runtime code should be built yet. This stage is now an explicit future-product
+roadmap and security gate for work after the Remote-SSH dashboard, OpenClaude,
+guided setup, and optional OpenClaw safety surfaces have been reviewed.
 
 ## Decision
 
@@ -145,6 +148,75 @@ Slack and webapp should depend on:
 
 If these foundations are not stable, Slack/webapp work should remain design
 only.
+
+## Trigger Conditions
+
+Do not start Slack or hosted webapp implementation until these conditions are
+met:
+
+- VS Code dashboard has been manually reviewed in the intended Remote SSH flow.
+- OpenClaude configuration-first handoff has been reviewed.
+- The user accepts the capability/confirmation model for any remote approval
+  surface.
+- Artifact exposure rules are reviewed against real workspaces.
+- There is a concrete deployment target: local lab server, single-tenant lab
+  deployment, or hosted product.
+- Authentication and authorization design is written before endpoints are
+  implemented.
+
+## First Slack Prototype Scope
+
+When Slack becomes active, the first prototype should be notification-only:
+
+- stage complete
+- stage failed
+- stalled/no heartbeat warning
+- budget threshold warning
+- human review needed
+
+The first Slack prototype should not accept commands. Approval buttons or slash
+commands come only after harness confirmation flows and channel/privacy rules
+are reviewed.
+
+## First Webapp Prototype Scope
+
+When webapp work becomes active, the first prototype should be read-only and
+single-tenant:
+
+- project readiness
+- campaign/run graph
+- artifact browser with conservative previews
+- logs with redaction defaults
+- budget panel
+- event timeline
+
+No hosted mutation execution should ship until authentication, authorization,
+audit, and confirmation flows are tested.
+
+## Deferred Work
+
+Keep these explicitly out of the current lift:
+
+- multi-tenant SaaS
+- public internet control endpoints
+- product-managed billing
+- hosted cluster job launch
+- Slack command execution
+- raw prompt/LLM trace browsing by default
+- broad artifact sharing links
+
+## Backlog Seeds
+
+Future implementation tickets should be split roughly as:
+
+- Slack notification event mapper.
+- Slack redaction and message policy.
+- Slack private approval design.
+- Webapp auth and tenancy design.
+- Webapp artifact exposure matrix.
+- Webapp read-only dashboard from Stage 2-4 read models.
+- Hosted worker/network boundary design for Engaging.
+- Audit retention and export policy.
 
 ## Validation Plan
 

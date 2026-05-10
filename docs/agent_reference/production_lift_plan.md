@@ -1260,3 +1260,24 @@ factual errors with an explicit correction note.
 - Next action: commit and push Stage 8, then continue to Stage 9 Slack/webapp
   planning only as docs/scaffolding unless the user wants hosted integration
   work.
+
+### 2026-05-10 16:40 EDT: Stage 9 Slack/Webapp Future Roadmap Locked
+
+- Stage: Stage 9, Later Slack And Webapp Planning
+- Work completed: converted Stage 9 into an explicit future-product roadmap
+  with trigger conditions, first Slack prototype scope, first webapp prototype
+  scope, deferred work, and backlog seeds.
+- Decisions made: do not build Slack or hosted runtime code during the current
+  lift; Slack starts notification-only when active; webapp starts read-only and
+  single-tenant when active; no public control endpoints, hosted cluster job
+  launch, or Slack command execution until auth, authorization, artifact
+  exposure, audit, and confirmation flows are designed and reviewed.
+- Evidence/tests: docs-only checkpoint; no runtime tests needed beyond the
+  Stage 8 validation already completed.
+- Risks discovered: Slack/webapp can quickly expand into a full security and
+  tenancy product; keeping it as a gated roadmap protects the current
+  Remote-SSH/OpenClaude-first v1 from premature hosted complexity.
+- User review status: ready for review whenever Slack/webapp priority changes.
+- Next action: commit and push Stage 9 docs; after that, the lift has Stage
+  1-9 checkpoints in motion and the next practical work is user review/manual
+  VS Code extension exploration.
