@@ -165,9 +165,10 @@ The tutorial should prefer:
 - dry-run checks
 - quickstart campaign inspection
 - fixture-backed dashboard exploration
-- optional budget-tier smoke run only with explicit user approval
+- no paid full-pipeline smoke run during local setup
 
-No tutorial step should spend money without a clear confirmation.
+No tutorial step should spend money. Paid smoke belongs in a separately
+approved Engaging integration-test plan, not the local setup tutorial.
 
 ## UX Surfaces
 

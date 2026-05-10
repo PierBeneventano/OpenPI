@@ -57,9 +57,9 @@ around it.
 - [`stage_9_slack_webapp_later.md`](stage_9_slack_webapp_later.md): later
   Slack and webapp planning, hosted security requirements, and artifact access
   policy.
-- [`validation_protocol.md`](validation_protocol.md): recurring no-cost
-  dry-run, optional cheap-smoke, and heuristic quality gate for implementation
-  stages.
+- [`validation_protocol.md`](validation_protocol.md): recurring no-cost local
+  validation gate, fixture-backed checks, and deferred Engaging integration
+  smoke policy.
 
 ## Working Premise
 

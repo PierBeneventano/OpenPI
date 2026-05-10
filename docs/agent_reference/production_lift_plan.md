@@ -650,8 +650,11 @@ Preferred validation:
 - unit tests for parsers, importers, and command wrappers
 - snapshot tests against saved workspaces
 - `msc run --dry-run` for setup/launch validation
-- small budget-tier smoke runs only when launch behavior changes and the user
-  approves the spend
+- fixture-backed SDK/CLI/dashboard validation for local product-shell stages
+
+Full paid pipeline smoke tests are deferred until the user is ready for
+Engaging integration testing. Do not use `cheap_smoke_test.sh` as a recurring
+local stage gate for Stage 1-5 product-shell work.
 
 Any change that touches protected research-kernel behavior requires explicit
 approval and a separate validation plan.
@@ -1059,3 +1062,56 @@ factual errors with an explicit correction note.
   autonomous commit/push after each stage.
 - Next action: commit and push Stage 2, then begin Stage 3 SDK/CLI JSON
   surface work.
+
+### 2026-05-10 15:10 EDT: Local Full Smoke Deferred
+
+- Stage: cross-stage validation policy
+- Work completed: revised the validation strategy after user review identified
+  that local full smoke tests are not appropriate while building the product
+  shell locally.
+- Decisions made: remove paid full pipeline smoke from the recurring local
+  Stage 1-5 gate; use no-cost contract tests, dry-runs, fixture-backed
+  SDK/CLI/importer/dashboard tests, protected-file checks, and redaction checks
+  for local product-shell work; reserve `cheap_smoke_test.sh` for a separately
+  approved Engaging integration test plan.
+- Evidence/tests: inspected `scripts/validation/cheap_smoke_test.sh`,
+  `scripts/validation/cheap_dry_run.sh`, and
+  `scripts/validation/analyze_smoke_workspace.py`; stopped the interrupted
+  local paid smoke process before it continued spending or generating more
+  local artifacts.
+- Risks discovered: local full smoke can generate Engaging/SLURM-oriented
+  artifacts and spend provider budget while providing weak quality evidence;
+  earlier cheap smoke results are useful historical canaries but should not be
+  treated as the local validation standard.
+- User review status: user requested this policy revision on 2026-05-10.
+- Next action: continue Stage 3-5 product-shell implementation using the
+  revised no-cost local validation gate unless a new decision requires user
+  input.
+
+### 2026-05-10 15:45 EDT: Stage 3 SDK/CLI Surface Implemented
+
+- Stage: Stage 3, SDK And Public CLI Control Surface
+- Work completed: added public SDK clients for project inspection, run
+  inspection, campaign inspection, and command self-validation; added JSON CLI
+  groups for `project`, `artifacts`, `campaigns`, and `selftest`; extended
+  `msc runs` into a backward-compatible group with JSON list, inspect, logs,
+  budget, dry-run, and resume-request surfaces.
+- Decisions made: keep Stage 3 read-heavy and product-shell-only; expose
+  mutating actions as request/confirmation scaffolding rather than executing
+  them; keep existing human-oriented commands compatible while adding
+  machine-readable JSON output for agents, VS Code, and future OpenClaude
+  skills.
+- Evidence/tests: focused Stage 3 suite passed
+  (`tests/test_msc_sdk_artifacts.py`, `tests/test_msc_sdk_manifest.py`,
+  `tests/test_msc_sdk_cli_surface.py`, and `tests/test_cli_contracts.py`: 28
+  passed); `scripts/validation/contract_tests.sh` passed (`17 passed`);
+  `scripts/validation/cheap_dry_run.sh` passed. No paid full smoke was run per
+  the revised validation policy.
+- Risks discovered: real completed/failed/stalled workspace fixtures are still
+  needed for production-grade importer confidence; the current command surface
+  is sufficient for Stage 5 read-only dashboard work but Stage 4 must centralize
+  capability enforcement before any mutation execution is exposed.
+- User review status: user delegated implementation through Stage 5 and
+  revised the validation policy to omit local full smoke.
+- Next action: commit and push Stage 3, then begin Stage 4 orchestrator
+  harness with read-first capabilities, events, and confirmation scaffolding.

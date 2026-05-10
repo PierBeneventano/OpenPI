@@ -1,0 +1,59 @@
+"""Self-validation metadata for SDK/CLI parity."""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import Any
+
+
+@dataclass(frozen=True)
+class CommandSpec:
+    """Machine-readable public command descriptor."""
+
+    operation: str
+    cli: str
+    sdk: str
+    capability: str
+    mutates: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+PUBLIC_COMMANDS = [
+    CommandSpec("project.inspect", "msc project inspect --json", "ProjectClient.inspect()", "read.project"),
+    CommandSpec("project.readiness", "msc project readiness --json", "ProjectClient.readiness()", "read.project"),
+    CommandSpec("artifacts.inspect", "msc artifacts inspect <path> --json", "import_manifest(path)", "read.artifacts"),
+    CommandSpec("artifacts.index", "msc artifacts index <path> --out <dir> --json", "write_manifest(path, out)", "write.index", True),
+    CommandSpec("runs.list", "msc runs list --json", "RunClient.list()", "read.runs"),
+    CommandSpec("runs.inspect", "msc runs inspect <run> --json", "RunClient.inspect(ref)", "read.runs"),
+    CommandSpec("runs.logs", "msc runs logs <run> --json", "RunClient.logs(ref)", "read.logs"),
+    CommandSpec("runs.budget", "msc runs budget <run> --json", "RunClient.budget(ref)", "read.budget"),
+    CommandSpec("runs.dry_run", "msc runs dry-run --task-file <path> --json", "RunClient.dry_run()", "read.runs"),
+    CommandSpec("campaigns.list", "msc campaigns list --json", "CampaignClient.list()", "read.campaigns"),
+    CommandSpec("campaigns.inspect", "msc campaigns inspect <campaign> --json", "CampaignClient.inspect(ref)", "read.campaigns"),
+    CommandSpec("campaigns.graph", "msc campaigns graph <campaign> --json", "CampaignClient.graph(ref)", "read.campaigns"),
+    CommandSpec("campaigns.status", "msc campaigns status <campaign> --json", "CampaignClient.status(ref)", "read.campaigns"),
+    CommandSpec("campaigns.artifacts", "msc campaigns artifacts <campaign> --json", "CampaignClient.artifacts(ref)", "read.artifacts"),
+]
+
+
+class ValidationClient:
+    """Expose self-test metadata used by agent harnesses."""
+
+    def commands(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "commands": [command.to_dict() for command in PUBLIC_COMMANDS],
+        }
+
+    def permissions(self) -> dict[str, Any]:
+        capabilities = sorted({command.capability for command in PUBLIC_COMMANDS})
+        return {
+            "ok": True,
+            "default_profile": "read_only_with_index_write",
+            "capabilities": capabilities,
+            "mutating_operations": [
+                command.to_dict() for command in PUBLIC_COMMANDS if command.mutates
+            ],
+        }

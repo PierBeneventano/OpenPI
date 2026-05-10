@@ -22,8 +22,9 @@ These questions should guide future updates to this directory.
 5. Answered in draft: for product-shell changes, use the recurring validation
    gate in [`validation_protocol.md`](validation_protocol.md): static checks,
    protected-file checks, unit tests, snapshot tests, importer replay,
-   no-cost dry-runs, and optional budget-tier smoke runs only with user
-   approval.
+   no-cost dry-runs, fixture-backed SDK/CLI/dashboard checks, and redaction
+   checks. Full paid smoke tests are deferred until a separate Engaging
+   integration testing plan is approved.
 6. Answered: max-mode or ultra-mode behavior should be treated as frozen unless
    the user approves a separate kernel-change validation plan and has budget to
    rerun a reference experiment.
@@ -112,8 +113,8 @@ These questions should guide future updates to this directory.
    preserve understandable credential precedence, and avoid overwriting
    existing credentials without confirmation.
 3. Answered in draft: tutorial paths should default to no-cost dry-runs and
-   fixture-backed exploration; any budget-tier smoke run requires explicit user
-   approval.
+   fixture-backed exploration; full paid smoke runs should not appear in local
+   tutorial paths and require a separate Engaging integration-test decision.
 
 ## OpenClaw Optional Automation
 

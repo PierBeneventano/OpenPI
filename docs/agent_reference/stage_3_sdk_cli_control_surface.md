@@ -4,7 +4,9 @@ This document defines the public SDK and CLI strategy for exposing MSc as a
 powerful, expressive, agent-operable product surface while preserving the
 research kernel.
 
-Status: drafted on 2026-05-10. Pending user review before implementation.
+Status: first implementation checkpoint completed on 2026-05-10. The initial
+surface is read-heavy and JSON-first; broader mutation execution remains a
+Stage 4 harness concern.
 
 ## Decision
 

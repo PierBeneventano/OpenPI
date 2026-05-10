@@ -71,6 +71,10 @@ def _register_commands() -> None:
     from consortium.cli.commands.extras import install
     from consortium.cli.commands.status import status
     from consortium.cli.commands.logs import logs
+    from consortium.cli.commands.project import project
+    from consortium.cli.commands.artifacts import artifacts
+    from consortium.cli.commands.campaigns import campaigns
+    from consortium.cli.commands.selftest import selftest
 
     cli.add_command(run)
     cli.add_command(setup)
@@ -85,6 +89,10 @@ def _register_commands() -> None:
     cli.add_command(install)
     cli.add_command(status)
     cli.add_command(logs)
+    cli.add_command(project)
+    cli.add_command(artifacts)
+    cli.add_command(campaigns)
+    cli.add_command(selftest)
 
 
 _register_commands()

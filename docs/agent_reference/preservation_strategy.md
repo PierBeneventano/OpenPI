@@ -104,7 +104,7 @@ product harness work without requiring new large experiments:
   budgets, and artifact lists
 - run unit tests for artifact parsers and status normalization
 - run `msc run --dry-run` for environment/argument validation
-- use budget-tier smoke runs sparingly and only when changing launch behavior
+- defer full paid smoke runs until explicit Engaging integration testing
 - avoid large-run validation as a requirement for UI-only or adapter-only work
 
 ## Acceptable Product Changes
