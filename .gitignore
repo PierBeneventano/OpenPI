@@ -24,6 +24,7 @@ venv/
 
 # MSc project-local config
 .msc/
+.msc_index/
 .openpi/
 
 # Project-specific

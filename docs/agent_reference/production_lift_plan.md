@@ -1037,3 +1037,25 @@ factual errors with an explicit correction note.
   protected kernel change is required; no protected kernel change was made.
 - Next action: re-run the analyzer against the latest smoke workspace, then
   commit and push Stage 1 if the calibrated gate passes.
+
+### 2026-05-10 14:41 EDT: Stage 2 Manifest Importer Implemented
+
+- Stage: Stage 2, Production Artifact Model And Importer Design
+- Work completed: added a derived manifest importer/writer in `msc_sdk` that
+  imports run workspaces, results directories, and campaign YAML specs into a
+  versioned manifest with normalized run/campaign payloads and artifact counts.
+- Decisions made: `.msc_index/` is the default derived-index location and is
+  ignored by git; manifests are derived, reproducible JSON files and not the
+  scientific source of truth; the importer reuses Stage 1 read models instead
+  of reparsing protected runtime internals.
+- Evidence/tests: `tests/test_msc_sdk_artifacts.py` and
+  `tests/test_msc_sdk_manifest.py` passed (`7 passed`); contract tests passed
+  (`17 passed`); cheap dry-run passed; paid cheap smoke produced accepted
+  terminal canary workspace `results/consortium_20260510_144151` with report
+  `logs/validation/cheap_smoke_20260510_144150.json` and about $0.35 spend.
+- Risks discovered: importer validation still uses synthetic fixtures until
+  real completed/failed/stalled workspaces are intentionally preserved.
+- User review status: user delegated implementation through Stage 5 with
+  autonomous commit/push after each stage.
+- Next action: commit and push Stage 2, then begin Stage 3 SDK/CLI JSON
+  surface work.

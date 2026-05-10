@@ -13,12 +13,17 @@ from .read_models import (
     RunReadModel,
     StageReadModel,
 )
+from .manifest import ManifestImportResult, import_manifest, read_manifest, write_manifest
 
 __all__ = [
     "ArtifactReadModel",
     "BudgetReadModel",
     "CampaignReadModel",
     "LogReadModel",
+    "ManifestImportResult",
     "RunReadModel",
     "StageReadModel",
+    "import_manifest",
+    "read_manifest",
+    "write_manifest",
 ]
