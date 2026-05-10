@@ -5,7 +5,7 @@ harness evolves.
 
 ## Preserve The LangGraph Engine
 
-Do not change prompts, process, or LangGraph pipeline logic unless the user
+Do not change anything that touches functional research logic unless the user
 explicitly asks for a runtime behavior change.
 
 Preserve:
@@ -16,6 +16,7 @@ Preserve:
 - math-enabled pipeline insertion point and ordering
 - routers, validation gates, follow-up loops, strict review gates, and
   track fan-out/fan-in behavior
+- agent process semantics and orchestration logic
 - `ResearchState` append-only message semantics
 - checkpoint and resume behavior
 - artifact enforcement behavior
@@ -40,6 +41,10 @@ Old infrastructure may be removed or replaced, but the research kernel should
 remain stable. Treat productization as a harness rewrite around the preserved
 engine, not as an engine rewrite.
 
+The old proof-of-concept infrastructure should not be treated as sacred. It may
+be ripped out and rebuilt into an elegant production-grade system when the
+replacement preserves the same research behavior and output semantics.
+
 ## Rebuild Product Shell Layers
 
 The product shell can be rebuilt above and around the artifact/read model layer
@@ -59,6 +64,22 @@ Rebuildable layers include:
 These layers may observe, launch, supervise, and route operator intent. They
 must not silently change prompts, stage order, routing, validation behavior,
 model policy, budget policy, or artifact completion semantics.
+
+## Operator Confirmation
+
+The following actions require explicit user confirmation in any GUI, CLI skill,
+OpenClaude integration, OpenClaw script, or webapp:
+
+- launch a run or campaign
+- repair a stage
+- abort or cancel work
+- increase or override budget
+- override stage status
+- archive or delete workspaces
+- rewrite prompts, tasks, plans, or campaign YAML
+- mutate artifacts or generated papers
+
+Read-only inspection should be the default posture for early product surfaces.
 
 ## Treat Artifacts As Contracts
 
@@ -80,6 +101,11 @@ Important contracts include:
 If a new product index or database is added, it should be derived from these
 artifacts unless a migration is explicitly approved.
 
+Artifact storage, reading, and organization are allowed to be redesigned into a
+production-grade layout. The migration must preserve the meaning of existing
+artifacts and provide compatibility for old workspaces or a deliberate import
+path.
+
 ## Keep Engaging-First Workflows Intact
 
 The near-term operator flow is Engaging/HPC-native:
@@ -87,8 +113,10 @@ The near-term operator flow is Engaging/HPC-native:
 - users may connect to Engaging first
 - VS Code should support Remote SSH use
 - extension/backend logic may run on the remote VS Code host
-- OpenClaw and live steering services should remain loopback-local unless an
-  authenticated control plane is introduced
+- OpenClaw should be optional, user-controlled cluster automation, not a
+  mandatory always-on agent with full access to code and artifacts
+- OpenClaw and live steering services should remain loopback-local or
+  explicitly permissioned unless an authenticated control plane is introduced
 - SLURM, campaign heartbeat, and filesystem liveness checks remain part of the
   operational model
 
@@ -113,3 +141,7 @@ Before exposing anything beyond a trusted Engaging login session:
 - treat API keys, campaign workspaces, logs, and generated code as sensitive
 - isolate generated code execution before multi-user hosting
 - make operator actions auditable
+
+OpenClaw should not require full unbounded access by default. Prefer a
+capability-limited CLI/SDK layer that exposes explicit research-run operations,
+read-only artifact access, and confirmation-gated mutations.
