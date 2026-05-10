@@ -1169,3 +1169,36 @@ factual errors with an explicit correction note.
   iteration.
 - Next action: commit and push Stage 5, then pause before Stage 6 OpenClaude
   integration unless the user explicitly asks to continue.
+
+### 2026-05-10 16:13 EDT: Stage 6 OpenClaude Configuration Layer Implemented
+
+- Stage: Stage 6, Forked OpenClaude Integration
+- Work completed: implemented the configuration-first OpenClaude layer without
+  creating a fork: `msc openclaude` readiness/env/launch-plan commands,
+  `msc_sdk.openclaude` contracts, `integrations/openclaude/MSC_SKILL.md`, a
+  redaction-safe `launch_openclaude_msc.sh` launcher, and VS Code dashboard
+  OpenClaude readiness/env visibility.
+- Decisions made: keep OpenClaude external for this checkpoint; map the MSc
+  OpenRouter key into OpenAI-compatible launch-time environment variables;
+  expose only redacted env contracts in CLI/UI; make `msc openclaude launch`
+  plan-only by default, requiring `--execute` for an actual OpenClaude launch;
+  preserve the SDK/CLI/harness boundary and keep mutation execution out of the
+  OpenClaude skill.
+- Evidence/tests: implementation-time review of the upstream OpenClaude GitHub
+  README confirmed OpenAI-compatible env vars, provider profiles, VS Code
+  extension, and localhost gRPC mode still exist; OpenClaude-focused tests
+  passed (`tests/test_openclaude_integration.py`,
+  `tests/test_msc_sdk_harness.py`, `tests/test_msc_sdk_cli_surface.py`, and
+  `tests/test_cli_contracts.py`: 31 passed); `bash -n
+  integrations/openclaude/launch_openclaude_msc.sh` passed; `npm test --prefix
+  extensions/vscode-msc` passed; `scripts/validation/contract_tests.sh` passed
+  (`17 passed`); `scripts/validation/cheap_dry_run.sh` passed. No paid full
+  smoke was run per the revised validation policy.
+- Risks discovered: OpenClaude is not installed or launched by this checkpoint;
+  actual terminal/VS Code embedding and any fork patches require user review;
+  broad OpenClaude shell access still needs operational discipline and should
+  be constrained by the skill plus future integration testing.
+- User review status: ready for user review of the configuration-first
+  OpenClaude handoff before any fork or embedded chat work.
+- Next action: commit and push Stage 6, then move to Stage 7 guided setup only
+  if the user wants setup/tutorial implementation next.

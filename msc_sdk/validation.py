@@ -41,6 +41,9 @@ PUBLIC_COMMANDS = [
     CommandSpec("harness.inspect_project", "msc harness inspect-project --json", "OrchestratorHarness.inspect_project()", "read.project"),
     CommandSpec("harness.refresh_manifest", "msc harness refresh-manifest <path> --json", "OrchestratorHarness.refresh_manifest(path)", "write.index", True),
     CommandSpec("harness.request_action", "msc harness request-action <operation> --target <target> --capability <capability> --json", "OrchestratorHarness.request_action(...)", "mutate.*", True),
+    CommandSpec("openclaude.readiness", "msc openclaude readiness --json", "openclaude_readiness(...)", "read.project"),
+    CommandSpec("openclaude.env", "msc openclaude env --json", "openclaude_env_contract(...)", "read.project"),
+    CommandSpec("openclaude.launch_plan", "msc openclaude launch --json", "openclaude_launch_plan(...)", "read.project"),
 ]
 
 

@@ -68,6 +68,7 @@ def _register_commands() -> None:
     from consortium.cli.commands.budget import budget
     from consortium.cli.commands.notify import notify
     from consortium.cli.commands.openclaw import openclaw
+    from consortium.cli.commands.openclaude import openclaude
     from consortium.cli.commands.extras import install
     from consortium.cli.commands.status import status
     from consortium.cli.commands.logs import logs
@@ -89,6 +90,7 @@ def _register_commands() -> None:
     cli.add_command(budget)
     cli.add_command(notify)
     cli.add_command(openclaw)
+    cli.add_command(openclaude)
     cli.add_command(install)
     cli.add_command(status)
     cli.add_command(logs)

@@ -50,7 +50,9 @@ function initialState(root) {
     campaignGraph: null,
     events: [],
     commands: [],
-    capabilities: null
+    capabilities: null,
+    openclaude: null,
+    openclaudeEnv: null
   };
 }
 
@@ -91,6 +93,12 @@ async function collectDashboardData(root) {
   const capabilities = await runJson(root, ['capabilities', 'current', '--json']);
   state.capabilities = unwrap(capabilities, 'capabilities');
 
+  const openclaude = await runJson(root, ['openclaude', 'readiness', '--json']);
+  state.openclaude = unwrap(openclaude, 'openclaude');
+
+  const openclaudeEnv = await runJson(root, ['openclaude', 'env', '--json']);
+  state.openclaudeEnv = unwrap(openclaudeEnv, 'openclaudeEnv');
+
   state.errors = [
     ...readiness.errors,
     ...project.errors,
@@ -98,7 +106,9 @@ async function collectDashboardData(root) {
     ...campaigns.errors,
     ...events.errors,
     ...commands.errors,
-    ...capabilities.errors
+    ...capabilities.errors,
+    ...openclaude.errors,
+    ...openclaudeEnv.errors
   ];
   state.generatedAt = new Date().toISOString();
   return state;
@@ -366,6 +376,7 @@ function renderHtml(webview, state) {
       <button data-tab="runs">Runs</button>
       <button data-tab="campaigns">Campaigns</button>
       <button data-tab="events">Events</button>
+      <button data-tab="openclaude">OpenClaude</button>
       <button data-tab="readiness">Readiness</button>
     </nav>
     <main>
@@ -374,6 +385,7 @@ function renderHtml(webview, state) {
       <section id="tab-runs" class="tab hidden"></section>
       <section id="tab-campaigns" class="tab hidden"></section>
       <section id="tab-events" class="tab hidden"></section>
+      <section id="tab-openclaude" class="tab hidden"></section>
       <section id="tab-readiness" class="tab hidden"></section>
     </main>
   </div>
@@ -413,6 +425,7 @@ function renderHtml(webview, state) {
       renderRuns();
       renderCampaigns();
       renderEvents();
+      renderOpenClaude();
       renderReadiness();
     }
 
@@ -464,6 +477,21 @@ function renderHtml(webview, state) {
         ? state.events.map((event) => '<div class="event"><strong>' + escapeHtml(event.kind) + '</strong><div>' + escapeHtml(event.summary) + '</div><div class="muted">' + escapeHtml(event.timestamp || '') + '</div></div>').join('')
         : '<p class="muted">No product-shell events yet.</p>';
       document.getElementById('tab-events').innerHTML = '<div class="panel"><h2>Events</h2><div class="event-list">' + rows + '</div></div>';
+    }
+
+    function renderOpenClaude() {
+      const readiness = state.openclaude || {};
+      const env = state.openclaudeEnv && state.openclaudeEnv.env ? state.openclaudeEnv.env : {};
+      const rows = [
+        ['OpenClaude binary', readiness.openclaude_available ? 'available' : 'missing'],
+        ['OpenRouter key', readiness.openrouter_configured ? 'configured' : 'missing'],
+        ['Skill', readiness.skill_exists ? readiness.skill_path : 'missing'],
+        ['Launch ready', readiness.launch_ready ? 'yes' : 'no'],
+        ['Model', readiness.model || '-'],
+        ['Base URL', readiness.base_url || env.OPENAI_BASE_URL || '-']
+      ];
+      const envRows = Object.entries(env).map(([key, value]) => [key, value == null ? 'unset' : value]);
+      document.getElementById('tab-openclaude').innerHTML = '<div class="grid"><div class="panel"><h2>OpenClaude Handoff</h2>' + table(['Check', 'State'], rows) + '<p class="muted">Stage 6 uses a configuration-first handoff. Chat embedding remains future work; launch with integrations/openclaude/launch_openclaude_msc.sh or the OpenClaude CLI once ready.</p></div><div class="panel"><h2>Launch Environment</h2>' + table(['Variable', 'Value'], envRows) + '</div></div>';
     }
 
     function renderReadiness() {

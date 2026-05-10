@@ -24,3 +24,5 @@ for (const forbidden of [
 assert(extension.includes("['project', 'readiness', '--json']"));
 assert(extension.includes("['runs', 'list', '--json']"));
 assert(extension.includes("['selftest', 'commands', '--json']"));
+assert(extension.includes("['openclaude', 'readiness', '--json']"));
+assert(extension.includes("['openclaude', 'env', '--json']"));

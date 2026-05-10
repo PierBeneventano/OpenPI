@@ -1,0 +1,159 @@
+"""msc openclaude — configure and launch the MSc OpenClaude operator surface."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+import click
+
+from consortium.cli.core.env_manager import build_runtime_env, get_runtime_env_sources
+from consortium.cli.core.paths import find_project_root
+from msc_sdk.openclaude import (
+    DEFAULT_OPENCLAUDE_MODEL,
+    OPENCLAUDE_BASE_URL,
+    openclaude_env_contract,
+    openclaude_launch_plan,
+    openclaude_readiness,
+)
+
+
+def _emit_json(data: object) -> None:
+    click.echo(json.dumps(data, indent=2, sort_keys=True))
+
+
+@click.group()
+@click.option("--model", default=DEFAULT_OPENCLAUDE_MODEL, help="OpenRouter model id for OpenClaude.")
+@click.pass_context
+def openclaude(ctx: click.Context, model: str) -> None:
+    """Inspect and launch the OpenClaude integration without duplicating secrets."""
+    ctx.obj = ctx.obj or {}
+    ctx.obj["openclaude_model"] = model
+
+
+@openclaude.command("readiness")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def openclaude_readiness_cmd(ctx: click.Context, as_json: bool) -> None:
+    """Check OpenClaude launch readiness."""
+    data = _readiness(ctx).to_dict()
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo("ready" if data["launch_ready"] else "not ready")
+
+
+@openclaude.command("env")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def openclaude_env_cmd(ctx: click.Context, as_json: bool) -> None:
+    """Show the redacted OpenClaude launch environment contract."""
+    readiness = _readiness(ctx)
+    data = {
+        "ok": readiness.openrouter_configured,
+        "env": openclaude_env_contract(
+            openrouter_configured=readiness.openrouter_configured,
+            model=ctx.obj["openclaude_model"],
+        ),
+        "openrouter_source": readiness.openrouter_source,
+    }
+    if as_json:
+        _emit_json(data)
+        return
+    for key, value in data["env"].items():
+        click.echo(f"{key}={value}")
+
+
+@openclaude.command("skill-path")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def openclaude_skill_path_cmd(ctx: click.Context, as_json: bool) -> None:
+    """Show the MSc OpenClaude skill path."""
+    readiness = _readiness(ctx)
+    data = {
+        "ok": readiness.skill_exists,
+        "skill_path": readiness.skill_path,
+        "skill_exists": readiness.skill_exists,
+    }
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(readiness.skill_path)
+
+
+@openclaude.command("launch")
+@click.option("--execute", is_flag=True, help="Actually launch openclaude. Default is dry-run plan only.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.argument("openclaude_args", nargs=-1)
+@click.pass_context
+def openclaude_launch_cmd(
+    ctx: click.Context,
+    execute: bool,
+    as_json: bool,
+    openclaude_args: tuple[str, ...],
+) -> None:
+    """Return or execute an OpenClaude launch plan."""
+    project_root = _project_root()
+    readiness = _readiness(ctx)
+    plan = openclaude_launch_plan(
+        project_root=project_root,
+        openrouter_configured=readiness.openrouter_configured,
+        model=ctx.obj["openclaude_model"],
+        extra_args=list(openclaude_args),
+    )
+    plan["execute"] = execute
+    plan["openclaude_available"] = readiness.openclaude_available
+    plan["launch_ready"] = readiness.launch_ready
+
+    if not execute:
+        if as_json:
+            _emit_json(plan)
+        else:
+            click.echo(" ".join(plan["command"]))
+        return
+
+    if not readiness.launch_ready:
+        data = {
+            "ok": False,
+            "error_code": "openclaude_not_ready",
+            "error_category": "unavailable",
+            "readiness": readiness.to_dict(),
+        }
+        if as_json:
+            _emit_json(data)
+            return
+        raise click.ClickException("OpenClaude is not ready. Run `msc openclaude readiness --json`.")
+
+    env = build_runtime_env(
+        config_dir_override=ctx.obj.get("config_dir"),
+        repo_root=project_root,
+    )
+    env["CLAUDE_CODE_USE_OPENAI"] = "1"
+    env["OPENAI_API_KEY"] = env["OPENROUTER_API_KEY"]
+    env["OPENAI_BASE_URL"] = OPENCLAUDE_BASE_URL
+    env["OPENAI_MODEL"] = ctx.obj["openclaude_model"]
+    proc = subprocess.run(["openclaude", *openclaude_args], cwd=project_root, env=env)
+    raise SystemExit(proc.returncode)
+
+
+def _project_root() -> Path:
+    return find_project_root() or Path.cwd()
+
+
+def _readiness(ctx: click.Context):
+    project_root = _project_root()
+    env = build_runtime_env(
+        config_dir_override=ctx.obj.get("config_dir"),
+        repo_root=project_root,
+    )
+    sources = get_runtime_env_sources(
+        config_dir_override=ctx.obj.get("config_dir"),
+        repo_root=project_root,
+    )
+    return openclaude_readiness(
+        project_root=project_root,
+        openrouter_configured=bool(env.get("OPENROUTER_API_KEY")),
+        openrouter_source=sources.get("OPENROUTER_API_KEY"),
+        model=ctx.obj["openclaude_model"],
+    )

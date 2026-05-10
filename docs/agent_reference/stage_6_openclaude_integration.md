@@ -4,11 +4,15 @@ This document defines how MSc should integrate OpenClaude as the primary chat
 operator surface while preserving the SDK/CLI/harness boundary and protected
 research kernel.
 
-Status: drafted on 2026-05-10. Pending user review before implementation.
+Status: first configuration-first implementation checkpoint completed on
+2026-05-10. The repository now includes an MSc OpenClaude skill/playbook,
+redacted readiness/env/launch-plan CLI commands, a local launcher script, and VS
+Code dashboard readiness visibility. No OpenClaude fork has been created yet.
 
 ## External Context
 
-Verified from the upstream OpenClaude repository on 2026-05-10:
+Verified from the upstream OpenClaude repository on 2026-05-10 and revisited at
+implementation time on 2026-05-10:
 
 - OpenClaude is an open-source coding-agent CLI with tool-driven workflows.
 - It supports OpenAI-compatible providers, including OpenRouter-compatible
@@ -300,11 +304,14 @@ OpenClaude-specific validation:
 Suggested sequence:
 
 1. Review OpenClaude upstream structure and extension behavior at implementation
-   time.
-2. Decide configuration-first versus fork-first.
-3. Create MSc skill/playbook using only public SDK/CLI commands.
+   time. Completed for the configuration-first checkpoint.
+2. Decide configuration-first versus fork-first. Configuration-first was chosen.
+3. Create MSc skill/playbook using only public SDK/CLI commands. Completed at
+   `integrations/openclaude/MSC_SKILL.md`.
 4. Add launcher that injects OpenRouter-compatible environment variables.
-5. Add readiness checks in VS Code dashboard.
+   Completed at `integrations/openclaude/launch_openclaude_msc.sh`.
+5. Add readiness checks in VS Code dashboard. Completed with the OpenClaude
+   dashboard tab and `msc openclaude readiness --json`.
 6. Add chat tab handoff to OpenClaude.
 7. Add OpenClaude validation commands or workflow.
 8. Add fork patches only where upstream configuration cannot satisfy the UX or
