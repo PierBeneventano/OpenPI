@@ -1,0 +1,28 @@
+{
+  "name": "msc-dashboard",
+  "displayName": "MSc Dashboard",
+  "description": "Read-only Remote SSH dashboard for PoggioAI/MSc runs, campaigns, events, and readiness.",
+  "version": "0.1.0",
+  "publisher": "poggio-ai",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:mscDashboard.open"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "mscDashboard.open",
+        "title": "MSc: Open Dashboard"
+      }
+    ]
+  },
+  "scripts": {
+    "test": "node --check extension.js && node test/smoke.js"
+  }
+}

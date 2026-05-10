@@ -1142,3 +1142,30 @@ factual errors with an explicit correction note.
   revised no-cost local validation gate.
 - Next action: commit and push Stage 4, then begin Stage 5 Remote-SSH VS Code
   read-only dashboard extension.
+
+### 2026-05-10 15:56 EDT: Stage 5 VS Code Dashboard Implemented
+
+- Stage: Stage 5, Remote-SSH VS Code Read-Only Dashboard
+- Work completed: added `extensions/vscode-msc/`, a dependency-free
+  JavaScript VS Code extension with the `MSc: Open Dashboard` command, a
+  read-only webview dashboard, manual refresh, project readiness, runs,
+  campaigns, first campaign graph, events, capabilities, and CLI surface
+  visibility.
+- Decisions made: keep the first extension plain JavaScript with no npm
+  dependency install; run the extension backend on the VS Code remote host;
+  consume only public `msc` JSON commands; omit all launch/repair/resume/edit
+  controls; keep OpenClaude as future Stage 6 rather than a fake chat tab.
+- Evidence/tests: `npm test --prefix extensions/vscode-msc` passed; focused
+  Python suite passed (`tests/test_msc_sdk_artifacts.py`,
+  `tests/test_msc_sdk_manifest.py`, `tests/test_msc_sdk_cli_surface.py`,
+  `tests/test_msc_sdk_harness.py`, and `tests/test_cli_contracts.py`: 33
+  passed); `scripts/validation/contract_tests.sh` passed (`17 passed`);
+  `scripts/validation/cheap_dry_run.sh` passed. No paid full smoke was run per
+  the revised validation policy.
+- Risks discovered: the extension has not been manually loaded in a VS Code
+  Extension Development Host or Remote SSH session yet; visual iteration and
+  richer artifact/log previews should follow user review.
+- User review status: ready for user exploration and aesthetic/product
+  iteration.
+- Next action: commit and push Stage 5, then pause before Stage 6 OpenClaude
+  integration unless the user explicitly asks to continue.

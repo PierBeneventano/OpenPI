@@ -4,7 +4,9 @@ This document defines the first GUI product surface: a Remote-SSH-first VS Code
 extension that provides read-only visibility into MSc runs, campaigns, artifacts,
 logs, budgets, and eventual OpenClaude handoff.
 
-Status: drafted on 2026-05-10. Pending user review before implementation.
+Status: first implementation checkpoint completed on 2026-05-10. A read-only
+plain-JavaScript VS Code extension scaffold now lives at
+`extensions/vscode-msc/` and consumes public JSON CLI surfaces.
 
 ## Decision
 
@@ -329,7 +331,8 @@ Potential directory names:
 - `extensions/vscode-msc/`
 - `apps/vscode-extension/`
 
-The final location should be chosen when implementation begins.
+Implementation chose `extensions/vscode-msc/` to keep the GUI product surface
+outside protected kernel modules while leaving room for future app surfaces.
 
 ## Validation Plan
 
