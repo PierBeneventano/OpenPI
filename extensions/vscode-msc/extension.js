@@ -52,7 +52,9 @@ function initialState(root) {
     commands: [],
     capabilities: null,
     openclaude: null,
-    openclaudeEnv: null
+    openclaudeEnv: null,
+    setupState: null,
+    tutorialPlan: null
   };
 }
 
@@ -93,6 +95,12 @@ async function collectDashboardData(root) {
   const capabilities = await runJson(root, ['capabilities', 'current', '--json']);
   state.capabilities = unwrap(capabilities, 'capabilities');
 
+  const setupState = await runJson(root, ['project', 'setup-state', '--json']);
+  state.setupState = unwrap(setupState, 'setupState');
+
+  const tutorialPlan = await runJson(root, ['project', 'tutorial-plan', '--json']);
+  state.tutorialPlan = unwrap(tutorialPlan, 'tutorialPlan');
+
   const openclaude = await runJson(root, ['openclaude', 'readiness', '--json']);
   state.openclaude = unwrap(openclaude, 'openclaude');
 
@@ -107,6 +115,8 @@ async function collectDashboardData(root) {
     ...events.errors,
     ...commands.errors,
     ...capabilities.errors,
+    ...setupState.errors,
+    ...tutorialPlan.errors,
     ...openclaude.errors,
     ...openclaudeEnv.errors
   ];
@@ -497,7 +507,14 @@ function renderHtml(webview, state) {
     function renderReadiness() {
       const checks = state.readiness && state.readiness.checks ? Object.entries(state.readiness.checks) : [];
       const capabilities = state.capabilities && state.capabilities.capabilities ? state.capabilities.capabilities : [];
-      document.getElementById('tab-readiness').innerHTML = '<div class="grid"><div class="panel"><h2>Readiness</h2>' + table(['Check', 'State'], checks.map(([key, value]) => [key, value ? 'ok' : 'missing'])) + '</div><div class="panel"><h2>Capabilities</h2>' + table(['Capability'], capabilities.map((item) => [item])) + '</div></div>';
+      const setup = state.setupState && state.setupState.setup ? state.setupState.setup : {};
+      const setupRows = Object.entries(setup)
+        .filter(([key, value]) => typeof value === 'boolean' || key === 'credential_source' || key === 'config_dir')
+        .map(([key, value]) => [key, typeof value === 'boolean' ? (value ? 'ok' : 'missing') : value || '-']);
+      const planRows = state.tutorialPlan && Array.isArray(state.tutorialPlan.steps)
+        ? state.tutorialPlan.steps.map((step) => [step.id, step.command])
+        : [];
+      document.getElementById('tab-readiness').innerHTML = '<div class="grid"><div class="panel"><h2>Readiness</h2>' + table(['Check', 'State'], checks.map(([key, value]) => [key, value ? 'ok' : 'missing'])) + '<h2>Setup</h2>' + table(['Item', 'State'], setupRows) + '</div><div class="panel"><h2>Capabilities</h2>' + table(['Capability'], capabilities.map((item) => [item])) + '<h2>Tutorial Plan</h2>' + table(['Step', 'Command'], planRows) + '</div></div>';
     }
 
     function renderErrors() {

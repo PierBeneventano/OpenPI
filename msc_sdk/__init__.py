@@ -22,6 +22,7 @@ from .read_models import (
     StageReadModel,
 )
 from .runs import RunClient
+from .setup_state import SetupState
 from .validation import ValidationClient
 
 __all__ = [
@@ -39,6 +40,7 @@ __all__ = [
     "ProjectClient",
     "RunClient",
     "RunReadModel",
+    "SetupState",
     "StageReadModel",
     "ValidationClient",
     "import_manifest",

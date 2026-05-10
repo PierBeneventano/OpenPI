@@ -1202,3 +1202,30 @@ factual errors with an explicit correction note.
   OpenClaude handoff before any fork or embedded chat work.
 - Next action: commit and push Stage 6, then move to Stage 7 guided setup only
   if the user wants setup/tutorial implementation next.
+
+### 2026-05-10 16:18 EDT: Stage 7 Guided Setup State Implemented
+
+- Stage: Stage 7, Guided Setup And Tutorial
+- Work completed: added redaction-safe setup readiness state in
+  `msc_sdk.setup_state`, added `msc project setup-state --json` and
+  `msc project tutorial-plan --json`, and surfaced setup state plus no-cost
+  tutorial steps in the VS Code dashboard readiness tab.
+- Decisions made: keep credential entry in the existing interactive
+  `msc setup`; make the Stage 7 checkpoint non-interactive and auditable;
+  avoid network credential validation and paid tutorial runs; represent
+  OpenClaude/OpenClaw/Telegram as optional readiness fields rather than
+  required setup.
+- Evidence/tests: focused Stage 7 suite passed (`tests/test_guided_setup.py`,
+  `tests/test_openclaude_integration.py`, `tests/test_msc_sdk_harness.py`,
+  `tests/test_msc_sdk_cli_surface.py`, and `tests/test_cli_contracts.py`: 35
+  passed); `npm test --prefix extensions/vscode-msc` passed;
+  `scripts/validation/contract_tests.sh` passed (`17 passed`);
+  `scripts/validation/cheap_dry_run.sh` passed. No paid full smoke was run per
+  the revised validation policy.
+- Risks discovered: the setup state is intentionally observational and does not
+  verify the OpenRouter key over the network; a future guided wizard must avoid
+  silently overwriting credentials or making OpenClaw/Telegram feel required.
+- User review status: ready for review of the readiness model and no-cost
+  tutorial defaults.
+- Next action: commit and push Stage 7, then continue to optional OpenClaw
+  automation hardening if the user wants Stage 8 next.

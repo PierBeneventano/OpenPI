@@ -23,6 +23,8 @@ class CommandSpec:
 PUBLIC_COMMANDS = [
     CommandSpec("project.inspect", "msc project inspect --json", "ProjectClient.inspect()", "read.project"),
     CommandSpec("project.readiness", "msc project readiness --json", "ProjectClient.readiness()", "read.project"),
+    CommandSpec("project.setup_state", "msc project setup-state --json", "build_setup_state(...)", "read.project"),
+    CommandSpec("project.tutorial_plan", "msc project tutorial-plan --json", "tutorial_plan()", "read.project"),
     CommandSpec("artifacts.inspect", "msc artifacts inspect <path> --json", "import_manifest(path)", "read.artifacts"),
     CommandSpec("artifacts.index", "msc artifacts index <path> --out <dir> --json", "write_manifest(path, out)", "write.index", True),
     CommandSpec("runs.list", "msc runs list --json", "RunClient.list()", "read.runs"),

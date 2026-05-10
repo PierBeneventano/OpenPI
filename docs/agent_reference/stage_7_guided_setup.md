@@ -4,7 +4,11 @@ This document defines the guided setup and tutorial flow that should hide
 Engaging, OpenRouter, OpenClaude, and optional OpenClaw/Telegram nuance behind a
 clear product experience.
 
-Status: drafted on 2026-05-10. Pending user review before implementation.
+Status: first implementation checkpoint completed on 2026-05-10. The initial
+guided setup surface is non-interactive and redaction-safe: `msc project
+setup-state --json`, `msc project tutorial-plan --json`, and VS Code dashboard
+setup visibility. The existing interactive `msc setup` remains the credential
+entry path.
 
 ## Decision
 
@@ -174,7 +178,8 @@ approved Engaging integration-test plan, not the local setup tutorial.
 
 Setup should be available through:
 
-- CLI: `msc setup` and future `msc project readiness --json`
+- CLI: `msc setup`, `msc project readiness --json`,
+  `msc project setup-state --json`, and `msc project tutorial-plan --json`
 - VS Code dashboard readiness panel
 - Stage 7 guided wizard once the extension exists
 
