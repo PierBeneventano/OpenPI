@@ -1115,3 +1115,30 @@ factual errors with an explicit correction note.
   revised the validation policy to omit local full smoke.
 - Next action: commit and push Stage 3, then begin Stage 4 orchestrator
   harness with read-first capabilities, events, and confirmation scaffolding.
+
+### 2026-05-10 15:52 EDT: Stage 4 Orchestrator Harness Implemented
+
+- Stage: Stage 4, Single Orchestrator Harness
+- Work completed: added capability profiles, append-only event storage with
+  redaction, action request/confirmation scaffolding, harness manifest refresh,
+  and JSON CLI commands for `capabilities`, `events`, and `harness`.
+- Decisions made: keep the harness library-plus-CLI, not daemon-first; allow
+  derived manifest refresh through `write.index`; deny mutating capabilities by
+  default; record confirmation requests for permitted write-style actions but
+  defer actual mutation execution until preserved entry-point wrapping is
+  reviewed.
+- Evidence/tests: focused Stage 3+4 suite passed
+  (`tests/test_msc_sdk_artifacts.py`, `tests/test_msc_sdk_manifest.py`,
+  `tests/test_msc_sdk_cli_surface.py`, `tests/test_msc_sdk_harness.py`, and
+  `tests/test_cli_contracts.py`: 33 passed);
+  `scripts/validation/contract_tests.sh` passed (`17 passed`);
+  `scripts/validation/cheap_dry_run.sh` passed. No paid full smoke was run per
+  the revised validation policy.
+- Risks discovered: event/action state is intentionally simple JSONL/JSON for
+  v1 and may later need locking or a daemon if multiple clients write
+  concurrently; confirmed mutation execution remains unavailable until the
+  exact preserved entry-point wrappers are reviewed.
+- User review status: user delegated implementation through Stage 5 with the
+  revised no-cost local validation gate.
+- Next action: commit and push Stage 4, then begin Stage 5 Remote-SSH VS Code
+  read-only dashboard extension.

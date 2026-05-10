@@ -3,7 +3,9 @@
 This document defines the single orchestration harness that should sit between
 the SDK/CLI product surface and the protected research kernel.
 
-Status: drafted on 2026-05-10. Pending user review before implementation.
+Status: first implementation checkpoint completed on 2026-05-10. The initial
+harness is library-plus-CLI, read-first, event-backed, and confirmation-aware;
+mutation execution remains deferred.
 
 ## Decision
 

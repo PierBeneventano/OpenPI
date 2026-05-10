@@ -35,6 +35,12 @@ PUBLIC_COMMANDS = [
     CommandSpec("campaigns.graph", "msc campaigns graph <campaign> --json", "CampaignClient.graph(ref)", "read.campaigns"),
     CommandSpec("campaigns.status", "msc campaigns status <campaign> --json", "CampaignClient.status(ref)", "read.campaigns"),
     CommandSpec("campaigns.artifacts", "msc campaigns artifacts <campaign> --json", "CampaignClient.artifacts(ref)", "read.artifacts"),
+    CommandSpec("capabilities.current", "msc capabilities current --json", "CapabilityClient.current()", "read.capabilities"),
+    CommandSpec("capabilities.explain", "msc capabilities explain <capability> --json", "CapabilityClient.explain(capability)", "read.capabilities"),
+    CommandSpec("events.list", "msc events list --json", "OrchestratorHarness.list_events()", "read.events"),
+    CommandSpec("harness.inspect_project", "msc harness inspect-project --json", "OrchestratorHarness.inspect_project()", "read.project"),
+    CommandSpec("harness.refresh_manifest", "msc harness refresh-manifest <path> --json", "OrchestratorHarness.refresh_manifest(path)", "write.index", True),
+    CommandSpec("harness.request_action", "msc harness request-action <operation> --target <target> --capability <capability> --json", "OrchestratorHarness.request_action(...)", "mutate.*", True),
 ]
 
 

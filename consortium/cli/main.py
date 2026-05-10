@@ -75,6 +75,9 @@ def _register_commands() -> None:
     from consortium.cli.commands.artifacts import artifacts
     from consortium.cli.commands.campaigns import campaigns
     from consortium.cli.commands.selftest import selftest
+    from consortium.cli.commands.capabilities import capabilities
+    from consortium.cli.commands.events import events
+    from consortium.cli.commands.harness import harness
 
     cli.add_command(run)
     cli.add_command(setup)
@@ -93,6 +96,9 @@ def _register_commands() -> None:
     cli.add_command(artifacts)
     cli.add_command(campaigns)
     cli.add_command(selftest)
+    cli.add_command(capabilities)
+    cli.add_command(events)
+    cli.add_command(harness)
 
 
 _register_commands()
