@@ -12,6 +12,7 @@ from .models import (
     BudgetLedger,
     DecisionQueue,
     EvidenceLink,
+    InputSpec,
     InMemoryEventBus,
     RunSpec,
     RuntimeContext,
@@ -81,6 +82,7 @@ class ResearchKernel:
         stages = run.graph.stage_map()
         queue: list[str] = [run.graph.entry_stage_id]
         completed: set[str] = set()
+        available_artifacts: dict[tuple[str, str], ArtifactRecord] = {}
         visit_counts: dict[str, int] = {}
 
         while queue:
@@ -98,6 +100,46 @@ class ResearchKernel:
             stage_id = queue.pop(0)
             stage = stages[stage_id]
             visit_counts[stage_id] = visit_counts.get(stage_id, 0) + 1
+            input_artifacts, missing_inputs = self._resolve_inputs(
+                run=run,
+                stage=stage,
+                available_artifacts=available_artifacts,
+            )
+            if missing_inputs:
+                result = ValidationResult(
+                    validator_id="stage_inputs",
+                    passed=False,
+                    message="required stage inputs are missing",
+                    details={"missing": missing_inputs},
+                )
+                self.event_bus.emit(
+                    "StageInputMissing",
+                    run=run,
+                    payload={
+                        "stage_id": stage.id,
+                        "missing": missing_inputs,
+                    },
+                )
+                self._request_decision(
+                    run=run,
+                    stage_id=stage.id,
+                    reason="stage_inputs_missing",
+                    safe_next_actions=["rerun-upstream", "rewrite-stage", "skip-stage", "abort"],
+                    metadata={"validation": [result.__dict__]},
+                )
+                outcomes.append(
+                    StageOutcome(
+                        stage_id=stage.id,
+                        validation=(result,),
+                        status="human_decision_required",
+                    )
+                )
+                self.event_bus.emit(
+                    "RunFailed",
+                    run=run,
+                    payload={"stage_id": stage.id, "status": "human_decision_required"},
+                )
+                return outcomes
             context = RuntimeContext(
                 run=run,
                 stage=stage,
@@ -107,6 +149,7 @@ class ResearchKernel:
                 decision_queue=self.decision_queue,
                 tool_registry=self.tool_registry,
                 schema_registry=self.schema_registry,
+                input_artifacts=input_artifacts,
             )
             outcome = self.run_stage(context, handlers[stage_id])
             outcomes.append(outcome)
@@ -118,6 +161,8 @@ class ResearchKernel:
                 )
                 return outcomes
             completed.add(stage_id)
+            for artifact_record in outcome.artifacts:
+                available_artifacts[(artifact_record.stage_id, artifact_record.path)] = artifact_record
 
             scheduled, blocked = self._schedule_next(
                 run=run,
@@ -368,6 +413,77 @@ class ResearchKernel:
                 if artifact.schema_id is not None
             )
         self.schema_registry.require(schema_ids)
+
+    def _resolve_inputs(
+        self,
+        *,
+        run: RunSpec,
+        stage: StageSpec,
+        available_artifacts: dict[tuple[str, str], ArtifactRecord],
+    ) -> tuple[tuple[ArtifactRecord, ...], list[dict[str, Any]]]:
+        resolved: list[ArtifactRecord] = []
+        missing: list[dict[str, Any]] = []
+        for input_spec in stage.input_specs:
+            matches = self._match_input(input_spec, available_artifacts)
+            if not matches:
+                if input_spec.required:
+                    missing.append(
+                        {
+                            "path": input_spec.path,
+                            "source_stage_id": input_spec.source_stage_id,
+                            "reason": "not_available",
+                        }
+                    )
+                continue
+            if len(matches) > 1:
+                missing.append(
+                    {
+                        "path": input_spec.path,
+                        "source_stage_id": input_spec.source_stage_id,
+                        "reason": "ambiguous",
+                        "matches": [
+                            {"stage_id": match.stage_id, "path": match.path}
+                            for match in matches
+                        ],
+                    }
+                )
+                continue
+            record = matches[0]
+            if input_spec.schema_id is not None and record.schema_id != input_spec.schema_id:
+                missing.append(
+                    {
+                        "path": input_spec.path,
+                        "source_stage_id": input_spec.source_stage_id,
+                        "reason": "schema_mismatch",
+                        "expected_schema_id": input_spec.schema_id,
+                        "actual_schema_id": record.schema_id,
+                    }
+                )
+                continue
+            resolved.append(record)
+            self.event_bus.emit(
+                "StageInputResolved",
+                run=run,
+                payload={
+                    "stage_id": stage.id,
+                    "input": input_spec.to_dict(),
+                    "artifact": record.to_dict(),
+                },
+            )
+        return tuple(resolved), missing
+
+    @staticmethod
+    def _match_input(
+        input_spec: InputSpec,
+        available_artifacts: dict[tuple[str, str], ArtifactRecord],
+    ) -> list[ArtifactRecord]:
+        if input_spec.source_stage_id is not None:
+            record = available_artifacts.get((input_spec.source_stage_id, input_spec.path))
+            return [record] if record is not None else []
+        return [
+            record for (_stage_id, path), record in available_artifacts.items()
+            if path == input_spec.path
+        ]
 
     def _schema_failure_outcome(
         self,

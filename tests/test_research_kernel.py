@@ -8,6 +8,7 @@ from msc_sdk.kernel import (
     BudgetPolicy,
     EvidenceLink,
     GraphSpec,
+    InputSpec,
     InMemoryEventBus,
     ResearchKernel,
     RouteSpec,
@@ -139,6 +140,84 @@ def test_kernel_runs_happy_path_in_graph_order(tmp_path: Path):
     assert [outcome.stage_id for outcome in outcomes] == ["proposal", "writeup"]
     assert all(outcome.status == "completed" for outcome in outcomes)
     assert outcomes[0].scheduled_stage_ids == ("writeup",)
+
+
+def test_kernel_resolves_declared_input_artifacts_for_downstream_stage(tmp_path: Path):
+    plan = StageSpec(
+        id="plan",
+        title="Plan",
+        kind="agent",
+        purpose="Create plan.",
+        outputs=(artifact("artifacts/plan.md"),),
+        routes=(RouteSpec(target="synthesis"),),
+    )
+    synthesis = StageSpec(
+        id="synthesis",
+        title="Synthesis",
+        kind="agent",
+        purpose="Use the plan.",
+        inputs=(InputSpec(path="artifacts/plan.md", source_stage_id="plan"),),
+        outputs=(artifact("artifacts/synthesis.md"),),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    def write_plan(context):
+        context.write_artifact(plan.outputs[0], "plan text")
+
+    def write_synthesis(context):
+        input_record = context.input_artifact("artifacts/plan.md", source_stage_id="plan")
+        context.write_artifact(synthesis.outputs[0], f"using {input_record.path}")
+
+    outcomes = kernel.run(
+        _run_spec(tmp_path, plan, synthesis),
+        {"plan": write_plan, "synthesis": write_synthesis},
+    )
+
+    assert [outcome.stage_id for outcome in outcomes] == ["plan", "synthesis"]
+    assert all(outcome.status == "completed" for outcome in outcomes)
+    assert any(event.type == "StageInputResolved" for event in events.events)
+
+
+def test_kernel_blocks_stage_when_declared_inputs_are_missing(tmp_path: Path):
+    synthesis = StageSpec(
+        id="synthesis",
+        title="Synthesis",
+        kind="agent",
+        purpose="Use upstream plan.",
+        inputs=(InputSpec(path="artifacts/plan.md", source_stage_id="plan"),),
+        outputs=(artifact("artifacts/synthesis.md"),),
+    )
+    plan = StageSpec(
+        id="plan",
+        title="Plan",
+        kind="agent",
+        purpose="Create plan.",
+        outputs=(artifact("artifacts/plan.md"),),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+    called = False
+
+    def handler(context):
+        nonlocal called
+        called = True
+
+    outcomes = kernel.run(_run_spec(tmp_path, synthesis, plan), {"synthesis": handler, "plan": handler})
+    model = project_run(events.events)
+
+    assert not called
+    assert outcomes[0].status == "human_decision_required"
+    assert outcomes[0].validation[0].validator_id == "stage_inputs"
+    assert outcomes[0].validation[0].details["missing"][0]["reason"] == "not_available"
+    assert any(event.type == "StageInputMissing" for event in events.events)
+    assert model.stages["synthesis"].failure_reason == "stage_inputs_missing"
+    assert model.stages["synthesis"].safe_next_actions == [
+        "rerun-upstream",
+        "rewrite-stage",
+        "skip-stage",
+        "abort",
+    ]
 
 
 def test_kernel_schedules_branch_fanout_and_join_barrier(tmp_path: Path):

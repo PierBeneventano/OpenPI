@@ -15,6 +15,8 @@ EvidenceRelationship = Literal["supports", "refutes", "qualifies", "derives_from
 StageKind = Literal["agent", "tool", "validator", "router", "approval", "control"]
 EventType = Literal[
     "RunStarted",
+    "StageInputResolved",
+    "StageInputMissing",
     "StageStarted",
     "RouteSelected",
     "JoinWaiting",
@@ -321,6 +323,23 @@ class ArtifactSpec:
 
 
 @dataclass(frozen=True)
+class InputSpec:
+    path: str
+    source_stage_id: str | None = None
+    required: bool = True
+    schema_id: str | None = None
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        rel = Path(self.path)
+        if rel.is_absolute() or ".." in rel.parts:
+            raise ValueError(f"Input path must be safe and relative: {self.path}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class RouteSpec:
     target: str
     condition: str = "always"
@@ -334,7 +353,7 @@ class StageSpec:
     title: str
     kind: StageKind
     purpose: str
-    inputs: tuple[str, ...] = ()
+    inputs: tuple[InputSpec | str, ...] = ()
     outputs: tuple[ArtifactSpec, ...] = ()
     validator_ids: tuple[str, ...] = ()
     tool_ids: tuple[str, ...] = ()
@@ -347,6 +366,13 @@ class StageSpec:
     @property
     def required_outputs(self) -> tuple[ArtifactSpec, ...]:
         return tuple(output for output in self.outputs if output.required)
+
+    @property
+    def input_specs(self) -> tuple[InputSpec, ...]:
+        return tuple(
+            item if isinstance(item, InputSpec) else InputSpec(path=str(item))
+            for item in self.inputs
+        )
 
 
 @dataclass(frozen=True)
@@ -363,6 +389,11 @@ class GraphSpec:
         if self.entry_stage_id not in stages:
             raise ValueError(f"Entry stage is not in graph: {self.entry_stage_id}")
         for stage in self.stages:
+            for input_spec in stage.input_specs:
+                if input_spec.source_stage_id is not None and input_spec.source_stage_id not in stages:
+                    raise ValueError(
+                        f"Stage {stage.id} requires input from unknown stage {input_spec.source_stage_id}"
+                    )
             for route in stage.routes:
                 if route.target not in stages:
                     raise ValueError(f"Stage {stage.id} routes to unknown stage {route.target}")
@@ -533,6 +564,7 @@ class RuntimeContext:
     decision_queue: DecisionQueue
     tool_registry: ToolRegistry
     schema_registry: SchemaRegistry
+    input_artifacts: tuple[ArtifactRecord, ...] = ()
 
     @property
     def stage_workspace(self) -> Path:
@@ -544,6 +576,17 @@ class RuntimeContext:
         if target != workspace and workspace not in target.parents:
             raise ValueError(f"Artifact escapes stage workspace: {artifact.path}")
         return target
+
+    def input_artifact(self, path: str, *, source_stage_id: str | None = None) -> ArtifactRecord:
+        matches = [
+            artifact for artifact in self.input_artifacts
+            if artifact.path == path and (source_stage_id is None or artifact.stage_id == source_stage_id)
+        ]
+        if not matches:
+            raise KeyError(f"Input artifact not available: {path}")
+        if len(matches) > 1:
+            raise ValueError(f"Input artifact is ambiguous: {path}")
+        return matches[0]
 
     def write_artifact(self, artifact: ArtifactSpec, content: str | bytes | dict[str, Any] | list[Any]) -> ArtifactRecord:
         target = self.artifact_path(artifact)

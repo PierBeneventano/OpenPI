@@ -221,6 +221,7 @@ budget policy = enforced by RuntimeContext charges and kernel ledger
 human decisions = typed queue records with approve/reject events
 tool policy = enforced by RuntimeContext tool invocation
 artifact truth = declared schemas + explicit claim/evidence links
+stage preconditions = declared inputs resolved before handler execution
 ```
 
 The read-model projector lives beside the kernel so VS Code, CLI, OpenClaude,
@@ -252,6 +253,12 @@ written declared files during indexing. Failed schema checks emit
 carry `claim_ids` and `evidence_links`, so downstream synthesis and product
 surfaces can reason over evidence structure instead of parsing prose.
 
+Stage inputs are `InputSpec` records, not implicit filesystem guesses. Before a
+handler runs, the kernel resolves each required input against artifacts produced
+by completed upstream stages. Missing, ambiguous, or schema-mismatched inputs
+emit `StageInputMissing` and stop for a human decision; resolved inputs are
+available through `RuntimeContext.input_artifacts`.
+
 ## Rebuild Order
 
 1. Expand `msc_sdk.kernel` until it can express the ideal product semantics.
@@ -270,10 +277,9 @@ surfaces can reason over evidence structure instead of parsing prose.
 The major architectural risks still to remove are:
 
 1. Model policy is declared but not yet enforced by the kernel.
-2. Artifacts do not yet enforce explicit upstream input dependencies.
-3. Approved decisions do not yet resume a paused run from a durable checkpoint.
-4. Agent implementations are not yet bound to `StageSpec` as swappable adapters.
-5. The product shell still needs to consume kernel read models directly rather
+2. Approved decisions do not yet resume a paused run from a durable checkpoint.
+3. Agent implementations are not yet bound to `StageSpec` as swappable adapters.
+4. The product shell still needs to consume kernel read models directly rather
    than historical campaign-store projections.
 
 ## Design Standard
