@@ -224,6 +224,7 @@ model policy = enforced by RuntimeContext model invocation
 tool policy = enforced by RuntimeContext tool invocation
 artifact truth = declared schemas + explicit claim/evidence links
 stage preconditions = declared inputs resolved before handler execution
+stage implementation = StageSpec.adapter_id resolved by adapter registry
 ```
 
 The read-model projector lives beside the kernel so VS Code, CLI, OpenClaude,
@@ -273,23 +274,26 @@ by completed upstream stages. Missing, ambiguous, or schema-mismatched inputs
 emit `StageInputMissing` and stop for a human decision; resolved inputs are
 available through `RuntimeContext.input_artifacts`.
 
+Stage implementations are adapter bindings. `StageSpec.adapter_id` names the
+runtime adapter, and `StageAdapterRegistry` supplies the handler. Tests may still
+pass handlers directly, but product code should bind agents, tools, scripts, or
+future runtimes through adapter ids instead of hard-coded graph modules.
+
 ## Rebuild Order
 
 1. Expand `msc_sdk.kernel` until it can express the ideal product semantics.
 2. Define the ideal campaign graph in contracts, not in `graph.py`.
 3. Write pure stage handlers for planning, literature, hypothesis generation,
    experiment design, execution, synthesis, writeup, and review.
-4. Bind specialist agents as implementations of stage handlers.
-5. Bind OpenClaude and VS Code only to kernel operations/read models.
-6. Retire legacy compatibility paths after the new kernel can produce the full
+4. Bind OpenClaude and VS Code only to kernel operations/read models.
+5. Retire legacy compatibility paths after the new kernel can produce the full
    research artifact set.
 
 ## Remaining Fundamental Issues
 
 The major architectural risks still to remove are:
 
-1. Agent implementations are not yet bound to `StageSpec` as swappable adapters.
-2. The product shell still needs to consume kernel read models directly rather
+1. The product shell still needs to consume kernel read models directly rather
    than historical campaign-store projections.
 
 ## Design Standard

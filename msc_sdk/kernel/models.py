@@ -87,6 +87,7 @@ class SchemaValidationError(RuntimeError):
 
 ToolHandler = Callable[..., Any]
 ModelHandler = Callable[..., Any]
+StageAdapterHandler = Callable[["RuntimeContext"], dict[str, Any] | None]
 
 
 @dataclass(frozen=True)
@@ -186,6 +187,52 @@ class ModelRegistry:
             spec, _handler = self._models[model_id]
         except KeyError as exc:
             raise KeyError(f"Missing model: {model_id}") from exc
+        return spec
+
+
+@dataclass(frozen=True)
+class StageAdapterSpec:
+    id: str
+    description: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class StageAdapterRegistry:
+    def __init__(self) -> None:
+        self._adapters: dict[str, tuple[StageAdapterSpec, StageAdapterHandler]] = {}
+
+    def register(
+        self,
+        adapter_id: str,
+        handler: StageAdapterHandler,
+        *,
+        description: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if adapter_id in self._adapters:
+            raise ValueError(f"Stage adapter already registered: {adapter_id}")
+        self._adapters[adapter_id] = (
+            StageAdapterSpec(id=adapter_id, description=description, metadata=metadata or {}),
+            handler,
+        )
+
+    def require(self, adapter_ids: Iterable[str]) -> None:
+        missing = [adapter_id for adapter_id in adapter_ids if adapter_id not in self._adapters]
+        if missing:
+            raise KeyError(f"Missing stage adapters: {', '.join(missing)}")
+
+    def handler(self, adapter_id: str) -> StageAdapterHandler:
+        try:
+            _spec, handler = self._adapters[adapter_id]
+        except KeyError as exc:
+            raise KeyError(f"Missing stage adapter: {adapter_id}") from exc
+        return handler
+
+    def spec(self, adapter_id: str) -> StageAdapterSpec:
+        try:
+            spec, _handler = self._adapters[adapter_id]
+        except KeyError as exc:
+            raise KeyError(f"Missing stage adapter: {adapter_id}") from exc
         return spec
 
 
@@ -480,6 +527,7 @@ class StageSpec:
     validator_ids: tuple[str, ...] = ()
     tool_ids: tuple[str, ...] = ()
     model_policy: ModelPolicy = field(default_factory=ModelPolicy)
+    adapter_id: str | None = None
     budget: BudgetPolicy = field(default_factory=BudgetPolicy)
     failure: FailurePolicy = field(default_factory=FailurePolicy)
     routes: tuple[RouteSpec, ...] = ()

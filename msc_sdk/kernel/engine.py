@@ -22,6 +22,7 @@ from .models import (
     RuntimeContext,
     SchemaRegistry,
     SchemaValidationError,
+    StageAdapterRegistry,
     StageOutcome,
     StageSpec,
     ToolPolicyError,
@@ -55,6 +56,7 @@ class ResearchKernel:
         schema_registry: SchemaRegistry | None = None,
         model_registry: ModelRegistry | None = None,
         checkpoint_store: CheckpointStore | None = None,
+        adapter_registry: StageAdapterRegistry | None = None,
         max_stage_executions: int = 100,
     ) -> None:
         self.validators = validators or ValidatorRegistry()
@@ -65,19 +67,21 @@ class ResearchKernel:
         self.schema_registry = schema_registry or SchemaRegistry()
         self.model_registry = model_registry or ModelRegistry()
         self.checkpoint_store = checkpoint_store or CheckpointStore()
+        self.adapter_registry = adapter_registry or StageAdapterRegistry()
         self.max_stage_executions = max_stage_executions
         self._runs: dict[str, RunSpec] = {}
 
     def run(
         self,
         run: RunSpec,
-        handlers: dict[str, StageHandler],
+        handlers: dict[str, StageHandler] | None = None,
         *,
         checkpoint: RunCheckpoint | None = None,
     ) -> list[StageOutcome]:
         run.graph.validate()
         self._runs[run.id] = run
-        self._validate_handlers(run, handlers)
+        self._validate_adapters(run)
+        resolved_handlers = self._resolve_handlers(run, handlers or {})
         self._validate_validators(run)
         self._validate_tools(run)
         self._validate_schemas(run)
@@ -192,7 +196,7 @@ class ResearchKernel:
                 model_registry=self.model_registry,
                 input_artifacts=input_artifacts,
             )
-            outcome = self.run_stage(context, handlers[stage_id])
+            outcome = self.run_stage(context, resolved_handlers[stage_id])
             outcomes.append(outcome)
             if outcome.status != "completed":
                 checkpoint_queue = [stage_id, *queue]
@@ -478,10 +482,30 @@ class ResearchKernel:
             results.append(self.validators.run(validator_id, context, context.stage, artifacts))
         return results
 
-    def _validate_handlers(self, run: RunSpec, handlers: dict[str, StageHandler]) -> None:
-        missing = [stage.id for stage in run.graph.stages if stage.id not in handlers]
+    def _validate_adapters(self, run: RunSpec) -> None:
+        adapter_ids = [
+            stage.adapter_id for stage in run.graph.stages
+            if stage.adapter_id is not None
+        ]
+        self.adapter_registry.require(adapter_ids)
+
+    def _resolve_handlers(
+        self,
+        run: RunSpec,
+        handlers: dict[str, StageHandler],
+    ) -> dict[str, StageHandler]:
+        resolved = dict(handlers)
+        missing: list[str] = []
+        for stage in run.graph.stages:
+            if stage.id in resolved:
+                continue
+            if stage.adapter_id is not None:
+                resolved[stage.id] = self.adapter_registry.handler(stage.adapter_id)
+                continue
+            missing.append(stage.id)
         if missing:
             raise KeyError(f"Missing stage handlers: {', '.join(missing)}")
+        return resolved
 
     def _validate_validators(self, run: RunSpec) -> None:
         validator_ids: list[str] = []
@@ -756,7 +780,7 @@ class ResearchKernel:
             for decision in self.decision_queue.decisions.values()
         )
 
-    def resume(self, decision_id: str, handlers: dict[str, StageHandler]) -> list[StageOutcome]:
+    def resume(self, decision_id: str, handlers: dict[str, StageHandler] | None = None) -> list[StageOutcome]:
         decision = self.decision_queue.decisions.get(decision_id)
         if decision is None:
             raise KeyError(f"Decision not found: {decision_id}")

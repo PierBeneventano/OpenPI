@@ -16,6 +16,7 @@ from msc_sdk.kernel import (
     RouteSpec,
     RunSpec,
     SchemaRegistry,
+    StageAdapterRegistry,
     StageSpec,
     ToolRegistry,
     ValidationResult,
@@ -93,6 +94,42 @@ def test_kernel_turns_missing_artifact_into_human_decision(tmp_path: Path):
     )
     assert "HumanDecisionRequired" in [event.type for event in events.events]
     assert events.events[-1].type == "RunFailed"
+
+
+def test_kernel_can_bind_stage_handlers_from_adapter_registry(tmp_path: Path):
+    stage = StageSpec(
+        id="literature",
+        title="Literature Review",
+        kind="agent",
+        purpose="Ground the question in prior work.",
+        adapter_id="literature_adapter",
+        outputs=(artifact("artifacts/literature_matrix.md"),),
+    )
+    adapters = StageAdapterRegistry()
+
+    def adapter(context):
+        context.write_artifact(stage.outputs[0], "# Matrix")
+
+    adapters.register("literature_adapter", adapter)
+    kernel = ResearchKernel(adapter_registry=adapters)
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage))
+
+    assert outcomes[0].status == "completed"
+
+
+def test_kernel_requires_declared_stage_adapters_to_be_registered(tmp_path: Path):
+    stage = StageSpec(
+        id="literature",
+        title="Literature Review",
+        kind="agent",
+        purpose="Ground the question in prior work.",
+        adapter_id="literature_adapter",
+        outputs=(artifact("artifacts/literature_matrix.md"),),
+    )
+
+    with pytest.raises(KeyError, match="Missing stage adapters: literature_adapter"):
+        ResearchKernel().run(_run_spec(tmp_path, stage))
 
 
 def test_kernel_requires_declared_validators_before_running(tmp_path: Path):
