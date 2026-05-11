@@ -231,6 +231,11 @@ The read-model projector lives beside the kernel so VS Code, CLI, OpenClaude,
 and tests can all consume the same current-state view instead of inferring state
 from logs, status files, subprocesses, or directory scans.
 
+The product-shell SDK can project `CampaignReadModel` directly from a
+`KernelRunReadModel` via `campaign_model_from_kernel_run(...)`. This keeps UI,
+CLI, and steering surfaces pointed at kernel events rather than campaign-store
+or filesystem interpretations.
+
 The scheduler supports deterministic branch fan-out, join barriers, route
 conditions, and bounded loops. When a loop limit is reached, the kernel emits a
 human decision event instead of continuing autonomously.
@@ -285,16 +290,15 @@ future runtimes through adapter ids instead of hard-coded graph modules.
 2. Define the ideal campaign graph in contracts, not in `graph.py`.
 3. Write pure stage handlers for planning, literature, hypothesis generation,
    experiment design, execution, synthesis, writeup, and review.
-4. Bind OpenClaude and VS Code only to kernel operations/read models.
-5. Retire legacy compatibility paths after the new kernel can produce the full
+4. Retire legacy compatibility paths after the new kernel can produce the full
    research artifact set.
 
 ## Remaining Fundamental Issues
 
-The major architectural risks still to remove are:
-
-1. The product shell still needs to consume kernel read models directly rather
-   than historical campaign-store projections.
+The major architectural risks still to remove are now above the kernel layer:
+porting the historical stage roster into ideal `GraphSpec` contracts, writing
+production adapters for each research stage, and retiring compatibility paths
+once the new kernel produces the full artifact set.
 
 ## Design Standard
 

@@ -26,6 +26,7 @@ from msc_sdk.kernel import (
 from msc_sdk.kernel.engine import artifact, non_empty_artifact
 from msc_sdk.kernel.models import JsonlEventBus
 from msc_sdk.kernel.read_models import read_jsonl_events
+from msc_sdk.read_models import campaign_model_from_kernel_run
 
 
 def _run_spec(tmp_path: Path, *stages: StageSpec) -> RunSpec:
@@ -749,6 +750,54 @@ def test_kernel_events_project_to_canonical_run_read_model(tmp_path: Path):
         "artifacts/review_report.md",
     ]
     assert model.to_dict()["stages"][0]["deliverables"][0]["role"] == "deliverable"
+
+
+def test_product_campaign_read_model_can_project_from_kernel_events(tmp_path: Path):
+    stage = StageSpec(
+        id="review",
+        title="Review",
+        kind="agent",
+        purpose="Review the paper.",
+        outputs=(
+            artifact(
+                "artifacts/review_report.md",
+                schema_id="review_v1",
+                claim_ids=("claim:ready",),
+                evidence_links=(
+                    EvidenceLink(
+                        claim_id="claim:ready",
+                        evidence_path="artifacts/final_paper.md",
+                    ),
+                ),
+            ),
+        ),
+    )
+    events = InMemoryEventBus()
+    schemas = SchemaRegistry()
+    schemas.register(
+        "review_v1",
+        lambda content, artifact: ValidationResult(
+            validator_id="schema:review_v1",
+            passed=bool(content),
+            message="review accepted",
+        ),
+    )
+    kernel = ResearchKernel(event_bus=events, schema_registry=schemas)
+
+    def handler(context):
+        context.write_artifact(stage.outputs[0], "ready")
+
+    kernel.run(_run_spec(tmp_path, stage), {"review": handler})
+    campaign_model = campaign_model_from_kernel_run(project_run(events.events))
+    review = campaign_model.stages[0]
+    report = review.required_artifacts[0]
+
+    assert campaign_model.status == "completed"
+    assert campaign_model.metadata["source"] == "kernel_events"
+    assert review.status == "completed"
+    assert report.source_role == "deliverable"
+    assert report.metadata["schema_id"] == "review_v1"
+    assert report.metadata["claim_ids"] == ["claim:ready"]
 
 
 def test_kernel_events_project_human_decision_required(tmp_path: Path):

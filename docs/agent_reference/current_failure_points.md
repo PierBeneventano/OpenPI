@@ -409,3 +409,24 @@ RunSpec -> GraphSpec -> StageSpec -> RuntimeContext -> ArtifactRecord
 New implementation work should target `msc_sdk/kernel/` first and treat the
 historical runner, graph, filesystem conventions, VS Code state, and OpenClaude
 harness as adapters rather than sources of product truth.
+
+## Kernel Rebuild Status
+
+The kernel now owns the fundamental semantics that used to be fragmented across
+the prototype:
+
+```text
+completion = required artifacts + validators + events
+runtime state = event projection
+pause/resume = typed decisions + checkpoints
+budget/model/tool policy = RuntimeContext-enforced
+artifact truth = schema validation + claim/evidence links
+stage preconditions = InputSpec resolution
+stage implementation = adapter registry binding
+product state = CampaignReadModel projection from KernelRunReadModel
+```
+
+The remaining work is no longer to patch these primitives into the old graph.
+It is to express the full research workflow as `GraphSpec`/`StageSpec`
+contracts, bind production adapters for each stage, and retire legacy views once
+they are served by kernel events.

@@ -23,6 +23,7 @@ from .read_models import (
     LogReadModel,
     RunReadModel,
     StageReadModel,
+    campaign_model_from_kernel_run,
 )
 from .runs import RunClient
 from .setup_state import SetupState
@@ -50,6 +51,7 @@ __all__ = [
     "StageContract",
     "StageReadModel",
     "ValidationClient",
+    "campaign_model_from_kernel_run",
     "historical_stage_contracts",
     "import_manifest",
     "inspect_campaign",

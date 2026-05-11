@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from .kernel.read_models import KernelRunReadModel
+
 
 @dataclass(frozen=True)
 class ArtifactReadModel:
@@ -128,3 +130,72 @@ class CampaignReadModel:
         data["budget"] = self.budget.to_dict()
         data["stages"] = [stage.to_dict() for stage in self.stages]
         return data
+
+
+def campaign_model_from_kernel_run(kernel_run: KernelRunReadModel) -> CampaignReadModel:
+    """Project kernel event state into the stable product-shell campaign view."""
+
+    stages: list[StageReadModel] = []
+    for kernel_stage in kernel_run.stage_list():
+        required_artifacts: list[ArtifactReadModel] = []
+        optional_artifacts: list[ArtifactReadModel] = []
+        for artifact in kernel_stage.artifacts:
+            product_artifact = ArtifactReadModel(
+                id=artifact.id,
+                path=artifact.path,
+                kind=artifact.kind,
+                exists=artifact.size_bytes > 0,
+                size_bytes=artifact.size_bytes,
+                source_role=artifact.role,
+                required=artifact.required,
+                metadata={
+                    "source": "kernel_events",
+                    "run_id": kernel_run.run_id,
+                    "stage_id": artifact.stage_id,
+                    "absolute_path": artifact.absolute_path,
+                    "checksum": artifact.checksum,
+                    "schema_id": artifact.schema_id,
+                    "claim_ids": list(artifact.claim_ids),
+                    "evidence_links": list(artifact.evidence_links),
+                },
+            )
+            if artifact.required:
+                required_artifacts.append(product_artifact)
+            else:
+                optional_artifacts.append(product_artifact)
+        stages.append(
+            StageReadModel(
+                stage_id=kernel_stage.stage_id,
+                status=kernel_stage.status,
+                started_at=kernel_stage.started_at,
+                completed_at=kernel_stage.completed_at,
+                fail_reason=kernel_stage.failure_reason,
+                required_artifacts=required_artifacts,
+                optional_artifacts=optional_artifacts,
+                budget=BudgetReadModel(total_usd=kernel_stage.budget_spent_usd),
+                metadata={
+                    "source": "kernel_events",
+                    "validation": list(kernel_stage.validation),
+                    "safe_next_actions": list(kernel_stage.safe_next_actions),
+                    "pending_decision_id": kernel_stage.pending_decision_id,
+                    "decision_status": kernel_stage.decision_status,
+                },
+            )
+        )
+
+    return CampaignReadModel(
+        campaign_id=kernel_run.campaign_id,
+        path=kernel_run.workspace,
+        workspace_root=kernel_run.workspace,
+        status=kernel_run.status,
+        budget=BudgetReadModel(total_usd=kernel_run.budget_spent_usd),
+        stages=stages,
+        metadata={
+            "source": "kernel_events",
+            "run_id": kernel_run.run_id,
+            "objective": kernel_run.objective,
+            "graph_id": kernel_run.graph_id,
+            "completed_stage_ids": list(kernel_run.completed_stage_ids),
+        },
+        provenance={"source": "kernel_events"},
+    )
