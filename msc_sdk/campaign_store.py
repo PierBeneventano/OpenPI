@@ -545,6 +545,18 @@ class CampaignStore:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         campaign_id = self.resolve_ref(campaign_ref)
+        requested_status = status
+        payload = dict(payload or {})
+        completion = None
+        approval = None
+        if requested_status == "completed":
+            completion = self.evaluate_stage_completion(campaign_id, node_id, run_id=payload.get("run_id"))
+            payload["completion"] = completion
+            if not completion["complete"]:
+                status = "human_decision_required"
+                payload["requested_status"] = requested_status
+        elif requested_status == "failed":
+            payload["human_decision_required"] = True
         with self.connect() as conn:
             snapshot = conn.execute(
                 "SELECT * FROM graph_snapshots WHERE campaign_id=? ORDER BY version DESC LIMIT 1",
@@ -571,26 +583,115 @@ class CampaignStore:
                 campaign_id=campaign_id,
                 event_type="GraphNodeStatusChanged",
                 actor=actor,
-                payload={"node_id": node_id, "status": status, **(payload or {})},
+                payload={"node_id": node_id, "status": status, **payload},
             )
-            if node_id == "validation_gate" and status == "completed":
+            if completion is not None:
+                self._append_event(
+                    conn,
+                    campaign_id=campaign_id,
+                    event_type="StageCompletionEvaluated",
+                    actor=actor,
+                    payload={"node_id": node_id, **completion},
+                )
+            if completion is not None and completion["complete"]:
                 self._append_event(
                     conn,
                     campaign_id=campaign_id,
                     event_type="ValidationPassed",
                     actor=actor,
-                    payload={"node_id": node_id, **(payload or {})},
+                    payload={"node_id": node_id, "run_id": payload.get("run_id"), "validators": completion["validators"]},
                 )
-            elif node_id == "validation_gate" and status == "failed":
+            elif completion is not None and not completion["complete"]:
                 self._append_event(
                     conn,
                     campaign_id=campaign_id,
                     event_type="ValidationFailed",
                     actor=actor,
-                    payload={"node_id": node_id, **(payload or {})},
+                    payload={"node_id": node_id, "run_id": payload.get("run_id"), "completion": completion},
                 )
+                approval = self._create_approval(
+                    conn,
+                    campaign_id=campaign_id,
+                    target_type="stage_completion",
+                    target_id=node_id,
+                    actor=actor,
+                    metadata={
+                        "run_id": payload.get("run_id"),
+                        "requested_status": requested_status,
+                        "missing_required_artifacts": completion["missing_required_artifacts"],
+                        "safe_next_actions": ["request-repair", "rerun-stage", "rewrite-stage", "approve"],
+                    },
+                )
+                conn.execute("UPDATE campaigns SET status=?, updated_at=? WHERE id=?", ("human_decision_required", now_iso(), campaign_id))
+            elif requested_status == "failed":
+                approval = self._create_approval(
+                    conn,
+                    campaign_id=campaign_id,
+                    target_type="stage_failure",
+                    target_id=node_id,
+                    actor=actor,
+                    metadata={
+                        "run_id": payload.get("run_id"),
+                        "error": payload.get("error"),
+                        "safe_next_actions": ["request-repair", "rerun-stage", "rewrite-stage", "abort"],
+                    },
+                )
+                conn.execute("UPDATE campaigns SET status=?, updated_at=? WHERE id=?", ("human_decision_required", now_iso(), campaign_id))
         self.write_snapshot(campaign_id)
-        return {"ok": True, "campaign_id": campaign_id, "node_id": node_id, "status": status, "event": event}
+        return {"ok": True, "campaign_id": campaign_id, "node_id": node_id, "status": status, "event": event, "completion": completion, "approval": approval}
+
+    def evaluate_stage_completion(self, campaign_ref: str | Path, node_id: str, *, run_id: str | None = None) -> dict[str, Any]:
+        """Evaluate the product completion rule for a graph node.
+
+        Completion is centralized here so the runner, UI, CLI, and OpenClaude
+        controls all read the same semantics: required artifacts must exist,
+        executable validators must pass, and the status transition must be
+        represented by an event. Most historical validators are currently
+        declared-but-unbound, so they are surfaced explicitly instead of being
+        silently treated as runtime behavior.
+        """
+
+        campaign_id = self.resolve_ref(campaign_ref)
+        contract = contracts_by_id().get(node_id)
+        required_paths = [artifact.path for artifact in contract.required_artifacts] if contract else []
+        declared_validators = list(contract.validators) if contract else []
+        artifacts = self._artifact_rows_for_completion(campaign_id, node_id, run_id=run_id)
+        present_paths = {row["path"] for row in artifacts if row["exists"]}
+        missing = [path for path in required_paths if path not in present_paths]
+        artifact_check = {
+            "id": "required_artifacts_exist",
+            "status": "passed" if not missing else "failed",
+            "missing": missing,
+        }
+        validator_results = [artifact_check]
+        validator_results.extend(
+            {"id": validator, "status": "declared_unbound"}
+            for validator in declared_validators
+        )
+        return {
+            "run_id": run_id,
+            "complete": not missing,
+            "required_artifacts_ok": not missing,
+            "missing_required_artifacts": missing,
+            "validators": validator_results,
+            "declared_validators": declared_validators,
+            "validator_binding_complete": not declared_validators,
+        }
+
+    def _artifact_rows_for_completion(self, campaign_id: str, node_id: str, *, run_id: str | None) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM artifacts WHERE campaign_id=? AND stage_id=?",
+                (campaign_id, node_id),
+            ).fetchall()
+        resolved: list[dict[str, Any]] = []
+        for row in rows:
+            item = artifact_row_to_dict(dict(row), self.root)
+            item_run_id = item["metadata"].get("run_id")
+            if run_id and item_run_id not in {run_id, None}:
+                continue
+            resolved.append(item)
+        return resolved
 
     def record_run_started(
         self,
@@ -701,11 +802,12 @@ class CampaignStore:
         full = self.root / workspace / artifact_path
         if not full.exists() or not full.is_file():
             raise FileNotFoundError(f"Artifact does not exist: {full}")
-        artifact_id = f"{campaign_id}:{stage_id}:{artifact_path}"
+        artifact_id = f"{campaign_id}:{run_id}:{stage_id}:{artifact_path}" if run_id else f"{campaign_id}:{stage_id}:{artifact_path}"
         checksum = file_checksum(full)
         merged_metadata = {
             "workspace": workspace,
             "source_role": "contract_runtime",
+            "audience": "deliverable" if required else "evidence",
             "run_id": run_id,
             **(metadata or {}),
         }
@@ -864,15 +966,47 @@ class CampaignStore:
                     "SELECT * FROM artifacts WHERE campaign_id=? AND stage_id=? ORDER BY required DESC, path",
                     (campaign_id, stage_id),
                 ).fetchall()
+        collapsed = self._collapse_artifact_rows([dict(row) for row in rows])
         stages: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            item = artifact_row_to_dict(dict(row), self.root)
+        for row in collapsed:
+            item = artifact_row_to_dict(row, self.root)
             bucket = stages.setdefault(item["stage_id"] or "", {"stage_id": item["stage_id"] or "", "required_artifacts": [], "optional_artifacts": []})
             if item["required"]:
                 bucket["required_artifacts"].append(item)
             else:
                 bucket["optional_artifacts"].append(item)
         return {"campaign": campaign_id, "stages": list(stages.values())}
+
+    def _collapse_artifact_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Prefer the most useful product artifact per stage/path.
+
+        Declarations, legacy runtime files, and run-scoped contract artifacts
+        can all describe the same logical output. Product read models should
+        default to the best concrete artifact while events retain the full
+        history.
+        """
+
+        def rank(row: dict[str, Any]) -> tuple[int, str]:
+            metadata = json.loads(row.get("metadata_json") or "{}")
+            status = str(row.get("status") or "")
+            source_role = str(metadata.get("source_role") or "")
+            has_run = bool(metadata.get("run_id"))
+            concrete = status == "existing" or row.get("checksum") is not None
+            role_rank = {
+                "contract_runtime": 4,
+                "runtime": 3,
+                "runtime_legacy": 2,
+                "stage_summary": 1,
+            }.get(source_role, 0)
+            return (10 if concrete else 0) + role_rank + (1 if has_run else 0), str(row.get("id") or "")
+
+        by_key: dict[tuple[str, str, int], dict[str, Any]] = {}
+        for row in rows:
+            key = (str(row.get("stage_id") or ""), str(row.get("path") or ""), int(row.get("required") or 0))
+            current = by_key.get(key)
+            if current is None or rank(row) > rank(current):
+                by_key[key] = row
+        return sorted(by_key.values(), key=lambda row: (str(row.get("stage_id") or ""), -int(row.get("required") or 0), str(row.get("path") or "")))
 
     def events(self, ref: str | Path, *, limit: int | None = None) -> dict[str, Any]:
         campaign_id = self.resolve_ref(ref)
@@ -1082,6 +1216,7 @@ class CampaignStore:
         metadata = {
             "workspace": workspace,
             "source_role": source_role,
+            "audience": artifact_audience(source_role=source_role, required=required),
         }
         if contract_path:
             metadata["contract_path"] = contract_path
@@ -1200,7 +1335,7 @@ class CampaignStore:
                             node["id"],
                             None,
                             None,
-                            json_dumps({"graph_version": graph["version"]}),
+                            json_dumps({"graph_version": graph["version"], "audience": "deliverable" if required else "evidence"}),
                         ),
                     )
                     self._append_event(
@@ -1447,6 +1582,18 @@ def title_for_stage(stage_id: str) -> str:
     return stage_id.replace("_agent", "").replace("_", " ").title()
 
 
+def artifact_audience(*, source_role: str, required: bool) -> str:
+    if source_role in {"run_metadata"}:
+        return "system_state"
+    if source_role in {"stage_summary"}:
+        return "diagnostic"
+    if source_role in {"prompt", "system_prompt"}:
+        return "prompt"
+    if source_role in {"log"}:
+        return "log"
+    return "deliverable" if required else "evidence"
+
+
 def artifact_row_to_dict(row: dict[str, Any], root: Path) -> dict[str, Any]:
     metadata = json.loads(row.get("metadata_json") or "{}")
     workspace = metadata.get("workspace") or str(Path("results") / row["campaign_id"] / (row.get("stage_id") or ""))
@@ -1460,6 +1607,7 @@ def artifact_row_to_dict(row: dict[str, Any], root: Path) -> dict[str, Any]:
         "status": "existing" if full.exists() else row["status"],
         "size_bytes": full.stat().st_size if full.exists() else row["size_bytes"],
         "source_role": metadata.get("source_role", "raw"),
+        "audience": metadata.get("audience") or artifact_audience(source_role=metadata.get("source_role", "raw"), required=bool(row["required"])),
         "required": bool(row["required"]),
         "stage_id": row.get("stage_id"),
         "workspace": workspace,

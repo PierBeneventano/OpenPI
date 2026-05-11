@@ -166,3 +166,76 @@ def test_materialize_brainstorm_outputs_creates_required_contract_artifacts(tmp_
         "artifacts/brainstorm.md",
         "artifacts/approach_menu.json",
     }
+
+
+def test_stage_completion_is_derived_from_required_artifacts(tmp_path: Path, monkeypatch):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Completion Runtime Demo",
+        objective="Do not let verbal completion outrun artifacts.",
+        template="literature_only",
+        budget=1,
+    )
+    run = store.record_run_started("completion-runtime-demo", command=["msc", "run"], pid=789)
+    run_id = run["run_id"]
+
+    incomplete = store.update_node_status(
+        "completion-runtime-demo",
+        "literature_review_agent",
+        "completed",
+        payload={"run_id": run_id},
+    )
+
+    assert incomplete["status"] == "human_decision_required"
+    assert incomplete["completion"]["missing_required_artifacts"] == [
+        "artifacts/literature_matrix.md",
+        "artifacts/lit_review_feasibility.json",
+    ]
+    assert incomplete["approval"]["target_type"] == "stage_completion"
+
+    monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
+    monkeypatch.setenv("MSC_CAMPAIGN_ID", "completion-runtime-demo")
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run_id)
+    materialize_stage_outputs(
+        "literature_review_agent",
+        {"task": "Survey a narrow topic."},
+        {"agent_outputs": {"literature_review_agent": "A cited matrix with enough detail."}},
+    )
+
+    complete = store.update_node_status(
+        "completion-runtime-demo",
+        "literature_review_agent",
+        "completed",
+        payload={"run_id": run_id},
+    )
+
+    assert complete["status"] == "completed"
+    assert complete["completion"]["complete"]
+    events = store.events("completion-runtime-demo")["events"]
+    assert any(event["type"] == "StageCompletionEvaluated" for event in events)
+    assert any(event["type"] == "ValidationPassed" for event in events)
+
+
+def test_run_scoped_artifacts_are_collapsed_to_researcher_artifact(tmp_path: Path, monkeypatch):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Run Scoped Artifact Demo",
+        objective="Prefer concrete run artifacts over declarations.",
+        template="literature_only",
+        budget=1,
+    )
+    run = store.record_run_started("run-scoped-artifact-demo", command=["msc", "run"], pid=790)
+    monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
+    monkeypatch.setenv("MSC_CAMPAIGN_ID", "run-scoped-artifact-demo")
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+
+    ctx = StageRunContext.from_env("literature_review_agent")
+    assert ctx is not None
+    ctx.write_required("artifacts/literature_matrix.md", "# Matrix")
+
+    artifacts = store.artifacts("run-scoped-artifact-demo", "literature_review_agent")["stages"][0]["required_artifacts"]
+    matrix_rows = [artifact for artifact in artifacts if artifact["path"] == "artifacts/literature_matrix.md"]
+    assert len(matrix_rows) == 1
+    assert matrix_rows[0]["exists"]
+    assert matrix_rows[0]["metadata"]["run_id"] == run["run_id"]
+    assert matrix_rows[0]["audience"] == "deliverable"

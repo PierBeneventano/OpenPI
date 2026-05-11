@@ -393,3 +393,19 @@ behind filters or an advanced/system view.
 The central failure is not messy code by itself. The central failure is that the
 research engine's real semantics are implicit. V1 requires those semantics to
 become explicit product objects.
+
+## First-Principles Rebuild Direction
+
+The clean replacement architecture is now specified in
+[`first_principles_rebuild.md`](first_principles_rebuild.md). The new center of
+gravity is not the historical LangGraph workflow. It is the typed runtime
+kernel:
+
+```text
+RunSpec -> GraphSpec -> StageSpec -> RuntimeContext -> ArtifactRecord
+        -> ValidationResult -> EventRecord -> ReadModel
+```
+
+New implementation work should target `msc_sdk/kernel/` first and treat the
+historical runner, graph, filesystem conventions, VS Code state, and OpenClaude
+harness as adapters rather than sources of product truth.

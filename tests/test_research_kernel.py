@@ -1,0 +1,446 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from msc_sdk.kernel import (
+    BudgetPolicy,
+    GraphSpec,
+    InMemoryEventBus,
+    ResearchKernel,
+    RouteSpec,
+    RunSpec,
+    StageSpec,
+    ValidationResult,
+    ValidatorRegistry,
+    project_run,
+)
+from msc_sdk.kernel.engine import artifact, non_empty_artifact
+from msc_sdk.kernel.models import JsonlEventBus
+from msc_sdk.kernel.read_models import read_jsonl_events
+
+
+def _run_spec(tmp_path: Path, *stages: StageSpec) -> RunSpec:
+    return RunSpec(
+        id="run_1",
+        campaign_id="campaign_1",
+        objective="Produce a small research artifact.",
+        workspace=tmp_path / "run_1",
+        budget=BudgetPolicy(max_usd=10, spend_allowed=True),
+        graph=GraphSpec(id="graph_1", stages=stages, entry_stage_id=stages[0].id),
+    )
+
+
+def test_kernel_completes_only_when_required_artifacts_and_validators_pass(tmp_path: Path):
+    stage = StageSpec(
+        id="literature",
+        title="Literature Review",
+        kind="agent",
+        purpose="Ground the question in prior work.",
+        outputs=(artifact("artifacts/literature_matrix.md"),),
+        validator_ids=("non_empty:artifacts/literature_matrix.md",),
+    )
+    validators = ValidatorRegistry()
+    validators.register("non_empty:artifacts/literature_matrix.md", non_empty_artifact("artifacts/literature_matrix.md"))
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(validators=validators, event_bus=events)
+
+    def handler(context):
+        context.write_artifact(stage.outputs[0], "# Matrix\n\n- Paper A supports the framing.")
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"literature": handler})
+
+    assert outcomes[0].status == "completed"
+    assert outcomes[0].validation[0].validator_id == "required_artifacts_exist"
+    assert all(result.passed for result in outcomes[0].validation)
+    assert [event.type for event in events.events] == [
+        "RunStarted",
+        "StageStarted",
+        "ArtifactWritten",
+        "ArtifactIndexed",
+        "ValidationPassed",
+        "StageCompleted",
+        "RunCompleted",
+    ]
+
+
+def test_kernel_turns_missing_artifact_into_human_decision(tmp_path: Path):
+    stage = StageSpec(
+        id="plan",
+        title="Research Plan",
+        kind="agent",
+        purpose="Define the research plan.",
+        outputs=(artifact("artifacts/research_plan.md"),),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"plan": lambda context: None})
+
+    assert outcomes[0].status == "human_decision_required"
+    assert outcomes[0].validation[0] == ValidationResult(
+        validator_id="required_artifacts_exist",
+        passed=False,
+        message="missing required artifacts",
+        details={"missing": ["artifacts/research_plan.md"]},
+    )
+    assert "HumanDecisionRequired" in [event.type for event in events.events]
+    assert events.events[-1].type == "RunFailed"
+
+
+def test_kernel_requires_declared_validators_before_running(tmp_path: Path):
+    stage = StageSpec(
+        id="goals",
+        title="Goals",
+        kind="agent",
+        purpose="Formalize goals.",
+        outputs=(artifact("artifacts/goals.json", "json"),),
+        validator_ids=("goals_schema",),
+    )
+    kernel = ResearchKernel()
+
+    with pytest.raises(KeyError, match="Missing validators: goals_schema"):
+        kernel.run(_run_spec(tmp_path, stage), {"goals": lambda context: None})
+
+
+def test_kernel_runs_happy_path_in_graph_order(tmp_path: Path):
+    stage_a = StageSpec(
+        id="proposal",
+        title="Proposal",
+        kind="agent",
+        purpose="Create proposal.",
+        outputs=(artifact("artifacts/proposal.md"),),
+        routes=(RouteSpec(target="writeup"),),
+    )
+    stage_b = StageSpec(
+        id="writeup",
+        title="Writeup",
+        kind="agent",
+        purpose="Create writeup.",
+        outputs=(artifact("artifacts/writeup.md"),),
+    )
+    kernel = ResearchKernel()
+
+    def write_first(context):
+        context.write_artifact(stage_a.outputs[0], "proposal")
+
+    def write_second(context):
+        context.write_artifact(stage_b.outputs[0], "writeup")
+
+    outcomes = kernel.run(
+        _run_spec(tmp_path, stage_a, stage_b),
+        {"proposal": write_first, "writeup": write_second},
+    )
+
+    assert [outcome.stage_id for outcome in outcomes] == ["proposal", "writeup"]
+    assert all(outcome.status == "completed" for outcome in outcomes)
+    assert outcomes[0].scheduled_stage_ids == ("writeup",)
+
+
+def test_kernel_schedules_branch_fanout_and_join_barrier(tmp_path: Path):
+    plan = StageSpec(
+        id="plan",
+        title="Plan",
+        kind="agent",
+        purpose="Plan the split.",
+        outputs=(artifact("artifacts/plan.md"),),
+        routes=(
+            RouteSpec(target="theory", kind="branch"),
+            RouteSpec(target="experiment", kind="branch"),
+        ),
+    )
+    theory = StageSpec(
+        id="theory",
+        title="Theory",
+        kind="agent",
+        purpose="Run theory branch.",
+        outputs=(artifact("artifacts/theory.md"),),
+        routes=(RouteSpec(target="synthesis", kind="join"),),
+    )
+    experiment = StageSpec(
+        id="experiment",
+        title="Experiment",
+        kind="agent",
+        purpose="Run experiment branch.",
+        outputs=(artifact("artifacts/experiment.md"),),
+        routes=(RouteSpec(target="synthesis", kind="join"),),
+    )
+    synthesis = StageSpec(
+        id="synthesis",
+        title="Synthesis",
+        kind="agent",
+        purpose="Join evidence.",
+        outputs=(artifact("artifacts/synthesis.md"),),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    def writer(stage):
+        def handle(context):
+            context.write_artifact(stage.outputs[0], stage.id)
+        return handle
+
+    outcomes = kernel.run(
+        _run_spec(tmp_path, plan, theory, experiment, synthesis),
+        {
+            "plan": writer(plan),
+            "theory": writer(theory),
+            "experiment": writer(experiment),
+            "synthesis": writer(synthesis),
+        },
+    )
+
+    assert [outcome.stage_id for outcome in outcomes] == ["plan", "theory", "experiment", "synthesis"]
+    assert outcomes[0].scheduled_stage_ids == ("theory", "experiment")
+    assert outcomes[1].scheduled_stage_ids == ()
+    assert outcomes[2].scheduled_stage_ids == ("synthesis",)
+    assert any(event.type == "JoinWaiting" for event in events.events)
+    assert [event.type for event in events.events].count("RouteSelected") == 4
+
+
+def test_kernel_enforces_bounded_loop_and_then_routes_forward(tmp_path: Path):
+    draft = StageSpec(
+        id="draft",
+        title="Draft",
+        kind="agent",
+        purpose="Draft until acceptable.",
+        outputs=(artifact("artifacts/draft.md"),),
+        routes=(
+            RouteSpec(target="draft", kind="loop", condition="needs_revision", max_visits=2),
+            RouteSpec(target="final", kind="next", condition="accepted"),
+        ),
+    )
+    final = StageSpec(
+        id="final",
+        title="Final",
+        kind="agent",
+        purpose="Finalize.",
+        outputs=(artifact("artifacts/final.md"),),
+    )
+    kernel = ResearchKernel()
+    calls = {"draft": 0}
+
+    def draft_handler(context):
+        calls["draft"] += 1
+        context.write_artifact(draft.outputs[0], f"draft {calls['draft']}")
+        return {"route_condition": "needs_revision" if calls["draft"] == 1 else "accepted"}
+
+    def final_handler(context):
+        context.write_artifact(final.outputs[0], "final")
+
+    outcomes = kernel.run(
+        _run_spec(tmp_path, draft, final),
+        {"draft": draft_handler, "final": final_handler},
+    )
+
+    assert calls["draft"] == 2
+    assert [outcome.stage_id for outcome in outcomes] == ["draft", "draft", "final"]
+    assert outcomes[0].scheduled_stage_ids == ("draft",)
+    assert outcomes[1].scheduled_stage_ids == ("final",)
+    assert all(outcome.status == "completed" for outcome in outcomes)
+
+
+def test_kernel_loop_limit_stops_for_human(tmp_path: Path):
+    draft = StageSpec(
+        id="draft",
+        title="Draft",
+        kind="agent",
+        purpose="Draft until acceptable.",
+        outputs=(artifact("artifacts/draft.md"),),
+        routes=(RouteSpec(target="draft", kind="loop", condition="needs_revision", max_visits=2),),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    def draft_handler(context):
+        context.write_artifact(draft.outputs[0], "still weak")
+        return {"route_condition": "needs_revision"}
+
+    outcomes = kernel.run(_run_spec(tmp_path, draft), {"draft": draft_handler})
+    model = project_run(events.events)
+
+    assert [outcome.stage_id for outcome in outcomes] == ["draft", "draft"]
+    assert outcomes[-1].status == "human_decision_required"
+    assert any(event.type == "LoopLimitReached" for event in events.events)
+    assert model.status == "human_decision_required"
+    assert model.stages["draft"].failure_reason == "loop_limit_reached"
+
+
+def test_kernel_records_budget_spend_in_events_and_read_model(tmp_path: Path):
+    stage = StageSpec(
+        id="literature",
+        title="Literature",
+        kind="agent",
+        purpose="Spend a small amount on search.",
+        budget=BudgetPolicy(max_usd=1.0, spend_allowed=True),
+        outputs=(artifact("artifacts/literature.md"),),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    def handler(context):
+        context.charge_budget(0.25, reason="paper search")
+        context.write_artifact(stage.outputs[0], "literature")
+
+    kernel.run(_run_spec(tmp_path, stage), {"literature": handler})
+    model = project_run(events.events)
+
+    assert any(event.type == "BudgetSpent" for event in events.events)
+    assert model.budget_spent_usd == 0.25
+    assert model.stages["literature"].budget_spent_usd == 0.25
+
+
+def test_kernel_budget_exceeded_stops_for_human(tmp_path: Path):
+    stage = StageSpec(
+        id="experiment",
+        title="Experiment",
+        kind="agent",
+        purpose="Try to overspend.",
+        budget=BudgetPolicy(max_usd=0.5, spend_allowed=True),
+        outputs=(artifact("artifacts/experiment.md"),),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    def handler(context):
+        context.charge_budget(0.75, reason="expensive run")
+        context.write_artifact(stage.outputs[0], "experiment")
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"experiment": handler})
+    model = project_run(events.events)
+
+    assert outcomes[0].status == "human_decision_required"
+    assert outcomes[0].validation[0].validator_id == "budget_policy"
+    assert any(event.type == "BudgetExceeded" for event in events.events)
+    assert model.status == "human_decision_required"
+    assert model.stages["experiment"].failure_reason == "budget_policy_failed"
+    assert model.stages["experiment"].safe_next_actions == [
+        "approve-budget-increase",
+        "rewrite-stage",
+        "rerun-stage",
+        "abort",
+    ]
+
+
+def test_kernel_events_project_to_canonical_run_read_model(tmp_path: Path):
+    stage = StageSpec(
+        id="review",
+        title="Review",
+        kind="agent",
+        purpose="Review the paper.",
+        outputs=(
+            artifact("artifacts/review_report.md"),
+            artifact("artifacts/review_notes.md", required=False, role="diagnostic"),
+        ),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    def handler(context):
+        context.write_artifact(stage.outputs[0], "looks good")
+        context.write_artifact(stage.outputs[1], "minor note")
+
+    kernel.run(_run_spec(tmp_path, stage), {"review": handler})
+    model = project_run(events.events)
+
+    assert model.status == "completed"
+    assert model.completed_stage_ids == ["review"]
+    assert model.stage_list()[0].status == "completed"
+    assert [artifact.path for artifact in model.stage_list()[0].deliverables] == [
+        "artifacts/review_report.md",
+    ]
+    assert model.to_dict()["stages"][0]["deliverables"][0]["role"] == "deliverable"
+
+
+def test_kernel_events_project_human_decision_required(tmp_path: Path):
+    stage = StageSpec(
+        id="experiment",
+        title="Experiment",
+        kind="agent",
+        purpose="Run the experiment.",
+        outputs=(artifact("artifacts/experiment_results.md"),),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    kernel.run(_run_spec(tmp_path, stage), {"experiment": lambda context: None})
+    model = project_run(events.events)
+    experiment = model.stages["experiment"]
+
+    assert model.status == "human_decision_required"
+    assert experiment.status == "human_decision_required"
+    assert experiment.failure_reason == "stage_validation_failed"
+    assert experiment.safe_next_actions == ["rewrite-stage", "rerun-stage", "abort"]
+
+
+def test_jsonl_event_bus_can_feed_same_read_model(tmp_path: Path):
+    stage = StageSpec(
+        id="proposal",
+        title="Proposal",
+        kind="agent",
+        purpose="Write a proposal.",
+        outputs=(artifact("artifacts/proposal.md"),),
+    )
+    event_path = tmp_path / "events.jsonl"
+    kernel = ResearchKernel(event_bus=JsonlEventBus(event_path))
+
+    def handler(context):
+        context.write_artifact(stage.outputs[0], "proposal")
+
+    kernel.run(_run_spec(tmp_path, stage), {"proposal": handler})
+    model = project_run(read_jsonl_events(event_path))
+
+    assert model.status == "completed"
+    assert model.stages["proposal"].artifacts[0].path == "artifacts/proposal.md"
+
+
+def test_kernel_enforces_pause_before_stage_without_running_handler(tmp_path: Path):
+    stage = StageSpec(
+        id="spend_gate",
+        title="Spend Gate",
+        kind="approval",
+        purpose="Ask before spending money.",
+        outputs=(artifact("artifacts/approval.json", "json"),),
+        pause_before=True,
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+    called = False
+
+    def handler(context):
+        nonlocal called
+        called = True
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"spend_gate": handler})
+    model = project_run(events.events)
+
+    assert not called
+    assert outcomes[0].status == "human_decision_required"
+    assert model.stages["spend_gate"].failure_reason == "pause_before_stage"
+    assert model.stages["spend_gate"].safe_next_actions == ["approve", "rewrite-stage", "skip-stage", "abort"]
+
+
+def test_kernel_enforces_pause_after_validated_stage(tmp_path: Path):
+    stage = StageSpec(
+        id="plan",
+        title="Plan",
+        kind="agent",
+        purpose="Produce an execution plan.",
+        outputs=(artifact("artifacts/plan.md"),),
+        pause_after=True,
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    def handler(context):
+        context.write_artifact(stage.outputs[0], "plan")
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"plan": handler})
+    model = project_run(events.events)
+
+    assert outcomes[0].status == "human_decision_required"
+    assert any(event.type == "ValidationPassed" for event in events.events)
+    assert not any(event.type == "StageCompleted" for event in events.events)
+    assert model.stages["plan"].failure_reason == "pause_after_stage"
+    assert model.stages["plan"].artifacts[0].path == "artifacts/plan.md"
