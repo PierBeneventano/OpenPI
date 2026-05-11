@@ -417,8 +417,35 @@ def test_kernel_enforces_pause_before_stage_without_running_handler(tmp_path: Pa
 
     assert not called
     assert outcomes[0].status == "human_decision_required"
+    assert len(kernel.decision_queue.pending(run_id="run_1")) == 1
     assert model.stages["spend_gate"].failure_reason == "pause_before_stage"
+    assert model.stages["spend_gate"].pending_decision_id
+    assert model.stages["spend_gate"].decision_status == "pending"
     assert model.stages["spend_gate"].safe_next_actions == ["approve", "rewrite-stage", "skip-stage", "abort"]
+
+
+def test_kernel_decision_queue_approves_or_rejects_pending_decision(tmp_path: Path):
+    stage = StageSpec(
+        id="review_gate",
+        title="Review Gate",
+        kind="approval",
+        purpose="Require a human decision.",
+        outputs=(artifact("artifacts/review_gate.json", "json"),),
+        pause_before=True,
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    kernel.run(_run_spec(tmp_path, stage), {"review_gate": lambda context: None})
+    decision = kernel.decision_queue.pending(run_id="run_1")[0]
+    decided = kernel.decide(decision.id, approved=False, actor="researcher")
+    model = project_run(events.events)
+
+    assert decided["status"] == "rejected"
+    assert decided["actor"] == "researcher"
+    assert model.stages["review_gate"].pending_decision_id == decision.id
+    assert model.stages["review_gate"].decision_status == "rejected"
+    assert events.events[-1].type == "ApprovalDecided"
 
 
 def test_kernel_enforces_pause_after_validated_stage(tmp_path: Path):

@@ -218,6 +218,7 @@ product read state = projection of kernel events
 human pause policy = executable kernel behavior
 branches, joins, and loops = explicit kernel scheduling
 budget policy = enforced by RuntimeContext charges and kernel ledger
+human decisions = typed queue records with approve/reject events
 ```
 
 The read-model projector lives beside the kernel so VS Code, CLI, OpenClaude,
@@ -232,11 +233,15 @@ Budget spend is charged through `RuntimeContext.charge_budget(...)`. Run and
 stage caps are enforced by the kernel ledger, and budget failures produce
 `BudgetExceeded` plus `HumanDecisionRequired` events.
 
+Human stops create durable decision records. A decision has an id, stage, reason,
+allowed actions, status, actor, and timestamps. Approval and rejection emit
+events that project back into the canonical run read model.
+
 ## Rebuild Order
 
 1. Expand `msc_sdk.kernel` until it can express the ideal product semantics.
 2. Add model/tool policy enforcement.
-3. Add a typed decision queue with approve/reject/resume operations.
+3. Add resume semantics on top of approved decisions.
 4. Define the ideal campaign graph in contracts, not in `graph.py`.
 5. Write pure stage handlers for planning, literature, hypothesis generation,
    experiment design, execution, synthesis, writeup, and review.
@@ -250,11 +255,10 @@ stage caps are enforced by the kernel ledger, and budget failures produce
 The major architectural risks still to remove are:
 
 1. Model/tool policy is declared but not yet enforced by the kernel.
-2. Decisions are represented as human-decision events, but there is not yet a
-   typed decision queue with approve/reject/resume operations.
-3. Stage handlers are not yet isolated by declared tool permissions.
-4. Artifacts do not yet include claim/evidence relationships, schema validation,
+2. Stage handlers are not yet isolated by declared tool permissions.
+3. Artifacts do not yet include claim/evidence relationships, schema validation,
    or explicit upstream input dependencies.
+4. Approved decisions do not yet resume a paused run from a durable checkpoint.
 5. Agent implementations are not yet bound to `StageSpec` as swappable adapters.
 6. The product shell still needs to consume kernel read models directly rather
    than historical campaign-store projections.

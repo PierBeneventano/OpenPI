@@ -26,6 +26,7 @@ EventType = Literal[
     "ValidationFailed",
     "StageCompleted",
     "HumanDecisionRequired",
+    "ApprovalDecided",
     "RunCompleted",
     "RunFailed",
 ]
@@ -117,6 +118,86 @@ class BudgetLedger:
         )
         self.records.append(record)
         return record
+
+
+@dataclass(frozen=True)
+class DecisionRecord:
+    id: str
+    run_id: str
+    campaign_id: str
+    stage_id: str
+    reason: str
+    status: Literal["pending", "approved", "rejected"] = "pending"
+    safe_next_actions: tuple[str, ...] = ()
+    created_at: str = field(default_factory=now_iso)
+    decided_at: str | None = None
+    actor: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class DecisionQueue:
+    def __init__(self) -> None:
+        self.decisions: dict[str, DecisionRecord] = {}
+
+    def request(
+        self,
+        *,
+        run: "RunSpec",
+        stage_id: str,
+        reason: str,
+        safe_next_actions: Iterable[str],
+        metadata: dict[str, Any] | None = None,
+    ) -> DecisionRecord:
+        created_at = now_iso()
+        decision = DecisionRecord(
+            id=stable_id(run.id, stage_id, reason, created_at),
+            run_id=run.id,
+            campaign_id=run.campaign_id,
+            stage_id=stage_id,
+            reason=reason,
+            safe_next_actions=tuple(str(action) for action in safe_next_actions),
+            created_at=created_at,
+            metadata=metadata or {},
+        )
+        self.decisions[decision.id] = decision
+        return decision
+
+    def decide(
+        self,
+        decision_id: str,
+        *,
+        approved: bool,
+        actor: str = "user",
+    ) -> DecisionRecord:
+        current = self.decisions.get(decision_id)
+        if current is None:
+            raise KeyError(f"Decision not found: {decision_id}")
+        if current.status != "pending":
+            raise ValueError(f"Decision is already {current.status}: {decision_id}")
+        decided = DecisionRecord(
+            id=current.id,
+            run_id=current.run_id,
+            campaign_id=current.campaign_id,
+            stage_id=current.stage_id,
+            reason=current.reason,
+            status="approved" if approved else "rejected",
+            safe_next_actions=current.safe_next_actions,
+            created_at=current.created_at,
+            decided_at=now_iso(),
+            actor=actor,
+            metadata=current.metadata,
+        )
+        self.decisions[decision_id] = decided
+        return decided
+
+    def pending(self, *, run_id: str | None = None) -> list[DecisionRecord]:
+        rows = [decision for decision in self.decisions.values() if decision.status == "pending"]
+        if run_id is not None:
+            rows = [decision for decision in rows if decision.run_id == run_id]
+        return sorted(rows, key=lambda decision: decision.created_at)
 
 
 @dataclass(frozen=True)
@@ -341,6 +422,7 @@ class RuntimeContext:
     event_bus: EventBus
     validator_registry: ValidatorRegistry
     budget_ledger: BudgetLedger
+    decision_queue: DecisionQueue
 
     @property
     def stage_workspace(self) -> Path:

@@ -10,6 +10,7 @@ from .models import (
     ArtifactSpec,
     BudgetExceededError,
     BudgetLedger,
+    DecisionQueue,
     InMemoryEventBus,
     RunSpec,
     RuntimeContext,
@@ -39,15 +40,19 @@ class ResearchKernel:
         validators: ValidatorRegistry | None = None,
         event_bus: InMemoryEventBus | None = None,
         budget_ledger: BudgetLedger | None = None,
+        decision_queue: DecisionQueue | None = None,
         max_stage_executions: int = 100,
     ) -> None:
         self.validators = validators or ValidatorRegistry()
         self.event_bus = event_bus or InMemoryEventBus()
         self.budget_ledger = budget_ledger or BudgetLedger()
+        self.decision_queue = decision_queue or DecisionQueue()
         self.max_stage_executions = max_stage_executions
+        self._runs: dict[str, RunSpec] = {}
 
     def run(self, run: RunSpec, handlers: dict[str, StageHandler]) -> list[StageOutcome]:
         run.graph.validate()
+        self._runs[run.id] = run
         self._validate_handlers(run, handlers)
         self._validate_validators(run)
         run.workspace.mkdir(parents=True, exist_ok=True)
@@ -88,6 +93,7 @@ class ResearchKernel:
                 event_bus=self.event_bus,
                 validator_registry=self.validators,
                 budget_ledger=self.budget_ledger,
+                decision_queue=self.decision_queue,
             )
             outcome = self.run_stage(context, handlers[stage_id])
             outcomes.append(outcome)
@@ -146,14 +152,11 @@ class ResearchKernel:
         stage = context.stage
         run = context.run
         if stage.pause_before:
-            self.event_bus.emit(
-                "HumanDecisionRequired",
+            self._request_decision(
                 run=run,
-                payload={
-                    "stage_id": stage.id,
-                    "reason": "pause_before_stage",
-                    "safe_next_actions": ["approve", "rewrite-stage", "skip-stage", "abort"],
-                },
+                stage_id=stage.id,
+                reason="pause_before_stage",
+                safe_next_actions=["approve", "rewrite-stage", "skip-stage", "abort"],
             )
             return StageOutcome(stage_id=stage.id, status="human_decision_required")
 
@@ -167,15 +170,12 @@ class ResearchKernel:
                 passed=False,
                 message=str(exc),
             )
-            self.event_bus.emit(
-                "HumanDecisionRequired",
+            self._request_decision(
                 run=run,
-                payload={
-                    "stage_id": stage.id,
-                    "reason": "budget_policy_failed",
-                    "validation": [result.__dict__],
-                    "safe_next_actions": ["approve-budget-increase", "rewrite-stage", "rerun-stage", "abort"],
-                },
+                stage_id=stage.id,
+                reason="budget_policy_failed",
+                safe_next_actions=["approve-budget-increase", "rewrite-stage", "rerun-stage", "abort"],
+                metadata={"validation": [result.__dict__]},
             )
             return StageOutcome(
                 stage_id=stage.id,
@@ -189,15 +189,12 @@ class ResearchKernel:
                 passed=False,
                 message=f"{type(exc).__name__}: {exc}",
             )
-            self.event_bus.emit(
-                "HumanDecisionRequired",
+            self._request_decision(
                 run=run,
-                payload={
-                    "stage_id": stage.id,
-                    "reason": "stage_handler_failed",
-                    "validation": [result.__dict__],
-                    "safe_next_actions": ["rewrite-stage", "rerun-stage", "abort"],
-                },
+                stage_id=stage.id,
+                reason="stage_handler_failed",
+                safe_next_actions=["rewrite-stage", "rerun-stage", "abort"],
+                metadata={"validation": [result.__dict__]},
             )
             return StageOutcome(
                 stage_id=stage.id,
@@ -220,15 +217,12 @@ class ResearchKernel:
                     "safe_next_actions": ["rewrite-stage", "rerun-stage", "abort"],
                 },
             )
-            self.event_bus.emit(
-                "HumanDecisionRequired",
+            self._request_decision(
                 run=run,
-                payload={
-                    "stage_id": stage.id,
-                    "reason": "stage_validation_failed",
-                    "validation": [result.__dict__ for result in failed],
-                    "safe_next_actions": ["rewrite-stage", "rerun-stage", "abort"],
-                },
+                stage_id=stage.id,
+                reason="stage_validation_failed",
+                safe_next_actions=["rewrite-stage", "rerun-stage", "abort"],
+                metadata={"validation": [result.__dict__ for result in failed]},
             )
             return StageOutcome(
                 stage_id=stage.id,
@@ -244,15 +238,12 @@ class ResearchKernel:
             payload={"stage_id": stage.id, "validation": [result.__dict__ for result in validation]},
         )
         if stage.pause_after:
-            self.event_bus.emit(
-                "HumanDecisionRequired",
+            self._request_decision(
                 run=run,
-                payload={
-                    "stage_id": stage.id,
-                    "reason": "pause_after_stage",
-                    "validation": [result.__dict__ for result in validation],
-                    "safe_next_actions": ["approve", "rewrite-stage", "rerun-stage", "abort"],
-                },
+                stage_id=stage.id,
+                reason="pause_after_stage",
+                safe_next_actions=["approve", "rewrite-stage", "rerun-stage", "abort"],
+                metadata={"validation": [result.__dict__ for result in validation]},
             )
             return StageOutcome(
                 stage_id=stage.id,
@@ -377,14 +368,11 @@ class ResearchKernel:
                             "max_visits": max_visits,
                         },
                     )
-                    self.event_bus.emit(
-                        "HumanDecisionRequired",
+                    self._request_decision(
                         run=run,
-                        payload={
-                            "stage_id": stage.id,
-                            "reason": "loop_limit_reached",
-                            "safe_next_actions": ["rewrite-stage", "rerun-stage", "approve", "abort"],
-                        },
+                        stage_id=stage.id,
+                        reason="loop_limit_reached",
+                        safe_next_actions=["rewrite-stage", "rerun-stage", "approve", "abort"],
                     )
                     blocked = True
                     continue
@@ -423,6 +411,52 @@ class ResearchKernel:
                 "condition": condition,
             },
         )
+
+    def _request_decision(
+        self,
+        *,
+        run: RunSpec,
+        stage_id: str,
+        reason: str,
+        safe_next_actions: list[str],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        decision = self.decision_queue.request(
+            run=run,
+            stage_id=stage_id,
+            reason=reason,
+            safe_next_actions=safe_next_actions,
+            metadata=metadata,
+        )
+        self.event_bus.emit(
+            "HumanDecisionRequired",
+            run=run,
+            payload={
+                "decision_id": decision.id,
+                "stage_id": stage_id,
+                "reason": reason,
+                "safe_next_actions": list(decision.safe_next_actions),
+                **(metadata or {}),
+            },
+        )
+
+    def decide(self, decision_id: str, *, approved: bool, actor: str = "user") -> dict[str, Any]:
+        decision = self.decision_queue.decide(decision_id, approved=approved, actor=actor)
+        try:
+            run = self._runs[decision.run_id]
+        except KeyError as exc:
+            raise KeyError(f"Run not found for decision: {decision.run_id}") from exc
+        self.event_bus.emit(
+            "ApprovalDecided",
+            run=run,
+            payload={
+                "decision_id": decision.id,
+                "stage_id": decision.stage_id,
+                "status": decision.status,
+                "actor": actor,
+            },
+        )
+        return decision.to_dict()
 
     @staticmethod
     def _enqueue(

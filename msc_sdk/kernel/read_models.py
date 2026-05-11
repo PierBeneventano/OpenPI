@@ -38,6 +38,8 @@ class KernelStageReadModel:
     validation: list[dict[str, Any]] = field(default_factory=list)
     safe_next_actions: list[str] = field(default_factory=list)
     failure_reason: str | None = None
+    pending_decision_id: str | None = None
+    decision_status: str | None = None
     budget_spent_usd: float = 0.0
     started_at: str | None = None
     completed_at: str | None = None
@@ -141,8 +143,14 @@ def project_run(events: Iterable[EventRecord]) -> KernelRunReadModel:
         elif event_type == "HumanDecisionRequired" and stage_id:
             stage = _stage(model, stage_id)
             stage.status = "human_decision_required"
+            stage.pending_decision_id = str(payload.get("decision_id") or "") or None
+            stage.decision_status = "pending"
             stage.failure_reason = str(payload.get("reason") or "")
             stage.safe_next_actions = [str(action) for action in payload.get("safe_next_actions") or []]
+        elif event_type == "ApprovalDecided" and stage_id:
+            stage = _stage(model, stage_id)
+            stage.pending_decision_id = str(payload.get("decision_id") or stage.pending_decision_id or "") or None
+            stage.decision_status = str(payload.get("status") or "")
         elif event_type == "StageCompleted" and stage_id:
             stage = _stage(model, stage_id)
             stage.status = "completed"
