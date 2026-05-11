@@ -11,9 +11,12 @@ from .models import (
     BudgetExceededError,
     BudgetLedger,
     DecisionQueue,
+    EvidenceLink,
     InMemoryEventBus,
     RunSpec,
     RuntimeContext,
+    SchemaRegistry,
+    SchemaValidationError,
     StageOutcome,
     StageSpec,
     ToolPolicyError,
@@ -44,6 +47,7 @@ class ResearchKernel:
         budget_ledger: BudgetLedger | None = None,
         decision_queue: DecisionQueue | None = None,
         tool_registry: ToolRegistry | None = None,
+        schema_registry: SchemaRegistry | None = None,
         max_stage_executions: int = 100,
     ) -> None:
         self.validators = validators or ValidatorRegistry()
@@ -51,6 +55,7 @@ class ResearchKernel:
         self.budget_ledger = budget_ledger or BudgetLedger()
         self.decision_queue = decision_queue or DecisionQueue()
         self.tool_registry = tool_registry or ToolRegistry()
+        self.schema_registry = schema_registry or SchemaRegistry()
         self.max_stage_executions = max_stage_executions
         self._runs: dict[str, RunSpec] = {}
 
@@ -60,6 +65,7 @@ class ResearchKernel:
         self._validate_handlers(run, handlers)
         self._validate_validators(run)
         self._validate_tools(run)
+        self._validate_schemas(run)
         run.workspace.mkdir(parents=True, exist_ok=True)
         self.event_bus.emit(
             "RunStarted",
@@ -100,6 +106,7 @@ class ResearchKernel:
                 budget_ledger=self.budget_ledger,
                 decision_queue=self.decision_queue,
                 tool_registry=self.tool_registry,
+                schema_registry=self.schema_registry,
             )
             outcome = self.run_stage(context, handlers[stage_id])
             outcomes.append(outcome)
@@ -208,6 +215,8 @@ class ResearchKernel:
                 status="human_decision_required",
                 route_conditions=self._route_conditions(None),
             )
+        except SchemaValidationError as exc:
+            return self._schema_failure_outcome(run=run, stage=stage, exc=exc)
         except Exception as exc:
             result = ValidationResult(
                 validator_id="stage_handler",
@@ -228,7 +237,10 @@ class ResearchKernel:
                 route_conditions=self._route_conditions(None),
             )
 
-        artifacts = self._index_declared_artifacts(context)
+        try:
+            artifacts = self._index_declared_artifacts(context)
+        except SchemaValidationError as exc:
+            return self._schema_failure_outcome(run=run, stage=stage, exc=exc)
         validation = self._validate_completion(context, artifacts)
         route_conditions = self._route_conditions(handler_result)
         failed = [result for result in validation if not result.passed]
@@ -299,6 +311,7 @@ class ResearchKernel:
             target = context.artifact_path(artifact)
             if not target.exists() or not target.is_file():
                 continue
+            context.validate_artifact_file(artifact, target)
             record = artifact_record_for_file(context.stage.id, artifact, target)
             records.append(record)
             self.event_bus.emit(
@@ -345,6 +358,38 @@ class ResearchKernel:
         for stage in run.graph.stages:
             tool_ids.extend(stage.tool_ids)
         self.tool_registry.require(tool_ids)
+
+    def _validate_schemas(self, run: RunSpec) -> None:
+        schema_ids: list[str] = []
+        for stage in run.graph.stages:
+            schema_ids.extend(
+                artifact.schema_id
+                for artifact in stage.outputs
+                if artifact.schema_id is not None
+            )
+        self.schema_registry.require(schema_ids)
+
+    def _schema_failure_outcome(
+        self,
+        *,
+        run: RunSpec,
+        stage: StageSpec,
+        exc: SchemaValidationError,
+    ) -> StageOutcome:
+        result = exc.result
+        self._request_decision(
+            run=run,
+            stage_id=stage.id,
+            reason="artifact_schema_failed",
+            safe_next_actions=["rewrite-stage", "rerun-stage", "revise-schema", "abort"],
+            metadata={"validation": [result.__dict__]},
+        )
+        return StageOutcome(
+            stage_id=stage.id,
+            validation=(result,),
+            status="human_decision_required",
+            route_conditions=self._route_conditions(None),
+        )
 
     @staticmethod
     def _next_stage_id(stage: StageSpec) -> str | None:
@@ -531,5 +576,22 @@ def non_empty_artifact(path: str) -> Callable[[RuntimeContext, StageSpec, tuple[
     return validate
 
 
-def artifact(path: str, kind: str = "markdown", *, required: bool = True, role: str = "deliverable") -> ArtifactSpec:
-    return ArtifactSpec(path=path, kind=kind, required=required, role=role)  # type: ignore[arg-type]
+def artifact(
+    path: str,
+    kind: str = "markdown",
+    *,
+    required: bool = True,
+    role: str = "deliverable",
+    schema_id: str | None = None,
+    claim_ids: tuple[str, ...] = (),
+    evidence_links: tuple[EvidenceLink, ...] = (),
+) -> ArtifactSpec:
+    return ArtifactSpec(  # type: ignore[arg-type]
+        path=path,
+        kind=kind,
+        required=required,
+        role=role,
+        schema_id=schema_id,
+        claim_ids=claim_ids,
+        evidence_links=evidence_links,
+    )

@@ -220,6 +220,7 @@ branches, joins, and loops = explicit kernel scheduling
 budget policy = enforced by RuntimeContext charges and kernel ledger
 human decisions = typed queue records with approve/reject events
 tool policy = enforced by RuntimeContext tool invocation
+artifact truth = declared schemas + explicit claim/evidence links
 ```
 
 The read-model projector lives beside the kernel so VS Code, CLI, OpenClaude,
@@ -243,6 +244,14 @@ Tools are registered with the kernel and invoked through
 `StageSpec.tool_ids`. Undeclared tool use emits `ToolDenied` and creates a human
 decision instead of silently expanding the stage's powers.
 
+Artifact schemas are registered with the kernel and attached to
+`ArtifactSpec.schema_id`. The runtime validates schema-bound artifacts before
+writing through `RuntimeContext.write_artifact(...)` and also validates directly
+written declared files during indexing. Failed schema checks emit
+`SchemaValidationFailed` and stop for a human decision. Artifact records now
+carry `claim_ids` and `evidence_links`, so downstream synthesis and product
+surfaces can reason over evidence structure instead of parsing prose.
+
 ## Rebuild Order
 
 1. Expand `msc_sdk.kernel` until it can express the ideal product semantics.
@@ -261,8 +270,7 @@ decision instead of silently expanding the stage's powers.
 The major architectural risks still to remove are:
 
 1. Model policy is declared but not yet enforced by the kernel.
-2. Artifacts do not yet include claim/evidence relationships, schema validation,
-   or explicit upstream input dependencies.
+2. Artifacts do not yet enforce explicit upstream input dependencies.
 3. Approved decisions do not yet resume a paused run from a durable checkpoint.
 4. Agent implementations are not yet bound to `StageSpec` as swappable adapters.
 5. The product shell still needs to consume kernel read models directly rather

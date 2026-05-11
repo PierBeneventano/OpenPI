@@ -11,6 +11,7 @@ from typing import Any, Callable, Iterable, Literal, Protocol
 
 
 ArtifactRole = Literal["deliverable", "evidence", "diagnostic", "log", "prompt", "system_state"]
+EvidenceRelationship = Literal["supports", "refutes", "qualifies", "derives_from"]
 StageKind = Literal["agent", "tool", "validator", "router", "approval", "control"]
 EventType = Literal[
     "RunStarted",
@@ -22,6 +23,8 @@ EventType = Literal[
     "BudgetExceeded",
     "ToolInvoked",
     "ToolDenied",
+    "SchemaValidationPassed",
+    "SchemaValidationFailed",
     "ArtifactWritten",
     "ArtifactIndexed",
     "ValidationPassed",
@@ -62,6 +65,14 @@ class BudgetExceededError(RuntimeError):
 
 class ToolPolicyError(RuntimeError):
     """Raised when a stage attempts to use an undeclared tool."""
+
+
+class SchemaValidationError(RuntimeError):
+    """Raised when artifact content fails its declared schema."""
+
+    def __init__(self, result: "ValidationResult") -> None:
+        self.result = result
+        super().__init__(result.message)
 
 
 ToolHandler = Callable[..., Any]
@@ -111,6 +122,31 @@ class ToolRegistry:
         except KeyError as exc:
             raise KeyError(f"Missing tool: {tool_id}") from exc
         return spec
+
+
+SchemaValidator = Callable[[Any, "ArtifactSpec"], "ValidationResult"]
+
+
+class SchemaRegistry:
+    def __init__(self) -> None:
+        self._schemas: dict[str, SchemaValidator] = {}
+
+    def register(self, schema_id: str, validator: SchemaValidator) -> None:
+        if schema_id in self._schemas:
+            raise ValueError(f"Artifact schema already registered: {schema_id}")
+        self._schemas[schema_id] = validator
+
+    def require(self, schema_ids: Iterable[str]) -> None:
+        missing = [schema_id for schema_id in schema_ids if schema_id not in self._schemas]
+        if missing:
+            raise KeyError(f"Missing artifact schemas: {', '.join(missing)}")
+
+    def validate(self, schema_id: str, content: Any, artifact: "ArtifactSpec") -> "ValidationResult":
+        try:
+            validator = self._schemas[schema_id]
+        except KeyError as exc:
+            raise KeyError(f"Missing artifact schema: {schema_id}") from exc
+        return validator(content, artifact)
 
 
 @dataclass(frozen=True)
@@ -256,12 +292,26 @@ class DecisionQueue:
 
 
 @dataclass(frozen=True)
+class EvidenceLink:
+    claim_id: str
+    evidence_path: str
+    relationship: EvidenceRelationship = "supports"
+    locator: str = ""
+    note: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class ArtifactSpec:
     path: str
     kind: str
     role: ArtifactRole = "deliverable"
     required: bool = True
     schema_id: str | None = None
+    claim_ids: tuple[str, ...] = ()
+    evidence_links: tuple[EvidenceLink, ...] = ()
     description: str = ""
 
     def __post_init__(self) -> None:
@@ -361,6 +411,9 @@ class ArtifactRecord:
     kind: str
     role: ArtifactRole
     required: bool
+    schema_id: str | None
+    claim_ids: tuple[str, ...]
+    evidence_links: tuple[EvidenceLink, ...]
     size_bytes: int
     checksum: str
 
@@ -479,6 +532,7 @@ class RuntimeContext:
     budget_ledger: BudgetLedger
     decision_queue: DecisionQueue
     tool_registry: ToolRegistry
+    schema_registry: SchemaRegistry
 
     @property
     def stage_workspace(self) -> Path:
@@ -494,6 +548,7 @@ class RuntimeContext:
     def write_artifact(self, artifact: ArtifactSpec, content: str | bytes | dict[str, Any] | list[Any]) -> ArtifactRecord:
         target = self.artifact_path(artifact)
         target.parent.mkdir(parents=True, exist_ok=True)
+        self.validate_artifact_content(artifact, content, phase="write")
         if isinstance(content, bytes):
             target.write_bytes(content)
         elif isinstance(content, (dict, list)):
@@ -507,6 +562,90 @@ class RuntimeContext:
             payload={"stage_id": self.stage.id, "artifact": record.to_dict()},
         )
         return record
+
+    def validate_artifact_file(self, artifact: ArtifactSpec, path: Path) -> None:
+        if not artifact.schema_id:
+            return
+        try:
+            if artifact.kind == "json":
+                content: Any = json.loads(path.read_text(encoding="utf-8"))
+            elif artifact.kind in {"markdown", "text"}:
+                content = path.read_text(encoding="utf-8", errors="replace")
+            else:
+                content = path.read_bytes()
+        except Exception as exc:
+            result = ValidationResult(
+                validator_id=f"schema:{artifact.schema_id}",
+                passed=False,
+                message=f"{artifact.path} could not be read for schema validation: {exc}",
+                details={"path": artifact.path, "schema_id": artifact.schema_id, "phase": "index"},
+            )
+            self._emit_schema_result(artifact, result, phase="index")
+            raise SchemaValidationError(result) from exc
+        self.validate_artifact_content(artifact, content, phase="index")
+
+    def validate_artifact_content(self, artifact: ArtifactSpec, content: Any, *, phase: str) -> None:
+        if not artifact.schema_id:
+            return
+        try:
+            payload = self._schema_payload(artifact, content)
+        except Exception as exc:
+            result = ValidationResult(
+                validator_id=f"schema:{artifact.schema_id}",
+                passed=False,
+                message=f"{artifact.path} content is not valid {artifact.kind}: {exc}",
+                details={"path": artifact.path, "schema_id": artifact.schema_id, "phase": phase},
+            )
+            self._emit_schema_result(artifact, result, phase=phase)
+            raise SchemaValidationError(result) from exc
+
+        result = self.schema_registry.validate(artifact.schema_id, payload, artifact)
+        if not result.validator_id:
+            result = ValidationResult(
+                validator_id=f"schema:{artifact.schema_id}",
+                passed=result.passed,
+                message=result.message,
+                details=result.details,
+            )
+        details = {
+            "path": artifact.path,
+            "schema_id": artifact.schema_id,
+            "phase": phase,
+            **result.details,
+        }
+        result = ValidationResult(
+            validator_id=result.validator_id,
+            passed=result.passed,
+            message=result.message,
+            details=details,
+        )
+        self._emit_schema_result(artifact, result, phase=phase)
+        if not result.passed:
+            raise SchemaValidationError(result)
+
+    def _schema_payload(self, artifact: ArtifactSpec, content: Any) -> Any:
+        if artifact.kind != "json":
+            return content
+        if isinstance(content, (dict, list)):
+            return content
+        if isinstance(content, bytes):
+            return json.loads(content.decode("utf-8"))
+        if isinstance(content, str):
+            return json.loads(content)
+        return content
+
+    def _emit_schema_result(self, artifact: ArtifactSpec, result: ValidationResult, *, phase: str) -> None:
+        self.event_bus.emit(
+            "SchemaValidationPassed" if result.passed else "SchemaValidationFailed",
+            run=self.run,
+            payload={
+                "stage_id": self.stage.id,
+                "artifact_path": artifact.path,
+                "schema_id": artifact.schema_id,
+                "phase": phase,
+                "validation": result.__dict__,
+            },
+        )
 
     def charge_budget(
         self,
@@ -584,6 +723,9 @@ def artifact_record_for_file(stage_id: str, artifact: ArtifactSpec, path: Path) 
         kind=artifact.kind,
         role=artifact.role,
         required=artifact.required,
+        schema_id=artifact.schema_id,
+        claim_ids=artifact.claim_ids,
+        evidence_links=artifact.evidence_links,
         size_bytes=path.stat().st_size,
         checksum=checksum,
     )

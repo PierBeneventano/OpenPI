@@ -6,11 +6,13 @@ import pytest
 
 from msc_sdk.kernel import (
     BudgetPolicy,
+    EvidenceLink,
     GraphSpec,
     InMemoryEventBus,
     ResearchKernel,
     RouteSpec,
     RunSpec,
+    SchemaRegistry,
     StageSpec,
     ToolRegistry,
     ValidationResult,
@@ -393,6 +395,113 @@ def test_kernel_requires_declared_tools_to_be_registered(tmp_path: Path):
 
     with pytest.raises(KeyError, match="Missing tools: experiment_runner"):
         ResearchKernel().run(_run_spec(tmp_path, stage), {"experiment": lambda context: None})
+
+
+def test_kernel_validates_artifact_schema_and_records_evidence_links(tmp_path: Path):
+    output = artifact(
+        "artifacts/synthesis.json",
+        "json",
+        schema_id="synthesis_v1",
+        claim_ids=("claim:optimizer-generalizes",),
+        evidence_links=(
+            EvidenceLink(
+                claim_id="claim:optimizer-generalizes",
+                evidence_path="artifacts/literature_matrix.md",
+                relationship="supports",
+                locator="row:smith-2024",
+            ),
+        ),
+    )
+    stage = StageSpec(
+        id="synthesis",
+        title="Synthesis",
+        kind="agent",
+        purpose="Turn evidence into explicit claims.",
+        outputs=(output,),
+    )
+    schemas = SchemaRegistry()
+    schemas.register(
+        "synthesis_v1",
+        lambda content, artifact: ValidationResult(
+            validator_id="schema:synthesis_v1",
+            passed=isinstance(content, dict) and "claims" in content,
+            message="synthesis schema accepted",
+        ),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events, schema_registry=schemas)
+
+    def handler(context):
+        context.write_artifact(output, {"claims": [{"id": "claim:optimizer-generalizes"}]})
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"synthesis": handler})
+    model = project_run(events.events)
+    record = outcomes[0].artifacts[0]
+    artifact_model = model.stages["synthesis"].artifacts[0]
+
+    assert outcomes[0].status == "completed"
+    assert record.schema_id == "synthesis_v1"
+    assert record.claim_ids == ("claim:optimizer-generalizes",)
+    assert record.evidence_links[0].evidence_path == "artifacts/literature_matrix.md"
+    assert artifact_model.schema_id == "synthesis_v1"
+    assert artifact_model.claim_ids == ["claim:optimizer-generalizes"]
+    assert artifact_model.evidence_links[0]["relationship"] == "supports"
+    assert any(event.type == "SchemaValidationPassed" for event in events.events)
+
+
+def test_kernel_rejects_invalid_schema_before_artifact_write(tmp_path: Path):
+    output = artifact("artifacts/synthesis.json", "json", schema_id="synthesis_v1")
+    stage = StageSpec(
+        id="synthesis",
+        title="Synthesis",
+        kind="agent",
+        purpose="Turn evidence into explicit claims.",
+        outputs=(output,),
+    )
+    schemas = SchemaRegistry()
+    schemas.register(
+        "synthesis_v1",
+        lambda content, artifact: ValidationResult(
+            validator_id="schema:synthesis_v1",
+            passed=isinstance(content, dict) and "claims" in content,
+            message="claims field is required",
+        ),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events, schema_registry=schemas)
+
+    def handler(context):
+        context.write_artifact(output, {"notes": []})
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"synthesis": handler})
+    model = project_run(events.events)
+
+    assert outcomes[0].status == "human_decision_required"
+    assert outcomes[0].validation[0].validator_id == "schema:synthesis_v1"
+    assert outcomes[0].validation[0].details["path"] == "artifacts/synthesis.json"
+    assert not (tmp_path / "run_1" / "synthesis" / "artifacts" / "synthesis.json").exists()
+    assert any(event.type == "SchemaValidationFailed" for event in events.events)
+    assert model.stages["synthesis"].failure_reason == "artifact_schema_failed"
+    assert model.stages["synthesis"].safe_next_actions == [
+        "rewrite-stage",
+        "rerun-stage",
+        "revise-schema",
+        "abort",
+    ]
+
+
+def test_kernel_requires_declared_artifact_schemas_to_be_registered(tmp_path: Path):
+    output = artifact("artifacts/synthesis.json", "json", schema_id="synthesis_v1")
+    stage = StageSpec(
+        id="synthesis",
+        title="Synthesis",
+        kind="agent",
+        purpose="Turn evidence into explicit claims.",
+        outputs=(output,),
+    )
+
+    with pytest.raises(KeyError, match="Missing artifact schemas: synthesis_v1"):
+        ResearchKernel().run(_run_spec(tmp_path, stage), {"synthesis": lambda context: None})
 
 
 def test_kernel_events_project_to_canonical_run_read_model(tmp_path: Path):

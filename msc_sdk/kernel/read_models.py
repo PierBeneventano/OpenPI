@@ -25,6 +25,9 @@ class KernelArtifactReadModel:
     size_bytes: int
     checksum: str
     absolute_path: str
+    schema_id: str | None = None
+    claim_ids: list[str] = field(default_factory=list)
+    evidence_links: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -199,6 +202,9 @@ def _artifact_from_payload(payload: dict[str, Any]) -> KernelArtifactReadModel |
         kind=str(payload.get("kind") or ""),
         role=str(payload.get("role") or ""),
         required=bool(payload.get("required")),
+        schema_id=str(payload.get("schema_id") or "") or None,
+        claim_ids=[str(claim_id) for claim_id in payload.get("claim_ids") or []],
+        evidence_links=[dict(link) for link in payload.get("evidence_links") or []],
         size_bytes=int(payload.get("size_bytes") or 0),
         checksum=str(payload.get("checksum") or ""),
         absolute_path=str(payload.get("absolute_path") or ""),
