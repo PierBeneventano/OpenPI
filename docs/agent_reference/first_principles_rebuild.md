@@ -219,6 +219,7 @@ human pause policy = executable kernel behavior
 branches, joins, and loops = explicit kernel scheduling
 budget policy = enforced by RuntimeContext charges and kernel ledger
 human decisions = typed queue records with approve/reject events
+model policy = enforced by RuntimeContext model invocation
 tool policy = enforced by RuntimeContext tool invocation
 artifact truth = declared schemas + explicit claim/evidence links
 stage preconditions = declared inputs resolved before handler execution
@@ -245,6 +246,12 @@ Tools are registered with the kernel and invoked through
 `StageSpec.tool_ids`. Undeclared tool use emits `ToolDenied` and creates a human
 decision instead of silently expanding the stage's powers.
 
+Models are registered with the kernel and invoked through
+`RuntimeContext.use_model(...)`. A stage may only use models declared by its
+`ModelPolicy`, and the runtime enforces token and structured-output constraints
+before dispatch. Policy failures emit `ModelDenied` and stop for a human
+decision.
+
 Artifact schemas are registered with the kernel and attached to
 `ArtifactSpec.schema_id`. The runtime validates schema-bound artifacts before
 writing through `RuntimeContext.write_artifact(...)` and also validates directly
@@ -262,24 +269,22 @@ available through `RuntimeContext.input_artifacts`.
 ## Rebuild Order
 
 1. Expand `msc_sdk.kernel` until it can express the ideal product semantics.
-2. Add model policy enforcement for LLM/model selection.
-3. Add resume semantics on top of approved decisions.
-4. Define the ideal campaign graph in contracts, not in `graph.py`.
-5. Write pure stage handlers for planning, literature, hypothesis generation,
+2. Add durable checkpoint resume for approved human decisions.
+3. Define the ideal campaign graph in contracts, not in `graph.py`.
+4. Write pure stage handlers for planning, literature, hypothesis generation,
    experiment design, execution, synthesis, writeup, and review.
-6. Bind specialist agents as implementations of stage handlers.
-7. Bind OpenClaude and VS Code only to kernel operations/read models.
-8. Retire legacy compatibility paths after the new kernel can produce the full
+5. Bind specialist agents as implementations of stage handlers.
+6. Bind OpenClaude and VS Code only to kernel operations/read models.
+7. Retire legacy compatibility paths after the new kernel can produce the full
    research artifact set.
 
 ## Remaining Fundamental Issues
 
 The major architectural risks still to remove are:
 
-1. Model policy is declared but not yet enforced by the kernel.
-2. Approved decisions do not yet resume a paused run from a durable checkpoint.
-3. Agent implementations are not yet bound to `StageSpec` as swappable adapters.
-4. The product shell still needs to consume kernel read models directly rather
+1. Approved decisions do not yet resume a paused run from a durable checkpoint.
+2. Agent implementations are not yet bound to `StageSpec` as swappable adapters.
+3. The product shell still needs to consume kernel read models directly rather
    than historical campaign-store projections.
 
 ## Design Standard

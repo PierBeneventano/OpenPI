@@ -10,6 +10,8 @@ from msc_sdk.kernel import (
     GraphSpec,
     InputSpec,
     InMemoryEventBus,
+    ModelPolicy,
+    ModelRegistry,
     ResearchKernel,
     RouteSpec,
     RunSpec,
@@ -474,6 +476,105 @@ def test_kernel_requires_declared_tools_to_be_registered(tmp_path: Path):
 
     with pytest.raises(KeyError, match="Missing tools: experiment_runner"):
         ResearchKernel().run(_run_spec(tmp_path, stage), {"experiment": lambda context: None})
+
+
+def test_kernel_allows_only_declared_stage_models(tmp_path: Path):
+    stage = StageSpec(
+        id="writeup",
+        title="Writeup",
+        kind="agent",
+        purpose="Draft a section.",
+        model_policy=ModelPolicy(allowed_model_ids=("writer-small",), max_output_tokens=100),
+        outputs=(artifact("artifacts/writeup.md"),),
+    )
+    models = ModelRegistry()
+    models.register("writer-small", lambda prompt, max_output_tokens: f"draft: {prompt}")
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events, model_registry=models)
+
+    def handler(context):
+        result = context.use_model("writer-small", prompt="summarize results", max_output_tokens=50)
+        context.write_artifact(stage.outputs[0], result)
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"writeup": handler})
+
+    assert outcomes[0].status == "completed"
+    assert any(event.type == "ModelInvoked" for event in events.events)
+
+
+def test_kernel_denies_undeclared_model_use_and_requests_decision(tmp_path: Path):
+    stage = StageSpec(
+        id="writeup",
+        title="Writeup",
+        kind="agent",
+        purpose="Draft a section.",
+        model_policy=ModelPolicy(allowed_model_ids=("writer-small",)),
+        outputs=(artifact("artifacts/writeup.md"),),
+    )
+    models = ModelRegistry()
+    models.register("writer-small", lambda prompt: "small draft")
+    models.register("frontier-model", lambda prompt: "expensive draft")
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events, model_registry=models)
+
+    def handler(context):
+        context.use_model("frontier-model", prompt="summarize results")
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"writeup": handler})
+    model = project_run(events.events)
+
+    assert outcomes[0].status == "human_decision_required"
+    assert outcomes[0].validation[0].validator_id == "model_policy"
+    assert any(event.type == "ModelDenied" for event in events.events)
+    assert model.stages["writeup"].failure_reason == "model_policy_failed"
+    assert model.stages["writeup"].safe_next_actions == [
+        "rewrite-stage",
+        "rerun-stage",
+        "approve-model-access",
+        "abort",
+    ]
+
+
+def test_kernel_enforces_model_output_and_structured_response_policy(tmp_path: Path):
+    stage = StageSpec(
+        id="extraction",
+        title="Extraction",
+        kind="agent",
+        purpose="Extract structured claims.",
+        model_policy=ModelPolicy(
+            allowed_model_ids=("extractor",),
+            max_output_tokens=10,
+            structured_output_required=True,
+        ),
+        outputs=(artifact("artifacts/claims.json"),),
+    )
+    models = ModelRegistry()
+    models.register("extractor", lambda **kwargs: {"claims": []})
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events, model_registry=models)
+
+    def handler(context):
+        context.use_model("extractor", prompt="extract claims", max_output_tokens=20)
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"extraction": handler})
+
+    assert outcomes[0].status == "human_decision_required"
+    assert outcomes[0].validation[0].validator_id == "model_policy"
+    assert events.events[2].payload["reason"] == "max_output_tokens_exceeded"
+
+
+def test_kernel_requires_declared_models_to_be_registered(tmp_path: Path):
+    stage = StageSpec(
+        id="writeup",
+        title="Writeup",
+        kind="agent",
+        purpose="Draft a section.",
+        model_policy=ModelPolicy(allowed_model_ids=("writer-small",)),
+        outputs=(artifact("artifacts/writeup.md"),),
+    )
+
+    with pytest.raises(KeyError, match="Missing models: writer-small"):
+        ResearchKernel().run(_run_spec(tmp_path, stage), {"writeup": lambda context: None})
 
 
 def test_kernel_validates_artifact_schema_and_records_evidence_links(tmp_path: Path):

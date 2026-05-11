@@ -23,6 +23,8 @@ EventType = Literal[
     "LoopLimitReached",
     "BudgetSpent",
     "BudgetExceeded",
+    "ModelInvoked",
+    "ModelDenied",
     "ToolInvoked",
     "ToolDenied",
     "SchemaValidationPassed",
@@ -69,6 +71,10 @@ class ToolPolicyError(RuntimeError):
     """Raised when a stage attempts to use an undeclared tool."""
 
 
+class ModelPolicyError(RuntimeError):
+    """Raised when a stage attempts to use a model outside its policy."""
+
+
 class SchemaValidationError(RuntimeError):
     """Raised when artifact content fails its declared schema."""
 
@@ -78,6 +84,7 @@ class SchemaValidationError(RuntimeError):
 
 
 ToolHandler = Callable[..., Any]
+ModelHandler = Callable[..., Any]
 
 
 @dataclass(frozen=True)
@@ -123,6 +130,60 @@ class ToolRegistry:
             spec, _handler = self._tools[tool_id]
         except KeyError as exc:
             raise KeyError(f"Missing tool: {tool_id}") from exc
+        return spec
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    id: str
+    provider: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ModelPolicy:
+    allowed_model_ids: tuple[str, ...] = ()
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+    structured_output_required: bool = False
+
+
+class ModelRegistry:
+    def __init__(self) -> None:
+        self._models: dict[str, tuple[ModelSpec, ModelHandler]] = {}
+
+    def register(
+        self,
+        model_id: str,
+        handler: ModelHandler,
+        *,
+        provider: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if model_id in self._models:
+            raise ValueError(f"Model already registered: {model_id}")
+        self._models[model_id] = (
+            ModelSpec(id=model_id, provider=provider, metadata=metadata or {}),
+            handler,
+        )
+
+    def require(self, model_ids: Iterable[str]) -> None:
+        missing = [model_id for model_id in model_ids if model_id not in self._models]
+        if missing:
+            raise KeyError(f"Missing models: {', '.join(missing)}")
+
+    def invoke(self, model_id: str, **kwargs: Any) -> Any:
+        try:
+            _spec, handler = self._models[model_id]
+        except KeyError as exc:
+            raise KeyError(f"Missing model: {model_id}") from exc
+        return handler(**kwargs)
+
+    def spec(self, model_id: str) -> ModelSpec:
+        try:
+            spec, _handler = self._models[model_id]
+        except KeyError as exc:
+            raise KeyError(f"Missing model: {model_id}") from exc
         return spec
 
 
@@ -357,6 +418,7 @@ class StageSpec:
     outputs: tuple[ArtifactSpec, ...] = ()
     validator_ids: tuple[str, ...] = ()
     tool_ids: tuple[str, ...] = ()
+    model_policy: ModelPolicy = field(default_factory=ModelPolicy)
     budget: BudgetPolicy = field(default_factory=BudgetPolicy)
     failure: FailurePolicy = field(default_factory=FailurePolicy)
     routes: tuple[RouteSpec, ...] = ()
@@ -564,6 +626,7 @@ class RuntimeContext:
     decision_queue: DecisionQueue
     tool_registry: ToolRegistry
     schema_registry: SchemaRegistry
+    model_registry: ModelRegistry
     input_artifacts: tuple[ArtifactRecord, ...] = ()
 
     @property
@@ -754,6 +817,60 @@ class RuntimeContext:
             },
         )
         return result
+
+    def use_model(self, model_id: str, **kwargs: Any) -> Any:
+        denial = self._model_policy_denial(model_id, kwargs)
+        if denial:
+            self.event_bus.emit(
+                "ModelDenied",
+                run=self.run,
+                payload={
+                    "stage_id": self.stage.id,
+                    "model_id": model_id,
+                    "reason": denial,
+                },
+            )
+            raise ModelPolicyError(f"Model {model_id} is not allowed for stage {self.stage.id}: {denial}")
+        result = self.model_registry.invoke(model_id, **kwargs)
+        self.event_bus.emit(
+            "ModelInvoked",
+            run=self.run,
+            payload={
+                "stage_id": self.stage.id,
+                "model_id": model_id,
+                "input_tokens": self._requested_input_tokens(kwargs),
+                "max_output_tokens": kwargs.get("max_output_tokens"),
+            },
+        )
+        return result
+
+    def _model_policy_denial(self, model_id: str, kwargs: dict[str, Any]) -> str:
+        policy = self.stage.model_policy
+        if model_id not in policy.allowed_model_ids:
+            return "model_not_declared_for_stage"
+        input_tokens = self._requested_input_tokens(kwargs)
+        if policy.max_input_tokens is not None and input_tokens > policy.max_input_tokens:
+            return "max_input_tokens_exceeded"
+        requested_output_tokens = kwargs.get("max_output_tokens")
+        if (
+            policy.max_output_tokens is not None
+            and requested_output_tokens is not None
+            and int(requested_output_tokens) > policy.max_output_tokens
+        ):
+            return "max_output_tokens_exceeded"
+        if policy.structured_output_required and not kwargs.get("response_schema"):
+            return "structured_output_required"
+        return ""
+
+    @staticmethod
+    def _requested_input_tokens(kwargs: dict[str, Any]) -> int:
+        explicit = kwargs.get("input_tokens")
+        if explicit is not None:
+            return int(explicit)
+        prompt = kwargs.get("prompt")
+        if isinstance(prompt, str):
+            return max(1, len(prompt.split()))
+        return 0
 
 
 def artifact_record_for_file(stage_id: str, artifact: ArtifactSpec, path: Path) -> ArtifactRecord:

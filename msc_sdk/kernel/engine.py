@@ -14,6 +14,8 @@ from .models import (
     EvidenceLink,
     InputSpec,
     InMemoryEventBus,
+    ModelPolicyError,
+    ModelRegistry,
     RunSpec,
     RuntimeContext,
     SchemaRegistry,
@@ -49,6 +51,7 @@ class ResearchKernel:
         decision_queue: DecisionQueue | None = None,
         tool_registry: ToolRegistry | None = None,
         schema_registry: SchemaRegistry | None = None,
+        model_registry: ModelRegistry | None = None,
         max_stage_executions: int = 100,
     ) -> None:
         self.validators = validators or ValidatorRegistry()
@@ -57,6 +60,7 @@ class ResearchKernel:
         self.decision_queue = decision_queue or DecisionQueue()
         self.tool_registry = tool_registry or ToolRegistry()
         self.schema_registry = schema_registry or SchemaRegistry()
+        self.model_registry = model_registry or ModelRegistry()
         self.max_stage_executions = max_stage_executions
         self._runs: dict[str, RunSpec] = {}
 
@@ -67,6 +71,7 @@ class ResearchKernel:
         self._validate_validators(run)
         self._validate_tools(run)
         self._validate_schemas(run)
+        self._validate_models(run)
         run.workspace.mkdir(parents=True, exist_ok=True)
         self.event_bus.emit(
             "RunStarted",
@@ -149,6 +154,7 @@ class ResearchKernel:
                 decision_queue=self.decision_queue,
                 tool_registry=self.tool_registry,
                 schema_registry=self.schema_registry,
+                model_registry=self.model_registry,
                 input_artifacts=input_artifacts,
             )
             outcome = self.run_stage(context, handlers[stage_id])
@@ -252,6 +258,25 @@ class ResearchKernel:
                 stage_id=stage.id,
                 reason="tool_policy_failed",
                 safe_next_actions=["rewrite-stage", "rerun-stage", "approve-tool-access", "abort"],
+                metadata={"validation": [result.__dict__]},
+            )
+            return StageOutcome(
+                stage_id=stage.id,
+                validation=(result,),
+                status="human_decision_required",
+                route_conditions=self._route_conditions(None),
+            )
+        except ModelPolicyError as exc:
+            result = ValidationResult(
+                validator_id="model_policy",
+                passed=False,
+                message=str(exc),
+            )
+            self._request_decision(
+                run=run,
+                stage_id=stage.id,
+                reason="model_policy_failed",
+                safe_next_actions=["rewrite-stage", "rerun-stage", "approve-model-access", "abort"],
                 metadata={"validation": [result.__dict__]},
             )
             return StageOutcome(
@@ -413,6 +438,12 @@ class ResearchKernel:
                 if artifact.schema_id is not None
             )
         self.schema_registry.require(schema_ids)
+
+    def _validate_models(self, run: RunSpec) -> None:
+        model_ids: list[str] = []
+        for stage in run.graph.stages:
+            model_ids.extend(stage.model_policy.allowed_model_ids)
+        self.model_registry.require(model_ids)
 
     def _resolve_inputs(
         self,
