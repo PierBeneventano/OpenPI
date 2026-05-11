@@ -22,6 +22,9 @@ venv/
 *.swo
 .DS_Store
 
+# Node/webview dependencies
+node_modules/
+
 # MSc project-local config
 .msc/
 .msc_index/
@@ -44,6 +47,7 @@ tmp/
 # Local private data (never commit)
 .local/
 private_token_usage/
+campaigns/
 
 # Model files
 *.pth

@@ -1,3 +1,4 @@
 node_modules/
+webview-ui/node_modules/
 test/
 *.log

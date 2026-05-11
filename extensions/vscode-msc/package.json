@@ -1,7 +1,7 @@
 {
   "name": "msc-dashboard",
   "displayName": "MSc Dashboard",
-  "description": "Read-only Remote SSH dashboard for PoggioAI/MSc runs, campaigns, events, and readiness.",
+  "description": "Campaign-centered VS Code console for local PoggioAI/MSc research workflows.",
   "version": "0.1.0",
   "publisher": "poggio-ai",
   "engines": {
@@ -23,6 +23,15 @@
     ]
   },
   "scripts": {
-    "test": "node --check extension.js && node test/smoke.js"
+    "build": "vite build --config webview-ui/vite.config.mjs",
+    "check": "node --check extension.js && node test/smoke.js",
+    "test": "npm run build && npm run check"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   }
 }

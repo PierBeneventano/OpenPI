@@ -114,6 +114,17 @@ def preset_to_argv(preset: Preset, task: str, **overrides: object) -> list[str]:
     if start_from:
         argv.extend(["--start-from-stage", str(start_from)])
 
+    # Campaign attachment
+    campaign_id = overrides.pop("campaign_id", None)
+    if campaign_id:
+        argv.extend(["--campaign-id", str(campaign_id)])
+    campaign_root = overrides.pop("campaign_root", None)
+    if campaign_root:
+        argv.extend(["--campaign-root", str(campaign_root)])
+    campaign_graph_version = overrides.pop("campaign_graph_version", None)
+    if campaign_graph_version:
+        argv.extend(["--campaign-graph-version", str(campaign_graph_version)])
+
     # Mode override
     mode = overrides.pop("mode", None)
     if mode:

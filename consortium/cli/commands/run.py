@@ -40,7 +40,7 @@ def _should_use_repo_env(project_root: Path | None) -> bool:
     "--tier", "-t",
     type=click.Choice(list(TIER_ORDER)),
     default=None,
-    help="Price tier: budget ($20-50), light ($50-100), medium ($100-300), pro ($300-500), max ($500+).",
+    help="Price tier: live-smoke ($1-5), budget ($20-50), light ($50-100), medium ($100-300), pro ($300-500), max ($500+).",
 )
 @click.option(
     "--preset", "-p",
@@ -60,6 +60,9 @@ def _should_use_repo_env(project_root: Path | None) -> bool:
 @click.option("--tree-search/--no-tree-search", default=None, help="Enable/disable tree search.")
 @click.option("--max-run-seconds", type=int, default=None, help="Hard timeout in seconds.")
 @click.option("--stream/--no-stream", default=True, help="Enable/disable streaming display.")
+@click.option("--campaign-id", type=str, default=None, help="Attach this run to a local-first campaign id.")
+@click.option("--campaign-root", type=click.Path(), default=None, help="Workspace root containing .msc/campaigns.db.")
+@click.option("--campaign-graph-version", type=int, default=None, help="Graph snapshot version being executed.")
 @click.option(
     "--iterate", "-i", type=click.Path(exists=True), default=None,
     help="Path to directory with prior paper (.tex/.pdf) + feedback (.md/.tex) for revision mode.",
@@ -82,6 +85,9 @@ def run(
     tree_search: bool | None,
     max_run_seconds: int | None,
     stream: bool,
+    campaign_id: str | None,
+    campaign_root: str | None,
+    campaign_graph_version: int | None,
     iterate: str | None,
     iterate_start_stage: str | None,
 ) -> None:
@@ -213,6 +219,12 @@ def run(
         overrides["mode"] = effective_mode
     if max_run_seconds:
         overrides["max_run_seconds"] = max_run_seconds
+    if campaign_id:
+        overrides["campaign_id"] = campaign_id
+    if campaign_root:
+        overrides["campaign_root"] = campaign_root
+    if campaign_graph_version:
+        overrides["campaign_graph_version"] = campaign_graph_version
     if effective_counsel is True:
         overrides["enable_counsel"] = True
         overrides["no_counsel"] = False
@@ -295,6 +307,17 @@ def run(
     )
     if project_root is not None:
         env["CONSORTIUM_PROJECT_ROOT"] = str(project_root)
+    if selected_tier.name == "live-smoke":
+        from consortium.models import get_openrouter_name
+
+        cheap_model = f"openrouter/{get_openrouter_name(effective_model)}"
+        env.setdefault("DEEP_RESEARCH_MODEL", cheap_model)
+        env.setdefault("OPENDEEPSEARCH_MODEL", cheap_model)
+        env.setdefault("OPENDEEPSEARCH_FALLBACK_MODEL", cheap_model)
+        env.setdefault("DEEP_RESEARCH_MAX_PAPERS", "3")
+        env.setdefault("DEEP_RESEARCH_MAX_TOKENS", "2048")
+        env.setdefault("CONSORTIUM_VLM_MODEL", cheap_model)
+        env.setdefault("CONSORTIUM_LIVE_SMOKE", "1")
 
     # Use streaming display if available and requested
     use_streaming = stream and not dry_run and not quiet and sys.stdout.isatty()

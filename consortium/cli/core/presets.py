@@ -60,6 +60,46 @@ class Preset:
 # ── Tier definitions ───────────────────────────────────────────────────
 
 TIERS: dict[str, Preset] = {
+    "live-smoke": Preset(
+        name="live-smoke",
+        tier_label="LiveSmoke",
+        budget_range="$1-5",
+        description="Live OpenRouter node smoke test — cheapest single-model path",
+        output_format="markdown",
+        model="deepseek-chat",
+        budget_usd=2,
+        reasoning_effort="low",
+        budget_tokens=None,
+        enable_counsel=False,
+        no_counsel=True,
+        enable_math_agents=False,
+        enable_tree_search=False,
+        adversarial_verification=False,
+        enable_planning=False,
+        enforce_paper_artifacts=False,
+        enforce_editorial_artifacts=False,
+        autonomous_mode=True,
+        time_estimate="~10-30 min",
+        cost_estimate="$1-5",
+        counsel_debate_rounds=1,
+        persona_post_vote_retries=0,
+        followup_max_iterations=1,
+        max_rebuttal_iterations=0,
+        min_review_score=1,
+        manager_max_steps=25,
+        theory_repair_max_attempts=0,
+        duality_max_attempts=0,
+        max_validation_retries=0,
+        experiment_tool_models=(
+            ("code_model", "deepseek-chat"),
+            ("feedback_model", "deepseek-chat"),
+            ("vlm_model", "deepseek-chat"),
+            ("report_model", "deepseek-chat"),
+        ),
+        persona_council_specs=(
+            {"name": "smoke_researcher", "model": "deepseek-chat", "model_kwargs": {}},
+        ),
+    ),
     "budget": Preset(
         name="budget",
         tier_label="Budget",
@@ -368,7 +408,7 @@ TIERS: dict[str, Preset] = {
     ),
 }
 
-TIER_ORDER = ("budget", "light", "medium", "pro", "max", "ultra")
+TIER_ORDER = ("live-smoke", "budget", "light", "medium", "pro", "max", "ultra")
 
 # ── Backward compatibility ─────────────────────────────────────────────
 

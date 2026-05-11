@@ -144,6 +144,27 @@ Examples:
         ),
     )
 
+    parser.add_argument(
+        "--campaign-id",
+        type=str,
+        default=None,
+        help="Attach this run to a local-first campaign id in .msc/campaigns.db.",
+    )
+
+    parser.add_argument(
+        "--campaign-root",
+        type=str,
+        default=None,
+        help="Workspace root containing .msc/campaigns.db for --campaign-id.",
+    )
+
+    parser.add_argument(
+        "--campaign-graph-version",
+        type=int,
+        default=None,
+        help="Graph snapshot version this run is executing.",
+    )
+
     # -----------------------------------------------------------------
     # Iterate mode (revision from prior paper + feedback)
     # -----------------------------------------------------------------

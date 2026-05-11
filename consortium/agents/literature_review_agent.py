@@ -46,7 +46,11 @@ def get_tools(workspace_dir: Optional[str], model_id: str) -> list:
     if OpenDeepSearchTool is not None:
         tools.insert(2, _reg.get_or_create(OpenDeepSearchTool, model_name=model_id))
     else:
-        print("[literature_review_agent] INFO: OpenDeepSearchTool disabled — using OpenRouterDeepResearchTool (Perplexity sonar-deep-research) as primary.")
+        research_model = os.getenv("DEEP_RESEARCH_MODEL", "openrouter/perplexity/sonar-deep-research")
+        print(
+            "[literature_review_agent] INFO: OpenDeepSearchTool disabled - "
+            f"using OpenRouterDeepResearchTool ({research_model}) as primary."
+        )
     if DeepResearchNoveltyScanTool is not None:
         tools.insert(3, _reg.get_or_create(DeepResearchNoveltyScanTool, model_name=model_id))
     else:

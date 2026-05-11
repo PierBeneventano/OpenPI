@@ -70,6 +70,7 @@ from .workflow_utils import (
     run_validation_gates,
     safe_int,
 )
+from msc_sdk.stage_runtime import StageRunContext, materialize_stage_outputs
 
 MATH_PIPELINE_STAGES = [
     "math_literature_agent",
@@ -132,6 +133,30 @@ def build_pipeline_stages_v2(enable_math_agents: bool) -> list[str]:
     stages.extend(EXPERIMENT_PIPELINE_STAGES)
     stages.extend(V2_POST_TRACK_STAGES)
     return stages
+
+
+def _emit_campaign_node_status(workspace_dir: str, node_id: str, status: str, extra: dict | None = None) -> None:
+    """Best-effort bridge from the historical runner into campaign events."""
+    campaign_id = os.getenv("MSC_CAMPAIGN_ID")
+    campaign_root = os.getenv("MSC_CAMPAIGN_ROOT") or os.getenv("CONSORTIUM_PROJECT_ROOT")
+    if not campaign_id or not campaign_root:
+        return
+    try:
+        from msc_sdk.campaign_store import CampaignStore
+
+        CampaignStore(campaign_root).update_node_status(
+            campaign_id,
+            node_id,
+            status,
+            actor="runner",
+            payload={
+                "workspace_dir": workspace_dir,
+                "run_id": os.getenv("MSC_CAMPAIGN_RUN_ID"),
+                **(extra or {}),
+            },
+        )
+    except Exception:
+        logger.debug("Failed to emit campaign node status for %s", node_id, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -416,29 +441,37 @@ def build_formalize_goals_entry_node(workspace_dir: str) -> Any:
     """
 
     def formalize_goals_entry_node(state: dict) -> dict:
-        paper_ws = os.path.join(workspace_dir, "paper_workspace")
-        brainstorm_json_exists = os.path.exists(
-            os.path.join(paper_ws, "brainstorm.json")
-        )
-        brainstorm_md_exists = os.path.exists(
-            os.path.join(paper_ws, "brainstorm.md")
-        )
+        brainstorm_md_path, brainstorm_json_path, md_label, json_label = _brainstorm_artifact_paths(workspace_dir)
+        brainstorm_json_exists = os.path.exists(brainstorm_json_path)
+        brainstorm_md_exists = os.path.exists(brainstorm_md_path)
 
         if brainstorm_json_exists and brainstorm_md_exists:
             task = (
                 "BEGIN GOAL FORMALIZATION.\n\n"
-                "The brainstorm is complete. `brainstorm.json` and `brainstorm.md` "
-                "are available in `paper_workspace/`. Read them along with "
-                "`research_proposal.md` and formalize the research goals into "
-                "`research_goals.json` and `track_decomposition.json`. "
+                "The brainstorm is complete. Read the canonical campaign artifacts "
+                f"`{json_label}` and `{md_label}`. Use them with the research "
+                "proposal artifact and formalize the research goals into the "
+                "stage's required contract artifacts. "
                 "Run all programmatic validations before returning."
             )
+            ctx = StageRunContext.from_env("formalize_goals_entry")
+            if ctx is not None:
+                ctx.write_required(
+                    "artifacts/formalize_goals_entry.json",
+                    {
+                        "brainstorm_md": md_label,
+                        "approach_menu": json_label,
+                        "ready": True,
+                    },
+                    kind="json",
+                    metadata={"run_id": ctx.run_id},
+                )
         else:
             missing = []
             if not brainstorm_json_exists:
-                missing.append("paper_workspace/brainstorm.json")
+                missing.append(json_label)
             if not brainstorm_md_exists:
-                missing.append("paper_workspace/brainstorm.md")
+                missing.append(md_label)
             return {
                 "critical_failure": (
                     "formalize_goals_agent requires brainstorm artifacts in strict "
@@ -453,38 +486,51 @@ def build_formalize_goals_entry_node(workspace_dir: str) -> Any:
     return formalize_goals_entry_node
 
 
+def _brainstorm_artifact_paths(workspace_dir: str) -> tuple[str, str, str, str]:
+    ctx = StageRunContext.from_env("brainstorm_agent")
+    if ctx is not None:
+        md = str(ctx.artifact_path("artifacts/brainstorm.md"))
+        menu = str(ctx.artifact_path("artifacts/approach_menu.json"))
+        return md, menu, "artifacts/brainstorm.md", "artifacts/approach_menu.json"
+    paper_ws = os.path.join(workspace_dir, "paper_workspace")
+    return (
+        os.path.join(paper_ws, "brainstorm.md"),
+        os.path.join(paper_ws, "brainstorm.json"),
+        "paper_workspace/brainstorm.md",
+        "paper_workspace/brainstorm.json",
+    )
+
+
 def _validate_brainstorm_artifacts(workspace_dir: str) -> list[str]:
     errors: list[str] = []
-    paper_ws = os.path.join(workspace_dir, "paper_workspace")
-    brainstorm_md_path = os.path.join(paper_ws, "brainstorm.md")
-    brainstorm_json_path = os.path.join(paper_ws, "brainstorm.json")
+    brainstorm_md_path, brainstorm_json_path, md_label, json_label = _brainstorm_artifact_paths(workspace_dir)
 
     if not os.path.exists(brainstorm_md_path):
-        errors.append("paper_workspace/brainstorm.md")
+        errors.append(md_label)
     else:
         try:
             brainstorm_md = open(brainstorm_md_path, "r", encoding="utf-8").read()
         except Exception as exc:
             brainstorm_md = ""
-            errors.append(f"paper_workspace/brainstorm.md unreadable: {exc}")
+            errors.append(f"{md_label} unreadable: {exc}")
         if not brainstorm_md.strip():
-            errors.append("paper_workspace/brainstorm.md is empty")
+            errors.append(f"{md_label} is empty")
         for section in _BRAINSTORM_REQUIRED_MD_SECTIONS:
             if section not in brainstorm_md:
                 errors.append(
-                    "paper_workspace/brainstorm.md missing required section "
+                    f"{md_label} missing required section "
                     f"'{section}'"
                 )
 
     payload: Optional[dict] = None
     if not os.path.exists(brainstorm_json_path):
-        errors.append("paper_workspace/brainstorm.json")
+        errors.append(json_label)
     else:
         try:
             with open(brainstorm_json_path, "r", encoding="utf-8") as fh:
                 payload = json.load(fh)
         except Exception as exc:
-            errors.append(f"paper_workspace/brainstorm.json is not valid JSON: {exc}")
+            errors.append(f"{json_label} is not valid JSON: {exc}")
 
     if isinstance(payload, dict):
         hypotheses = payload.get("hypotheses_addressed")
@@ -492,19 +538,19 @@ def _validate_brainstorm_artifacts(workspace_dir: str) -> list[str]:
             isinstance(item, str) and item.strip() for item in hypotheses
         ):
             errors.append(
-                "paper_workspace/brainstorm.json missing non-empty hypotheses_addressed list"
+                f"{json_label} missing non-empty hypotheses_addressed list"
             )
 
         approaches = payload.get("approaches")
         if not isinstance(approaches, list) or not approaches:
             errors.append(
-                "paper_workspace/brainstorm.json missing non-empty approaches list"
+                f"{json_label} missing non-empty approaches list"
             )
         else:
             for idx, approach in enumerate(approaches, start=1):
                 if not isinstance(approach, dict):
                     errors.append(
-                        "paper_workspace/brainstorm.json approach entry "
+                        f"{json_label} approach entry "
                         f"#{idx} must be a JSON object"
                     )
                     continue
@@ -516,18 +562,18 @@ def _validate_brainstorm_artifacts(workspace_dir: str) -> list[str]:
                             isinstance(item, str) and item.strip() for item in value
                         ):
                             errors.append(
-                                "paper_workspace/brainstorm.json "
+                                f"{json_label} "
                                 f"{label} missing non-empty '{field}'"
                             )
                     elif field == "priority_rank":
                         if value is None or (isinstance(value, str) and not value.strip()):
                             errors.append(
-                                "paper_workspace/brainstorm.json "
+                                f"{json_label} "
                                 f"{label} missing '{field}'"
                             )
                     elif not isinstance(value, str) or not value.strip():
                         errors.append(
-                            "paper_workspace/brainstorm.json "
+                            f"{json_label} "
                             f"{label} missing non-empty '{field}'"
                         )
 
@@ -539,6 +585,7 @@ def build_brainstorm_artifact_gate_node(
 ) -> Any:
     def brainstorm_artifact_gate_node(state: dict) -> dict:
         errors = _validate_brainstorm_artifacts(workspace_dir)
+        gate_ctx = StageRunContext.from_env("brainstorm_artifact_gate")
         validation_results = {
             **state.get("validation_results", {}),
             "brainstorm_artifact_gate": {
@@ -572,12 +619,12 @@ def build_brainstorm_artifact_gate_node(
                 "current_agent": "brainstorm_agent",
                 "agent_task": (
                     "BRAINSTORM ARTIFACT GATE FAILURE.\n\n"
-                    "Repair only the canonical brainstorm artifacts in `paper_workspace/`.\n"
+                    "Repair only the canonical brainstorm artifacts for this campaign run.\n"
                     "Do not restart the whole pipeline, do not hand off to formalization yet, "
                     "and do not treat files under `stage_summaries/` as completion evidence.\n"
                     "Before you finish, verify that:\n"
-                    "- `paper_workspace/brainstorm.md` exists and includes the required sections\n"
-                    "- `paper_workspace/brainstorm.json` exists and parses as valid JSON\n"
+                    "- `artifacts/brainstorm.md` exists and includes the required sections\n"
+                    "- `artifacts/approach_menu.json` exists and parses as valid JSON\n"
                     "- the JSON has a non-empty `hypotheses_addressed` list and non-empty "
                     "`approaches` list\n"
                     "- every approach has `id`, `title`, `type`, `hypothesis_ids`, and "
@@ -587,6 +634,13 @@ def build_brainstorm_artifact_gate_node(
             }
 
         validation_results.pop("brainstorm_artifact_gate", None)
+        if gate_ctx is not None:
+            gate_ctx.write_required(
+                "artifacts/brainstorm_gate_decision.json",
+                {"is_valid": True, "errors": [], "next": "formalize_goals_entry"},
+                kind="json",
+                metadata={"run_id": gate_ctx.run_id},
+            )
         return {
             "validation_results": validation_results,
             "brainstorm_artifact_retries": 0,
@@ -1135,7 +1189,22 @@ def build_theory_track_subgraph(
         return model
 
     def _wrap(node, name):
-        return with_pdf_summary(node, name, workspace_dir, summary_model_id)
+        summarized = with_pdf_summary(node, name, workspace_dir, summary_model_id)
+
+        def contract_materializing_node(state: dict) -> dict:
+            result = summarized(state) or {}
+            try:
+                return materialize_stage_outputs(name, state, result)
+            except Exception as exc:
+                logger.exception("Failed to materialize contract artifacts for %s", name)
+                return {
+                    **result,
+                    "critical_failure": f"{name} failed to write contract artifacts: {exc}",
+                    "agent_task": None,
+                }
+
+        contract_materializing_node.__name__ = getattr(summarized, "__name__", name)
+        return contract_materializing_node
 
     graph.add_node(
         "math_literature_agent",
@@ -1328,7 +1397,22 @@ def build_experiment_track_subgraph(
         return model
 
     def _wrap(node, name):
-        return with_pdf_summary(node, name, workspace_dir, summary_model_id)
+        summarized = with_pdf_summary(node, name, workspace_dir, summary_model_id)
+
+        def contract_materializing_node(state: dict) -> dict:
+            result = summarized(state) or {}
+            try:
+                return materialize_stage_outputs(name, state, result)
+            except Exception as exc:
+                logger.exception("Failed to materialize contract artifacts for %s", name)
+                return {
+                    **result,
+                    "critical_failure": f"{name} failed to write contract artifacts: {exc}",
+                    "agent_task": None,
+                }
+
+        contract_materializing_node.__name__ = getattr(summarized, "__name__", name)
+        return contract_materializing_node
 
     graph.add_node(
         "experiment_literature_agent",
@@ -1512,6 +1596,47 @@ def build_lit_review_gate_node(workspace_dir: str, max_attempts: int = 2) -> Any
     def lit_review_gate_node(state: dict) -> dict:
         import re as _re
         attempts = safe_int(state.get("lit_review_attempts", 0), 0)
+        gate_ctx = StageRunContext.from_env("lit_review_gate")
+        lit_ctx = StageRunContext.from_env("literature_review_agent")
+
+        if gate_ctx is not None and lit_ctx is not None:
+            feasibility_path = lit_ctx.artifact_path("artifacts/lit_review_feasibility.json")
+            feasible = True
+            reason = "Contract-native literature review artifacts are present."
+            if feasibility_path.exists():
+                try:
+                    feasibility = json.loads(feasibility_path.read_text(encoding="utf-8"))
+                    feasible = bool(feasibility.get("feasible", True))
+                    reason = str(feasibility.get("rationale") or feasibility.get("reason") or reason)
+                except Exception as exc:
+                    feasible = False
+                    reason = f"failed to parse {feasibility_path.name}: {exc}"
+            else:
+                feasible = False
+                reason = "missing artifacts/lit_review_feasibility.json"
+
+            gate_ctx.write_required(
+                "artifacts/lit_review_gate_decision.json",
+                {
+                    "feasible": feasible,
+                    "reason": reason,
+                    "next": "brainstorm_agent" if feasible else "persona_council",
+                },
+                kind="json",
+                metadata={"run_id": gate_ctx.run_id},
+            )
+            if feasible:
+                return {
+                    "current_agent": "brainstorm_agent",
+                    "lit_review_feasibility": {"feasible": True, "reason": reason},
+                    "agent_task": None,
+                }
+            return {
+                "current_agent": "persona_council",
+                "lit_review_feasibility": {"feasible": False, "reason": reason},
+                "agent_task": f"LITERATURE FEASIBILITY GATE FAILED.\n\n{reason}",
+                "lit_review_attempts": attempts + 1,
+            }
 
         paper_ws = os.path.join(workspace_dir, "paper_workspace")
         lit_text = _read_file_safe(os.path.join(paper_ws, "literature_review.tex"))
@@ -2209,10 +2334,26 @@ def build_research_graph_v2(config: "ResearchGraphConfig"):
     }
 
     def _wrap(node, name):
-        return with_pdf_summary(node, name, workspace_dir, summary_model_id)
+        summarized = with_pdf_summary(node, name, workspace_dir, summary_model_id)
+
+        def contract_materializing_node(state: dict) -> dict:
+            result = summarized(state) or {}
+            try:
+                return materialize_stage_outputs(name, state, result)
+            except Exception as exc:
+                logger.exception("Failed to materialize contract artifacts for %s", name)
+                return {
+                    **result,
+                    "critical_failure": f"{name} failed to write contract artifacts: {exc}",
+                    "agent_task": None,
+                }
+
+        contract_materializing_node.__name__ = getattr(summarized, "__name__", name)
+        return contract_materializing_node
 
     def _track_stage_execution(node, name):
         def wrapped(state: dict) -> dict:
+            status_payload = {}
             if name in tracked_stage_index:
                 write_run_status(
                     workspace_dir,
@@ -2220,8 +2361,33 @@ def build_research_graph_v2(config: "ResearchGraphConfig"):
                     current_stage=name,
                     pid=os.getpid(),
                 )
-            result = node(state) or {}
+                status_payload["pipeline_stage_index"] = tracked_stage_index[name]
+            _emit_campaign_node_status(
+                workspace_dir,
+                name,
+                "running",
+                status_payload,
+            )
+            try:
+                result = node(state) or {}
+            except Exception as exc:
+                _emit_campaign_node_status(
+                    workspace_dir,
+                    name,
+                    "failed",
+                    {"error": str(exc), "human_decision_required": True, **status_payload},
+                )
+                raise
+            if result.get("critical_failure"):
+                _emit_campaign_node_status(
+                    workspace_dir,
+                    name,
+                    "failed",
+                    {"error": str(result.get("critical_failure")), "human_decision_required": True, **status_payload},
+                )
+                return result
             if name not in tracked_stage_index:
+                _emit_campaign_node_status(workspace_dir, name, "completed", status_payload)
                 return result
             update = dict(result)
             executed = list(update.get("executed_stages") or [])
@@ -2229,6 +2395,12 @@ def build_research_graph_v2(config: "ResearchGraphConfig"):
             update["executed_stages"] = executed
             prior_index = safe_int(state.get("pipeline_stage_index", 0), 0)
             update["pipeline_stage_index"] = max(prior_index, tracked_stage_index[name])
+            _emit_campaign_node_status(
+                workspace_dir,
+                name,
+                "completed",
+                {"pipeline_stage_index": tracked_stage_index[name]},
+            )
             return update
 
         wrapped.__name__ = getattr(node, "__name__", name)

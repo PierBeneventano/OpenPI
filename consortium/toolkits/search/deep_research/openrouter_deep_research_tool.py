@@ -158,6 +158,8 @@ class OpenRouterDeepResearchTool(BaseTool):
         Returns a JSON string with keys:
             query, papers, bibtex_entries, total_found, search_summary
         """
+        if os.getenv("CONSORTIUM_LIVE_SMOKE", "").strip().lower() in {"1", "true", "yes"}:
+            max_papers = min(max_papers, int(os.getenv("DEEP_RESEARCH_MAX_PAPERS", "3")))
         # Check response cache first
         ck = _cache_key(query, max_papers, focus_area)
         cached = _cache_get(ck)
@@ -177,13 +179,14 @@ class OpenRouterDeepResearchTool(BaseTool):
 
         # --- Stage 1: Perplexity discovery ---
         try:
+            max_tokens = int(os.getenv("DEEP_RESEARCH_MAX_TOKENS", "16384"))
             resp = litellm.completion(
                 model=model_id,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=16384,
+                max_tokens=max_tokens,
             )
             raw_content = resp.choices[0].message.content or ""
         except Exception as e:

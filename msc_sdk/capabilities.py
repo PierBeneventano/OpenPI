@@ -20,6 +20,7 @@ READ_CAPABILITIES = {
 WRITE_CAPABILITIES = {
     "write.index",
     "write.feedback",
+    "write.campaigns",
 }
 
 MUTATE_CAPABILITIES = {
@@ -35,8 +36,8 @@ MUTATE_CAPABILITIES = {
 
 PROFILE_CAPABILITIES = {
     "read_only": READ_CAPABILITIES,
-    "default": READ_CAPABILITIES | {"write.index"},
-    "openclaude_v1": READ_CAPABILITIES | {"write.index", "write.feedback"},
+    "default": READ_CAPABILITIES | {"write.index", "write.campaigns"},
+    "openclaude_v1": READ_CAPABILITIES | {"write.index", "write.feedback", "write.campaigns"},
     "openclaw_read_only": READ_CAPABILITIES,
 }
 
@@ -51,6 +52,7 @@ CAPABILITY_DESCRIPTIONS = {
     "read.capabilities": "Read capability profiles and explanations.",
     "write.index": "Write derived indexes under approved product-shell locations.",
     "write.feedback": "Append human feedback without mutating historical artifacts.",
+    "write.campaigns": "Create, import, export, and approve local campaign workspace state.",
     "mutate.launch": "Launch a run, campaign, or stage through preserved entry points.",
     "mutate.resume": "Resume an existing run through preserved entry points.",
     "mutate.repair": "Repair a failed stage through preserved campaign behavior.",

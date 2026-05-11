@@ -18,6 +18,8 @@ import shutil
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
+from .models import get_openrouter_name
+
 
 # ---------------------------------------------------------------------------
 # Human-readable display names for each agent
@@ -48,6 +50,13 @@ AGENT_DISPLAY_NAMES: dict[str, str] = {
 
 # Maximum characters of agent output sent to the formatting LLM.
 _MAX_OUTPUT_CHARS = 50_000
+
+
+def _normalize_model_for_litellm(model_id: str) -> str:
+    """Normalize internal model names for direct LiteLLM/OpenRouter calls."""
+    if model_id.startswith("openrouter/"):
+        return model_id
+    return f"openrouter/{get_openrouter_name(model_id)}"
 
 # ---------------------------------------------------------------------------
 # pdflatex discovery (mirrors LaTeXCompilerTool logic)
@@ -240,8 +249,9 @@ AGENT OUTPUT TO FORMAT:
                   "``\\textit{{(Output truncated — see full pipeline state for complete text.)}}''"
 
     try:
+        litellm_model_id = _normalize_model_for_litellm(model_id)
         resp = litellm.completion(
-            model=model_id,
+            model=litellm_model_id,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=16384,
         )

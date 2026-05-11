@@ -9,6 +9,7 @@ from .artifacts import inspect_campaign, inspect_run_workspace, list_run_workspa
 from .budget import read_budget_workspace
 from .capabilities import CapabilityClient
 from .campaigns import CampaignClient
+from .campaign_store import CampaignStore
 from .events import EventStore
 from .harness import ActionRequest, OrchestratorHarness
 from .manifest import ManifestImportResult, import_manifest, read_manifest, write_manifest
@@ -25,6 +26,7 @@ from .read_models import (
 )
 from .runs import RunClient
 from .setup_state import SetupState
+from .stage_contracts import StageContract, historical_stage_contracts, validate_contract_coverage
 from .validation import ValidationClient
 
 __all__ = [
@@ -33,6 +35,7 @@ __all__ = [
     "ActionRequest",
     "CapabilityClient",
     "CampaignClient",
+    "CampaignStore",
     "CampaignReadModel",
     "EventStore",
     "LogReadModel",
@@ -44,8 +47,10 @@ __all__ = [
     "RunClient",
     "RunReadModel",
     "SetupState",
+    "StageContract",
     "StageReadModel",
     "ValidationClient",
+    "historical_stage_contracts",
     "import_manifest",
     "inspect_campaign",
     "inspect_project",
@@ -54,5 +59,6 @@ __all__ = [
     "read_manifest",
     "read_budget_workspace",
     "project_readiness",
+    "validate_contract_coverage",
     "write_manifest",
 ]

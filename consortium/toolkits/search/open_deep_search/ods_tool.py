@@ -45,9 +45,14 @@ class OpenDeepSearchTool(BaseTool):
         search_provider: Literal["serper", "searxng"] = "serper",
         **kwargs,
     ):
+        selected_perplexity_model = (
+            os.getenv("OPENDEEPSEARCH_MODEL")
+            or os.getenv("DEEP_RESEARCH_MODEL")
+            or perplexity_model
+        )
         super().__init__(
             model_name=model_name,
-            perplexity_model=perplexity_model,
+            perplexity_model=selected_perplexity_model,
             **kwargs,
         )
         self._use_perplexity = bool(os.getenv("OPENROUTER_API_KEY"))
@@ -121,8 +126,13 @@ class OpenDeepSearchTool(BaseTool):
         except Exception as e:
             # Fall back to a lighter Perplexity model
             try:
+                fallback_model = (
+                    os.getenv("OPENDEEPSEARCH_FALLBACK_MODEL")
+                    or os.getenv("DEEP_RESEARCH_MODEL")
+                    or "openrouter/perplexity/sonar-pro"
+                )
                 resp = litellm.completion(
-                    model="openrouter/perplexity/sonar-pro",
+                    model=fallback_model,
                     messages=[{"role": "user", "content": query}],
                     max_tokens=4096,
                     timeout=60,

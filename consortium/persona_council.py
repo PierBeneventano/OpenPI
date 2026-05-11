@@ -669,8 +669,8 @@ def create_persona_council_node(
     Return a LangGraph node callable that runs the persona council.
 
     The node reads ``state["task"]``, invokes :func:`run_persona_council`,
-    writes the proposal and verdicts to ``paper_workspace/``, and returns
-    a state-update dict.
+    writes campaign-attached artifacts through the contract runtime when
+    available, and returns a state-update dict.
     """
 
     def persona_council_node(state: dict) -> dict:
@@ -686,23 +686,59 @@ def create_persona_council_node(
             max_post_vote_retries=max_post_vote_retries,
         )
 
-        # Write artifacts to paper_workspace
-        paper_ws = os.path.join(workspace_dir, "paper_workspace")
-        os.makedirs(paper_ws, exist_ok=True)
-
-        proposal_path = os.path.join(paper_ws, "research_proposal.md")
+        proposal_path = ""
+        verdicts_path = ""
         try:
-            with open(proposal_path, "w", encoding="utf-8") as f:
-                f.write(proposal)
-        except Exception as e:
-            print(f"[persona_council_node] Failed to write proposal: {e}")
+            from msc_sdk.stage_runtime import StageRunContext
 
-        verdicts_path = os.path.join(paper_ws, "persona_verdicts.json")
-        try:
-            with open(verdicts_path, "w", encoding="utf-8") as f:
-                json.dump(verdicts, f, indent=2)
-        except Exception as e:
-            print(f"[persona_council_node] Failed to write verdicts: {e}")
+            ctx = StageRunContext.from_env("persona_council")
+        except Exception:
+            ctx = None
+
+        if ctx is not None:
+            try:
+                proposal_path = str(
+                    ctx.write_required(
+                        "artifacts/research_proposal.md",
+                        proposal,
+                        metadata={"run_id": ctx.run_id, "materializer": "persona_council"},
+                    )
+                )
+                debate_text = "# Persona Debate\n\n" + json.dumps(verdicts, indent=2, sort_keys=True)
+                ctx.write_required(
+                    "artifacts/persona_debate.md",
+                    debate_text,
+                    metadata={"run_id": ctx.run_id, "materializer": "persona_council"},
+                )
+                verdicts_path = str(
+                    ctx.write_optional(
+                        "artifacts/persona_votes.json",
+                        verdicts,
+                        kind="json",
+                        metadata={"run_id": ctx.run_id, "materializer": "persona_council"},
+                    )
+                )
+            except Exception as e:
+                return {
+                    "critical_failure": f"persona_council failed to write contract artifacts: {e}",
+                    "agent_task": None,
+                }
+        else:
+            paper_ws = os.path.join(workspace_dir, "paper_workspace")
+            os.makedirs(paper_ws, exist_ok=True)
+            proposal_path = os.path.join(paper_ws, "research_proposal.md")
+            try:
+                with open(proposal_path, "w", encoding="utf-8") as f:
+                    f.write(proposal)
+            except Exception as e:
+                print(f"[persona_council_node] Failed to write proposal: {e}")
+
+            verdicts_path = os.path.join(paper_ws, "persona_verdicts.json")
+            try:
+                with open(verdicts_path, "w", encoding="utf-8") as f:
+                    json.dump(verdicts, f, indent=2)
+            except Exception as e:
+                print(f"[persona_council_node] Failed to write verdicts: {e}")
 
         return {
             "agent_outputs": {

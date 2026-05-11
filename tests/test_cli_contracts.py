@@ -461,6 +461,24 @@ def test_budget_llm_config_persona_defaults_stay_inside_budget_tier():
     assert persona_models == {"gpt-5-mini"}
 
 
+def test_live_smoke_llm_config_forces_cheap_single_model_surface():
+    from consortium.cli.core.llm_config_generator import tier_to_llm_config
+    from consortium.cli.core.presets import TIER_ORDER, TIERS
+
+    cfg = tier_to_llm_config(TIERS["live-smoke"])
+
+    assert TIER_ORDER[0] == "live-smoke"
+    assert cfg["main_agents"]["model"] == "deepseek-chat"
+    assert cfg["summary_model"]["model"] == "deepseek-chat"
+    assert cfg["budget"]["usd_limit"] == 2
+    assert cfg["counsel"]["enabled"] is False
+    assert cfg["counsel"]["models"] == []
+    assert cfg["persona_council"]["max_debate_rounds"] == 1
+    assert cfg["persona_council"]["max_post_vote_retries"] == 0
+    assert {spec["model"] for spec in cfg["persona_council"]["personas"]} == {"deepseek-chat"}
+    assert set(cfg["run_experiment_tool"].values()) == {"deepseek-chat"}
+
+
 def test_status_reports_stalled_run_and_reads_ledger_cost(tmp_path, monkeypatch):
     import consortium.cli.core.run_inspector as inspector
 

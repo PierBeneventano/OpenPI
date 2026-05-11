@@ -106,13 +106,14 @@ class DeepResearchNoveltyScanTool(BaseTool):
             user_prompt += f"\n\nCONTEXT:\n{context}"
 
         try:
+            max_tokens = int(os.getenv("DEEP_RESEARCH_MAX_TOKENS", "4096"))
             resp = litellm.completion(
                 model=model_id,
                 messages=[
                     {"role": "system", "content": _NOVELTY_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=4096,
+                max_tokens=max_tokens,
             )
             finding = resp.choices[0].message.content or ""
         except Exception as e:

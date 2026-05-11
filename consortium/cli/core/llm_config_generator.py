@@ -25,6 +25,7 @@ _PRICING: dict[str, dict[str, float]] = {
     "gpt-5.4": {"input_per_1k": 0.0025, "output_per_1k": 0.015},
     "gpt-5.3-codex": {"input_per_1k": 0.002, "output_per_1k": 0.01},
     "gpt-5-mini": {"input_per_1k": 0.0004, "output_per_1k": 0.0016},
+    "gpt-5-nano": {"input_per_1k": 0.0001, "output_per_1k": 0.0004},
     "gemini-3-pro-preview": {"input_per_1k": 0.00125, "output_per_1k": 0.01},
     "deepseek-chat": {"input_per_1k": 0.00014, "output_per_1k": 0.00028},
 }
@@ -90,7 +91,7 @@ def tier_to_llm_config(tier: Preset) -> dict[str, Any]:
 
     # --- Persona council ---
     cfg["persona_council"] = {
-        "max_debate_rounds": tier.counsel_debate_rounds if tier.enable_counsel else 3,
+        "max_debate_rounds": tier.counsel_debate_rounds if tier.enable_counsel else (tier.counsel_debate_rounds or 3),
         "synthesis_model": tier.counsel_synthesis_model or tier.model,
     }
     persona_specs = (

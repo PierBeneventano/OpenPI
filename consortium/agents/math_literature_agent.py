@@ -6,6 +6,7 @@ Mines literature for reusable lemma infrastructure.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, List, Optional
 
 from ..agents.base_agent import create_specialist_agent
@@ -23,7 +24,11 @@ from ..toolkits.filesystem.file_editing.file_editing_tools import (
 try:
     from ..toolkits.search.open_deep_search.ods_tool import OpenDeepSearchTool
 except (ImportError, ModuleNotFoundError):
-    print("[math_literature_agent] INFO: OpenDeepSearchTool unavailable — using OpenRouterDeepResearchTool (Perplexity sonar-deep-research) as primary.")
+    research_model = os.getenv("DEEP_RESEARCH_MODEL", "openrouter/perplexity/sonar-deep-research")
+    print(
+        "[math_literature_agent] INFO: OpenDeepSearchTool unavailable - "
+        f"using OpenRouterDeepResearchTool ({research_model}) as primary."
+    )
     OpenDeepSearchTool = None
 
 

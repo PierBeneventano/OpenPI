@@ -26,7 +26,10 @@ Model/runtime settings are read from the project-root `.llm_config.yaml`, which 
 
 ## Pipeline Shape
 
-The LangGraph workflow is built in [`consortium/graph.py`](/home/mabdel03/orcd/scratch/AI_Researcher/MSc_Internal/consortium/graph.py).
+The historical LangGraph workflow is built in
+[`consortium/graph.py`](../consortium/graph.py). This workflow is not a pure
+DAG. It is a directed state machine with a readable happy path, optional
+fan-out/fan-in tracks, and explicit feedback loops.
 
 Base pipeline: 16 stages
 
@@ -70,29 +73,63 @@ The stage roster above is only part of the full graph. The runtime also includes
 
 This is why the implementation includes more graph nodes than the 16/22 visible pipeline stages.
 
-## Core Modules
+## Core Runtime Modules
 
-- [`consortium/runner.py`](/home/mabdel03/orcd/scratch/AI_Researcher/MSc_Internal/consortium/runner.py): CLI/direct-script execution, workspace setup, env/bootstrap, resume logic
-- [`consortium/config.py`](/home/mabdel03/orcd/scratch/AI_Researcher/MSc_Internal/consortium/config.py): `.llm_config.yaml` loading and model-param filtering
-- [`consortium/graph.py`](/home/mabdel03/orcd/scratch/AI_Researcher/MSc_Internal/consortium/graph.py): Stage roster, routing, and graph construction
-- [`consortium/state.py`](/home/mabdel03/orcd/scratch/AI_Researcher/MSc_Internal/consortium/state.py): `ResearchState` schema
-- [`consortium/counsel.py`](/home/mabdel03/orcd/scratch/AI_Researcher/MSc_Internal/consortium/counsel.py): Multi-model debate/synthesis
-- [`consortium/supervision/`](/home/mabdel03/orcd/scratch/AI_Researcher/MSc_Internal/consortium/supervision): Artifact, review, paper-quality, and traceability validators
-- [`consortium/campaign/`](/home/mabdel03/orcd/scratch/AI_Researcher/MSc_Internal/consortium/campaign): Campaign spec loading, heartbeat state machine, repair flow, budget aggregation, notifications
+- [`consortium/runner.py`](../consortium/runner.py): CLI/direct-script
+  execution, workspace setup, env/bootstrap, resume logic, steering server, and
+  graph invocation.
+- [`consortium/config.py`](../consortium/config.py): `.llm_config.yaml`
+  loading and model-param filtering.
+- [`consortium/graph.py`](../consortium/graph.py): historical stage roster,
+  routing, validation gates, feedback loops, and LangGraph construction.
+- [`consortium/state.py`](../consortium/state.py): `ResearchState` schema
+  passed between LangGraph nodes.
+- [`consortium/agents/`](../consortium/agents): specialist agent builders,
+  prompts, and tool surfaces.
+- [`consortium/supervision/`](../consortium/supervision): artifact, review,
+  paper-quality, and traceability validators.
+- [`msc_sdk/campaign_store.py`](../msc_sdk/campaign_store.py): new local-first
+  campaign state/index layer.
 
 ## Campaign Architecture
 
-Campaigns are defined by YAML specs such as [`campaign_template.yaml`](/home/mabdel03/orcd/scratch/AI_Researcher/MSc_Internal/campaign_template.yaml) or [`examples/quickstart/campaign.yaml`](/home/mabdel03/orcd/scratch/AI_Researcher/MSc_Internal/examples/quickstart/campaign.yaml).
+The product-facing campaign architecture is moving to a local-first state
+model. SQLite is the operational index, normal files remain visible research
+outputs, and JSON bundles are explicit import/export snapshots.
 
-High-level flow:
+Current local-first layout:
 
-1. `msc campaign init` generates a campaign YAML plus a real `planning.base_task_file`
-2. `msc campaign start` shells out to `scripts/campaign_heartbeat.py --init`
-3. The heartbeat script validates state, launches stages, and advances the DAG
-4. Each stage runs the main pipeline or a specialized launcher script
-5. Stage outputs are distilled into campaign memory and notifications are emitted
+```text
+.msc/
+  campaigns.db
+  events/campaigns.jsonl
+  snapshots/<campaign_id>.graph.json
+campaigns/<campaign_id>/
+  campaign.json
+  graph.json
+  artifacts.json
+  events.jsonl
+  README.md
+results/<campaign_id>/
+  <stage_id>/artifacts...
+```
 
-Direct-script campaign automation remains supported. Those scripts now honor both repo-root `.env` and `~/.msc/.env`, matching the `msc` CLI behavior.
+Public campaign commands:
+
+```bash
+msc campaigns create --title ... --objective ... --template consortium_scaffold --json
+msc campaigns list --json
+msc campaigns inspect <campaign> --json
+msc campaigns graph <campaign> --json
+msc campaigns artifacts <campaign> --json
+msc campaigns events <campaign> --json
+msc campaigns export <campaign> --json
+msc campaigns import <bundle_dir> --json
+```
+
+The older `msc campaign ...` and campaign heartbeat scripts remain compatibility
+surfaces for existing automation. They should not define the next product
+architecture.
 
 ## Workspace and Outputs
 
@@ -104,7 +141,24 @@ Single runs write into `results/consortium_<timestamp>/` and include:
 - `paper_workspace/` and other stage artifacts
 - checkpoint/state data for resume support
 
-Campaigns write `campaign_status.json` and per-stage workspaces under the campaign `workspace_root`.
+Product campaigns write to the local campaign store and keep artifacts as normal
+files under `results/<campaign_id>/...`. Older run and campaign status JSON
+files may still be emitted for compatibility.
+
+## Redesign Invariants
+
+The overhaul is governed by
+[`research_engine_invariants.md`](research_engine_invariants.md). In short:
+
+- Campaign/run state is central.
+- Artifacts are first-class completion evidence.
+- Stage contracts are explicit and typed.
+- Validators are peers to agents.
+- Loops are intentional, bounded, observable, and budgeted.
+- Specialist power comes from prompt, tool, artifact, and validator boundaries.
+- Budget and approval policy are part of the engine.
+- Human and assistant steering mutate state through events.
+- The graph must explain itself to the researcher.
 
 ## Invariants
 
