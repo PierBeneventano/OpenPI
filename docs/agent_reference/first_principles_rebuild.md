@@ -219,6 +219,7 @@ human pause policy = executable kernel behavior
 branches, joins, and loops = explicit kernel scheduling
 budget policy = enforced by RuntimeContext charges and kernel ledger
 human decisions = typed queue records with approve/reject events
+tool policy = enforced by RuntimeContext tool invocation
 ```
 
 The read-model projector lives beside the kernel so VS Code, CLI, OpenClaude,
@@ -237,10 +238,15 @@ Human stops create durable decision records. A decision has an id, stage, reason
 allowed actions, status, actor, and timestamps. Approval and rejection emit
 events that project back into the canonical run read model.
 
+Tools are registered with the kernel and invoked through
+`RuntimeContext.use_tool(...)`. A stage may only use tools declared in
+`StageSpec.tool_ids`. Undeclared tool use emits `ToolDenied` and creates a human
+decision instead of silently expanding the stage's powers.
+
 ## Rebuild Order
 
 1. Expand `msc_sdk.kernel` until it can express the ideal product semantics.
-2. Add model/tool policy enforcement.
+2. Add model policy enforcement for LLM/model selection.
 3. Add resume semantics on top of approved decisions.
 4. Define the ideal campaign graph in contracts, not in `graph.py`.
 5. Write pure stage handlers for planning, literature, hypothesis generation,
@@ -254,13 +260,12 @@ events that project back into the canonical run read model.
 
 The major architectural risks still to remove are:
 
-1. Model/tool policy is declared but not yet enforced by the kernel.
-2. Stage handlers are not yet isolated by declared tool permissions.
-3. Artifacts do not yet include claim/evidence relationships, schema validation,
+1. Model policy is declared but not yet enforced by the kernel.
+2. Artifacts do not yet include claim/evidence relationships, schema validation,
    or explicit upstream input dependencies.
-4. Approved decisions do not yet resume a paused run from a durable checkpoint.
-5. Agent implementations are not yet bound to `StageSpec` as swappable adapters.
-6. The product shell still needs to consume kernel read models directly rather
+3. Approved decisions do not yet resume a paused run from a durable checkpoint.
+4. Agent implementations are not yet bound to `StageSpec` as swappable adapters.
+5. The product shell still needs to consume kernel read models directly rather
    than historical campaign-store projections.
 
 ## Design Standard

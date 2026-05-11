@@ -16,6 +16,8 @@ from .models import (
     RuntimeContext,
     StageOutcome,
     StageSpec,
+    ToolPolicyError,
+    ToolRegistry,
     ValidationResult,
     ValidatorRegistry,
     artifact_record_for_file,
@@ -41,12 +43,14 @@ class ResearchKernel:
         event_bus: InMemoryEventBus | None = None,
         budget_ledger: BudgetLedger | None = None,
         decision_queue: DecisionQueue | None = None,
+        tool_registry: ToolRegistry | None = None,
         max_stage_executions: int = 100,
     ) -> None:
         self.validators = validators or ValidatorRegistry()
         self.event_bus = event_bus or InMemoryEventBus()
         self.budget_ledger = budget_ledger or BudgetLedger()
         self.decision_queue = decision_queue or DecisionQueue()
+        self.tool_registry = tool_registry or ToolRegistry()
         self.max_stage_executions = max_stage_executions
         self._runs: dict[str, RunSpec] = {}
 
@@ -55,6 +59,7 @@ class ResearchKernel:
         self._runs[run.id] = run
         self._validate_handlers(run, handlers)
         self._validate_validators(run)
+        self._validate_tools(run)
         run.workspace.mkdir(parents=True, exist_ok=True)
         self.event_bus.emit(
             "RunStarted",
@@ -94,6 +99,7 @@ class ResearchKernel:
                 validator_registry=self.validators,
                 budget_ledger=self.budget_ledger,
                 decision_queue=self.decision_queue,
+                tool_registry=self.tool_registry,
             )
             outcome = self.run_stage(context, handlers[stage_id])
             outcomes.append(outcome)
@@ -175,6 +181,25 @@ class ResearchKernel:
                 stage_id=stage.id,
                 reason="budget_policy_failed",
                 safe_next_actions=["approve-budget-increase", "rewrite-stage", "rerun-stage", "abort"],
+                metadata={"validation": [result.__dict__]},
+            )
+            return StageOutcome(
+                stage_id=stage.id,
+                validation=(result,),
+                status="human_decision_required",
+                route_conditions=self._route_conditions(None),
+            )
+        except ToolPolicyError as exc:
+            result = ValidationResult(
+                validator_id="tool_policy",
+                passed=False,
+                message=str(exc),
+            )
+            self._request_decision(
+                run=run,
+                stage_id=stage.id,
+                reason="tool_policy_failed",
+                safe_next_actions=["rewrite-stage", "rerun-stage", "approve-tool-access", "abort"],
                 metadata={"validation": [result.__dict__]},
             )
             return StageOutcome(
@@ -314,6 +339,12 @@ class ResearchKernel:
         for stage in run.graph.stages:
             validator_ids.extend(stage.validator_ids)
         self.validators.require(validator_ids)
+
+    def _validate_tools(self, run: RunSpec) -> None:
+        tool_ids: list[str] = []
+        for stage in run.graph.stages:
+            tool_ids.extend(stage.tool_ids)
+        self.tool_registry.require(tool_ids)
 
     @staticmethod
     def _next_stage_id(stage: StageSpec) -> str | None:

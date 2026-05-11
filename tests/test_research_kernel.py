@@ -12,6 +12,7 @@ from msc_sdk.kernel import (
     RouteSpec,
     RunSpec,
     StageSpec,
+    ToolRegistry,
     ValidationResult,
     ValidatorRegistry,
     project_run,
@@ -321,6 +322,77 @@ def test_kernel_budget_exceeded_stops_for_human(tmp_path: Path):
         "rerun-stage",
         "abort",
     ]
+
+
+def test_kernel_allows_only_declared_stage_tools(tmp_path: Path):
+    stage = StageSpec(
+        id="literature",
+        title="Literature",
+        kind="agent",
+        purpose="Search papers.",
+        tool_ids=("paper_search",),
+        outputs=(artifact("artifacts/literature.md"),),
+    )
+    tools = ToolRegistry()
+    tools.register("paper_search", lambda query: f"result for {query}")
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events, tool_registry=tools)
+
+    def handler(context):
+        result = context.use_tool("paper_search", query="optimizer benchmarking")
+        context.write_artifact(stage.outputs[0], result)
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"literature": handler})
+
+    assert outcomes[0].status == "completed"
+    assert any(event.type == "ToolInvoked" for event in events.events)
+
+
+def test_kernel_denies_undeclared_tool_use_and_requests_decision(tmp_path: Path):
+    stage = StageSpec(
+        id="literature",
+        title="Literature",
+        kind="agent",
+        purpose="Search papers.",
+        tool_ids=("paper_search",),
+        outputs=(artifact("artifacts/literature.md"),),
+    )
+    tools = ToolRegistry()
+    tools.register("paper_search", lambda query: f"result for {query}")
+    tools.register("shell", lambda command: f"ran {command}")
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events, tool_registry=tools)
+
+    def handler(context):
+        context.use_tool("shell", command="rm -rf /")
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"literature": handler})
+    model = project_run(events.events)
+
+    assert outcomes[0].status == "human_decision_required"
+    assert outcomes[0].validation[0].validator_id == "tool_policy"
+    assert any(event.type == "ToolDenied" for event in events.events)
+    assert model.stages["literature"].failure_reason == "tool_policy_failed"
+    assert model.stages["literature"].safe_next_actions == [
+        "rewrite-stage",
+        "rerun-stage",
+        "approve-tool-access",
+        "abort",
+    ]
+
+
+def test_kernel_requires_declared_tools_to_be_registered(tmp_path: Path):
+    stage = StageSpec(
+        id="experiment",
+        title="Experiment",
+        kind="agent",
+        purpose="Run experiments.",
+        tool_ids=("experiment_runner",),
+        outputs=(artifact("artifacts/experiment.md"),),
+    )
+
+    with pytest.raises(KeyError, match="Missing tools: experiment_runner"):
+        ResearchKernel().run(_run_spec(tmp_path, stage), {"experiment": lambda context: None})
 
 
 def test_kernel_events_project_to_canonical_run_read_model(tmp_path: Path):

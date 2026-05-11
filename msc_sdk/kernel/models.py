@@ -20,6 +20,8 @@ EventType = Literal[
     "LoopLimitReached",
     "BudgetSpent",
     "BudgetExceeded",
+    "ToolInvoked",
+    "ToolDenied",
     "ArtifactWritten",
     "ArtifactIndexed",
     "ValidationPassed",
@@ -56,6 +58,59 @@ class FailurePolicy:
 
 class BudgetExceededError(RuntimeError):
     """Raised when a stage attempts to exceed explicit budget policy."""
+
+
+class ToolPolicyError(RuntimeError):
+    """Raised when a stage attempts to use an undeclared tool."""
+
+
+ToolHandler = Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    id: str
+    description: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class ToolRegistry:
+    def __init__(self) -> None:
+        self._tools: dict[str, tuple[ToolSpec, ToolHandler]] = {}
+
+    def register(
+        self,
+        tool_id: str,
+        handler: ToolHandler,
+        *,
+        description: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if tool_id in self._tools:
+            raise ValueError(f"Tool already registered: {tool_id}")
+        self._tools[tool_id] = (
+            ToolSpec(id=tool_id, description=description, metadata=metadata or {}),
+            handler,
+        )
+
+    def require(self, tool_ids: Iterable[str]) -> None:
+        missing = [tool_id for tool_id in tool_ids if tool_id not in self._tools]
+        if missing:
+            raise KeyError(f"Missing tools: {', '.join(missing)}")
+
+    def invoke(self, tool_id: str, **kwargs: Any) -> Any:
+        try:
+            _spec, handler = self._tools[tool_id]
+        except KeyError as exc:
+            raise KeyError(f"Missing tool: {tool_id}") from exc
+        return handler(**kwargs)
+
+    def spec(self, tool_id: str) -> ToolSpec:
+        try:
+            spec, _handler = self._tools[tool_id]
+        except KeyError as exc:
+            raise KeyError(f"Missing tool: {tool_id}") from exc
+        return spec
 
 
 @dataclass(frozen=True)
@@ -423,6 +478,7 @@ class RuntimeContext:
     validator_registry: ValidatorRegistry
     budget_ledger: BudgetLedger
     decision_queue: DecisionQueue
+    tool_registry: ToolRegistry
 
     @property
     def stage_workspace(self) -> Path:
@@ -492,6 +548,30 @@ class RuntimeContext:
             },
         )
         return record
+
+    def use_tool(self, tool_id: str, **kwargs: Any) -> Any:
+        if tool_id not in self.stage.tool_ids:
+            self.event_bus.emit(
+                "ToolDenied",
+                run=self.run,
+                payload={
+                    "stage_id": self.stage.id,
+                    "tool_id": tool_id,
+                    "reason": "tool_not_declared_for_stage",
+                },
+            )
+            raise ToolPolicyError(f"Tool {tool_id} is not declared for stage {self.stage.id}")
+        result = self.tool_registry.invoke(tool_id, **kwargs)
+        self.event_bus.emit(
+            "ToolInvoked",
+            run=self.run,
+            payload={
+                "stage_id": self.stage.id,
+                "tool_id": tool_id,
+                "arguments": kwargs,
+            },
+        )
+        return result
 
 
 def artifact_record_for_file(stage_id: str, artifact: ArtifactSpec, path: Path) -> ArtifactRecord:
