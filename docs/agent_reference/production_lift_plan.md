@@ -1281,3 +1281,30 @@ factual errors with an explicit correction note.
 - Next action: commit and push Stage 9 docs; after that, the lift has Stage
   1-9 checkpoints in motion and the next practical work is user review/manual
   VS Code extension exploration.
+
+### 2026-05-10 18:54 EDT: SDK Budget Read-Model Redesign Implemented
+
+- Stage: Cross-stage read-model hardening for Stage 3/5 product surfaces
+- Work completed: added a dedicated `msc_sdk.budget` read-only budget
+  normalizer, routed run and campaign inspection through it, exposed per-stage
+  read-only campaign budgets, and added regression tests for cumulative ledger
+  rows, state fallback, and campaign-stage budget visibility.
+- Decisions made: keep runtime budget enforcement untouched; never sum
+  cumulative `total_usd` rows; aggregate `by_model` only from per-call cost
+  fields or persisted `budget_state.json`; treat `run_token_usage.json` as
+  token telemetry rather than USD spend; prefer cumulative runtime totals when
+  available and use per-call sums only as fallback/provenance.
+- Evidence/tests: focused no-cost suite passed (`tests/test_budget.py`,
+  `tests/test_msc_sdk_artifacts.py`, and `tests/test_msc_sdk_cli_surface.py`:
+  21 passed); `scripts/validation/contract_tests.sh` passed (`17 passed`);
+  `scripts/validation/cheap_dry_run.sh` passed. Real run inspection for
+  `consortium_20260510_115344` now reports budget total `$0.723018` and
+  by-model spend `$0.723027`, without the previous inflated cumulative-ledger
+  sum.
+- Risks discovered: token telemetry still contains duplicated source channels
+  (`litellm_callback` and `budgeted_model`) and should not be surfaced as
+  unique call counts until a separate token-usage read model deduplicates it.
+- User review status: ready for review of the budget metadata/provenance shape
+  in CLI and future dashboard views.
+- Next action: use the normalized budget reader in any new VS Code budget panel
+  work, and only revisit runtime budget enforcement with explicit approval.

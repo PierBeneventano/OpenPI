@@ -6,6 +6,7 @@ surfaces for CLIs and future UIs.
 """
 
 from .artifacts import inspect_campaign, inspect_run_workspace, list_run_workspaces
+from .budget import read_budget_workspace
 from .capabilities import CapabilityClient
 from .campaigns import CampaignClient
 from .events import EventStore
@@ -51,6 +52,7 @@ __all__ = [
     "inspect_run_workspace",
     "list_run_workspaces",
     "read_manifest",
+    "read_budget_workspace",
     "project_readiness",
     "write_manifest",
 ]

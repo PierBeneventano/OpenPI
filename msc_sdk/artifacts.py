@@ -9,9 +9,9 @@ from typing import Any
 
 import yaml
 
+from .budget import read_budget_workspace
 from .read_models import (
     ArtifactReadModel,
-    BudgetReadModel,
     CampaignReadModel,
     LogReadModel,
     RunReadModel,
@@ -39,26 +39,6 @@ def _read_json(path: Path) -> dict[str, Any]:
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    try:
-        lines = path.read_text(errors="replace").splitlines()
-    except OSError:
-        return rows
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -200,46 +180,6 @@ def _discover_logs(root: Path) -> list[LogReadModel]:
     return logs
 
 
-def _budget_for(root: Path, summary: dict[str, Any] | None = None) -> BudgetReadModel:
-    state_path = root / "budget_state.json"
-    ledger_path = root / "budget_ledger.jsonl"
-    state = _read_json(state_path)
-    rows = _read_jsonl(ledger_path)
-    summary = summary or {}
-
-    total = None
-    for source in (state, summary, rows[-1] if rows else {}):
-        for key in ("total_usd", "total_cost_usd", "total_spent_usd", "spent_usd"):
-            value = source.get(key)
-            if isinstance(value, (int, float)):
-                total = float(value)
-                break
-        if total is not None:
-            break
-
-    limit = None
-    for key in ("limit_usd", "budget_usd", "campaign_limit_usd", "usd_limit"):
-        value = state.get(key, summary.get(key))
-        if isinstance(value, (int, float)):
-            limit = float(value)
-            break
-
-    by_model: dict[str, float] = {}
-    for row in rows:
-        model = row.get("model_id") or row.get("model") or row.get("model_name")
-        cost = row.get("total_usd") or row.get("cost_usd") or row.get("usd")
-        if isinstance(model, str) and isinstance(cost, (int, float)):
-            by_model[model] = by_model.get(model, 0.0) + float(cost)
-
-    return BudgetReadModel(
-        total_usd=total,
-        limit_usd=limit,
-        ledger_path="budget_ledger.jsonl" if ledger_path.exists() else None,
-        state_path="budget_state.json" if state_path.exists() else None,
-        by_model=by_model,
-    )
-
-
 def _find_final_paper(root: Path, summary: dict[str, Any]) -> str | None:
     final_paper = summary.get("final_paper")
     if isinstance(final_paper, str) and (root / final_paper).exists():
@@ -273,7 +213,7 @@ def inspect_run_workspace(path: str | Path) -> RunReadModel:
         final_paper=_find_final_paper(root, summary),
         started_at=status.get("started_at") or summary.get("started_at"),
         updated_at=status.get("updated_at") or status.get("last_activity_at"),
-        budget=_budget_for(root, summary),
+        budget=read_budget_workspace(root, summary),
         artifacts=_discover_artifacts(root),
         logs=_discover_logs(root),
         metadata={
@@ -377,6 +317,7 @@ def inspect_campaign(path: str | Path) -> CampaignReadModel:
                 optional_artifacts=_artifact_contracts(
                     observed_root, workspace, [str(item) for item in optional], required=False
                 ),
+                budget=read_budget_workspace(stage_root),
                 logs=_discover_logs(stage_root),
                 metadata={
                     "launcher": raw_stage.get("launcher"),
@@ -392,6 +333,12 @@ def inspect_campaign(path: str | Path) -> CampaignReadModel:
     }
     if budget_state:
         budget_summary.update(budget_state)
+    stage_budget_totals = {
+        stage.stage_id: stage.budget.total_usd
+        for stage in stage_models
+        if stage.budget.total_usd is not None
+    }
+    observed_stage_total = round(sum(stage_budget_totals.values()), 6) if stage_budget_totals else None
 
     return CampaignReadModel(
         campaign_id=campaign_path.stem,
@@ -399,10 +346,13 @@ def inspect_campaign(path: str | Path) -> CampaignReadModel:
         name=spec.get("name") or state.get("campaign_name") or status.get("campaign_name"),
         workspace_root=str(workspace_root) if workspace_root else None,
         status=str(status.get("status") or state.get("status") or "unknown"),
-        budget=BudgetReadModel(
-            total_usd=budget_summary.get("total_usd"),
-            limit_usd=budget_summary.get("campaign_limit_usd"),
-            state_path=str((observed_root / "budget_state.json")) if (observed_root / "budget_state.json").exists() else None,
+        budget=read_budget_workspace(
+            observed_root,
+            budget_summary,
+            metadata={
+                "stage_budget_totals": stage_budget_totals,
+                "observed_stage_total_usd": observed_stage_total,
+            },
         ),
         stages=stage_models,
         metadata={

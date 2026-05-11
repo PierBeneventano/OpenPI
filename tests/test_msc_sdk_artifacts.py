@@ -45,6 +45,91 @@ def test_inspect_run_workspace_reads_core_artifacts(tmp_path: Path):
     assert model.to_dict()["budget"]["total_usd"] == 1.25
 
 
+def test_budget_reader_does_not_sum_cumulative_ledger_totals(tmp_path: Path):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "run_status.json").write_text(json.dumps({"status": "running"}))
+    (run / "budget_state.json").write_text(
+        json.dumps(
+            {
+                "total_usd": 0.15,
+                "usd_limit": 5,
+                "by_model": {"openrouter/openai/gpt-5-mini": 0.15},
+            }
+        )
+    )
+    (run / "budget_ledger.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "model_id": "openrouter/openai/gpt-5-mini",
+                        "cost_usd": 0.10,
+                        "total_usd": 0.10,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "model_id": "openrouter/openai/gpt-5-mini",
+                        "cost_usd": 0.20,
+                        "total_usd": 0.30,
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+    model = inspect_run_workspace(run)
+
+    assert model.budget.total_usd == 0.30
+    assert model.budget.by_model == {"openrouter/openai/gpt-5-mini": 0.30}
+    assert model.budget.metadata["ledger_cost_rows"] == 2
+    assert "by_model_total_exceeds_total" not in model.budget.metadata["warnings"]
+
+
+def test_budget_reader_uses_cumulative_ledger_only_for_total(tmp_path: Path):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "budget_ledger.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"model_id": "openrouter/openai/gpt-5-mini", "total_usd": 0.10}),
+                json.dumps({"model_id": "openrouter/openai/gpt-5-mini", "total_usd": 0.20}),
+            ]
+        )
+        + "\n"
+    )
+
+    model = inspect_run_workspace(run)
+
+    assert model.budget.total_usd == 0.20
+    assert model.budget.by_model == {}
+    assert model.budget.metadata["ledger_cost_rows"] == 0
+
+
+def test_budget_reader_falls_back_to_state_by_model_without_per_call_costs(tmp_path: Path):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "budget_state.json").write_text(
+        json.dumps(
+            {
+                "total_usd": 0.42,
+                "by_model": {"openrouter/openai/gpt-5-mini": 0.42},
+            }
+        )
+    )
+    (run / "budget_ledger.jsonl").write_text(
+        json.dumps({"model_id": "openrouter/openai/gpt-5-mini", "total_usd": 0.40}) + "\n"
+    )
+
+    model = inspect_run_workspace(run)
+
+    assert model.budget.total_usd == 0.42
+    assert model.budget.by_model == {"openrouter/openai/gpt-5-mini": 0.42}
+    assert model.budget.metadata["by_model_source"] == "state_by_model"
+
+
 def test_list_run_workspaces_sorts_newest_first(tmp_path: Path):
     results = tmp_path / "results"
     old = results / "old"
@@ -65,6 +150,9 @@ def test_inspect_campaign_preserves_required_artifact_contract(tmp_path: Path):
     workspace.mkdir(parents=True)
     (workspace / "paper_workspace").mkdir()
     (workspace / "paper_workspace" / "final_paper.md").write_text("# Done")
+    (workspace / "budget_state.json").write_text(
+        json.dumps({"total_usd": 1.5, "usd_limit": 12})
+    )
     (tmp_path / "results" / "demo" / "campaign_state.json").write_text(
         json.dumps(
             {
@@ -112,4 +200,7 @@ def test_inspect_campaign_preserves_required_artifact_contract(tmp_path: Path):
     assert stage.required_artifacts[0].path == "paper_workspace/final_paper.md"
     assert stage.required_artifacts[0].exists is True
     assert stage.optional_artifacts[0].exists is False
+    assert stage.budget.total_usd == 1.5
+    assert model.budget.metadata["observed_stage_total_usd"] == 1.5
     assert model.to_dict()["stages"][0]["required_artifacts"][0]["required"] is True
+    assert model.to_dict()["stages"][0]["budget"]["total_usd"] == 1.5

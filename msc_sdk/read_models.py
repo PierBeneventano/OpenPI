@@ -46,6 +46,7 @@ class BudgetReadModel:
     ledger_path: str | None = None
     state_path: str | None = None
     by_model: dict[str, float] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -91,11 +92,13 @@ class StageReadModel:
     fail_reason: str | None = None
     required_artifacts: list[ArtifactReadModel] = field(default_factory=list)
     optional_artifacts: list[ArtifactReadModel] = field(default_factory=list)
+    budget: BudgetReadModel = field(default_factory=BudgetReadModel)
     logs: list[LogReadModel] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        data["budget"] = self.budget.to_dict()
         data["required_artifacts"] = [
             artifact.to_dict() for artifact in self.required_artifacts
         ]
