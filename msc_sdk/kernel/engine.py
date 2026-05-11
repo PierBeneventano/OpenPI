@@ -10,12 +10,14 @@ from .models import (
     ArtifactSpec,
     BudgetExceededError,
     BudgetLedger,
+    CheckpointStore,
     DecisionQueue,
     EvidenceLink,
     InputSpec,
     InMemoryEventBus,
     ModelPolicyError,
     ModelRegistry,
+    RunCheckpoint,
     RunSpec,
     RuntimeContext,
     SchemaRegistry,
@@ -52,6 +54,7 @@ class ResearchKernel:
         tool_registry: ToolRegistry | None = None,
         schema_registry: SchemaRegistry | None = None,
         model_registry: ModelRegistry | None = None,
+        checkpoint_store: CheckpointStore | None = None,
         max_stage_executions: int = 100,
     ) -> None:
         self.validators = validators or ValidatorRegistry()
@@ -61,10 +64,17 @@ class ResearchKernel:
         self.tool_registry = tool_registry or ToolRegistry()
         self.schema_registry = schema_registry or SchemaRegistry()
         self.model_registry = model_registry or ModelRegistry()
+        self.checkpoint_store = checkpoint_store or CheckpointStore()
         self.max_stage_executions = max_stage_executions
         self._runs: dict[str, RunSpec] = {}
 
-    def run(self, run: RunSpec, handlers: dict[str, StageHandler]) -> list[StageOutcome]:
+    def run(
+        self,
+        run: RunSpec,
+        handlers: dict[str, StageHandler],
+        *,
+        checkpoint: RunCheckpoint | None = None,
+    ) -> list[StageOutcome]:
         run.graph.validate()
         self._runs[run.id] = run
         self._validate_handlers(run, handlers)
@@ -73,22 +83,38 @@ class ResearchKernel:
         self._validate_schemas(run)
         self._validate_models(run)
         run.workspace.mkdir(parents=True, exist_ok=True)
-        self.event_bus.emit(
-            "RunStarted",
-            run=run,
-            payload={
-                "objective": run.objective,
-                "graph_id": run.graph.id,
-                "workspace": str(run.workspace),
-            },
-        )
+        if checkpoint is None:
+            self.event_bus.emit(
+                "RunStarted",
+                run=run,
+                payload={
+                    "objective": run.objective,
+                    "graph_id": run.graph.id,
+                    "workspace": str(run.workspace),
+                },
+            )
+        else:
+            self.event_bus.emit(
+                "RunResumed",
+                run=run,
+                payload={
+                    "checkpoint_id": checkpoint.id,
+                    "blocked_stage_id": checkpoint.blocked_stage_id,
+                    "reason": checkpoint.reason,
+                    "queue": list(checkpoint.queue),
+                },
+            )
 
         outcomes: list[StageOutcome] = []
         stages = run.graph.stage_map()
-        queue: list[str] = [run.graph.entry_stage_id]
-        completed: set[str] = set()
-        available_artifacts: dict[tuple[str, str], ArtifactRecord] = {}
-        visit_counts: dict[str, int] = {}
+        queue: list[str] = list(checkpoint.queue) if checkpoint is not None else [run.graph.entry_stage_id]
+        completed_order: list[str] = list(checkpoint.completed_stage_ids) if checkpoint is not None else []
+        completed: set[str] = set(completed_order)
+        available_artifacts: dict[tuple[str, str], ArtifactRecord] = {
+            (artifact.stage_id, artifact.path): artifact
+            for artifact in (checkpoint.available_artifacts if checkpoint is not None else ())
+        }
+        visit_counts: dict[str, int] = dict(checkpoint.visit_counts) if checkpoint is not None else {}
 
         while queue:
             if len(outcomes) >= self.max_stage_executions:
@@ -104,7 +130,6 @@ class ResearchKernel:
 
             stage_id = queue.pop(0)
             stage = stages[stage_id]
-            visit_counts[stage_id] = visit_counts.get(stage_id, 0) + 1
             input_artifacts, missing_inputs = self._resolve_inputs(
                 run=run,
                 stage=stage,
@@ -139,12 +164,22 @@ class ResearchKernel:
                         status="human_decision_required",
                     )
                 )
+                self._checkpoint(
+                    run=run,
+                    blocked_stage_id=stage.id,
+                    reason="stage_inputs_missing",
+                    queue=[stage.id, *queue],
+                    completed_stage_ids=completed_order,
+                    available_artifacts=available_artifacts,
+                    visit_counts=visit_counts,
+                )
                 self.event_bus.emit(
                     "RunFailed",
                     run=run,
                     payload={"stage_id": stage.id, "status": "human_decision_required"},
                 )
                 return outcomes
+            visit_counts[stage_id] = visit_counts.get(stage_id, 0) + 1
             context = RuntimeContext(
                 run=run,
                 stage=stage,
@@ -160,6 +195,27 @@ class ResearchKernel:
             outcome = self.run_stage(context, handlers[stage_id])
             outcomes.append(outcome)
             if outcome.status != "completed":
+                checkpoint_queue = [stage_id, *queue]
+                checkpoint_completed_order = list(completed_order)
+                checkpoint_artifacts = dict(available_artifacts)
+                if stage.pause_after and all(result.passed for result in outcome.validation):
+                    checkpoint_queue = [
+                        next_stage_id for next_stage_id in (outcome.next_stage_id,)
+                        if next_stage_id is not None
+                    ] + queue
+                    if stage_id not in completed:
+                        checkpoint_completed_order.append(stage_id)
+                    for artifact_record in outcome.artifacts:
+                        checkpoint_artifacts[(artifact_record.stage_id, artifact_record.path)] = artifact_record
+                self._checkpoint(
+                    run=run,
+                    blocked_stage_id=stage_id,
+                    reason=outcome.status,
+                    queue=checkpoint_queue,
+                    completed_stage_ids=checkpoint_completed_order,
+                    available_artifacts=checkpoint_artifacts,
+                    visit_counts=visit_counts,
+                )
                 self.event_bus.emit(
                     "RunFailed",
                     run=run,
@@ -167,6 +223,7 @@ class ResearchKernel:
                 )
                 return outcomes
             completed.add(stage_id)
+            completed_order.append(stage_id)
             for artifact_record in outcome.artifacts:
                 available_artifacts[(artifact_record.stage_id, artifact_record.path)] = artifact_record
 
@@ -179,6 +236,15 @@ class ResearchKernel:
                 visit_counts=visit_counts,
             )
             if blocked:
+                self._checkpoint(
+                    run=run,
+                    blocked_stage_id=stage_id,
+                    reason="route_blocked",
+                    queue=queue,
+                    completed_stage_ids=completed_order,
+                    available_artifacts=available_artifacts,
+                    visit_counts=visit_counts,
+                )
                 self.event_bus.emit(
                     "RunFailed",
                     run=run,
@@ -208,14 +274,14 @@ class ResearchKernel:
         self.event_bus.emit(
             "RunCompleted",
             run=run,
-            payload={"completed_stage_ids": [outcome.stage_id for outcome in outcomes]},
+            payload={"completed_stage_ids": completed_order},
         )
         return outcomes
 
     def run_stage(self, context: RuntimeContext, handler: StageHandler) -> StageOutcome:
         stage = context.stage
         run = context.run
-        if stage.pause_before:
+        if stage.pause_before and not self._has_approved_decision(run.id, stage.id, "pause_before_stage"):
             self._request_decision(
                 run=run,
                 stage_id=stage.id,
@@ -344,7 +410,7 @@ class ResearchKernel:
             run=run,
             payload={"stage_id": stage.id, "validation": [result.__dict__ for result in validation]},
         )
-        if stage.pause_after:
+        if stage.pause_after and not self._has_approved_decision(run.id, stage.id, "pause_after_stage"):
             self._request_decision(
                 run=run,
                 stage_id=stage.id,
@@ -680,6 +746,68 @@ class ResearchKernel:
             },
         )
         return decision.to_dict()
+
+    def _has_approved_decision(self, run_id: str, stage_id: str, reason: str) -> bool:
+        return any(
+            decision.run_id == run_id
+            and decision.stage_id == stage_id
+            and decision.reason == reason
+            and decision.status == "approved"
+            for decision in self.decision_queue.decisions.values()
+        )
+
+    def resume(self, decision_id: str, handlers: dict[str, StageHandler]) -> list[StageOutcome]:
+        decision = self.decision_queue.decisions.get(decision_id)
+        if decision is None:
+            raise KeyError(f"Decision not found: {decision_id}")
+        if decision.status != "approved":
+            raise ValueError(f"Decision must be approved before resume: {decision_id}")
+        try:
+            run = self._runs[decision.run_id]
+        except KeyError as exc:
+            raise KeyError(f"Run not found for decision: {decision.run_id}") from exc
+        checkpoint = self.checkpoint_store.latest(decision.run_id)
+        if decision.reason == "pause_after_stage":
+            artifacts = [
+                artifact for artifact in checkpoint.available_artifacts
+                if artifact.stage_id == decision.stage_id
+            ]
+            self.event_bus.emit(
+                "StageCompleted",
+                run=run,
+                payload={
+                    "stage_id": decision.stage_id,
+                    "artifacts": [artifact.to_dict() for artifact in artifacts],
+                },
+            )
+        return self.run(run, handlers, checkpoint=checkpoint)
+
+    def _checkpoint(
+        self,
+        *,
+        run: RunSpec,
+        blocked_stage_id: str,
+        reason: str,
+        queue: list[str],
+        completed_stage_ids: list[str],
+        available_artifacts: dict[tuple[str, str], ArtifactRecord],
+        visit_counts: dict[str, int],
+    ) -> RunCheckpoint:
+        checkpoint = self.checkpoint_store.save(
+            run=run,
+            blocked_stage_id=blocked_stage_id,
+            reason=reason,
+            queue=queue,
+            completed_stage_ids=completed_stage_ids,
+            available_artifacts=available_artifacts.values(),
+            visit_counts=visit_counts,
+        )
+        self.event_bus.emit(
+            "RunCheckpointed",
+            run=run,
+            payload=checkpoint.to_dict(),
+        )
+        return checkpoint
 
     @staticmethod
     def _enqueue(

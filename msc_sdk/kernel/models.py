@@ -15,6 +15,8 @@ EvidenceRelationship = Literal["supports", "refutes", "qualifies", "derives_from
 StageKind = Literal["agent", "tool", "validator", "router", "approval", "control"]
 EventType = Literal[
     "RunStarted",
+    "RunResumed",
+    "RunCheckpointed",
     "StageInputResolved",
     "StageInputMissing",
     "StageStarted",
@@ -352,6 +354,65 @@ class DecisionQueue:
         if run_id is not None:
             rows = [decision for decision in rows if decision.run_id == run_id]
         return sorted(rows, key=lambda decision: decision.created_at)
+
+
+@dataclass(frozen=True)
+class RunCheckpoint:
+    id: str
+    run_id: str
+    campaign_id: str
+    blocked_stage_id: str
+    reason: str
+    queue: tuple[str, ...]
+    completed_stage_ids: tuple[str, ...]
+    available_artifacts: tuple["ArtifactRecord", ...]
+    visit_counts: dict[str, int]
+    created_at: str = field(default_factory=now_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["available_artifacts"] = [
+            artifact.to_dict() for artifact in self.available_artifacts
+        ]
+        return data
+
+
+class CheckpointStore:
+    def __init__(self) -> None:
+        self.checkpoints: dict[str, list[RunCheckpoint]] = {}
+
+    def save(
+        self,
+        *,
+        run: "RunSpec",
+        blocked_stage_id: str,
+        reason: str,
+        queue: Iterable[str],
+        completed_stage_ids: Iterable[str],
+        available_artifacts: Iterable["ArtifactRecord"],
+        visit_counts: dict[str, int],
+    ) -> RunCheckpoint:
+        created_at = now_iso()
+        checkpoint = RunCheckpoint(
+            id=stable_id(run.id, blocked_stage_id, reason, created_at),
+            run_id=run.id,
+            campaign_id=run.campaign_id,
+            blocked_stage_id=blocked_stage_id,
+            reason=reason,
+            queue=tuple(queue),
+            completed_stage_ids=tuple(completed_stage_ids),
+            available_artifacts=tuple(available_artifacts),
+            visit_counts=dict(visit_counts),
+            created_at=created_at,
+        )
+        self.checkpoints.setdefault(run.id, []).append(checkpoint)
+        return checkpoint
+
+    def latest(self, run_id: str) -> RunCheckpoint:
+        rows = self.checkpoints.get(run_id) or []
+        if not rows:
+            raise KeyError(f"No checkpoint for run: {run_id}")
+        return rows[-1]
 
 
 @dataclass(frozen=True)

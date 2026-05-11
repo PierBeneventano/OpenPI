@@ -809,6 +809,102 @@ def test_kernel_decision_queue_approves_or_rejects_pending_decision(tmp_path: Pa
     assert events.events[-1].type == "ApprovalDecided"
 
 
+def test_kernel_checkpoints_and_resumes_after_pause_before_approval(tmp_path: Path):
+    stage = StageSpec(
+        id="approval_gate",
+        title="Approval Gate",
+        kind="approval",
+        purpose="Wait for approval before running.",
+        outputs=(artifact("artifacts/approval.md"),),
+        pause_before=True,
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+    calls = {"count": 0}
+
+    def handler(context):
+        calls["count"] += 1
+        context.write_artifact(stage.outputs[0], "approved")
+
+    first = kernel.run(_run_spec(tmp_path, stage), {"approval_gate": handler})
+    decision = kernel.decision_queue.pending(run_id="run_1")[0]
+    kernel.decide(decision.id, approved=True, actor="researcher")
+    resumed = kernel.resume(decision.id, {"approval_gate": handler})
+    model = project_run(events.events)
+
+    assert first[0].status == "human_decision_required"
+    assert calls["count"] == 1
+    assert resumed[0].status == "completed"
+    assert any(event.type == "RunCheckpointed" for event in events.events)
+    assert any(event.type == "RunResumed" for event in events.events)
+    assert model.status == "completed"
+
+
+def test_kernel_resume_after_pause_after_continues_with_next_stage(tmp_path: Path):
+    plan = StageSpec(
+        id="plan",
+        title="Plan",
+        kind="agent",
+        purpose="Create plan.",
+        outputs=(artifact("artifacts/plan.md"),),
+        routes=(RouteSpec(target="writeup"),),
+        pause_after=True,
+    )
+    writeup = StageSpec(
+        id="writeup",
+        title="Writeup",
+        kind="agent",
+        purpose="Continue after approval.",
+        inputs=(InputSpec(path="artifacts/plan.md", source_stage_id="plan"),),
+        outputs=(artifact("artifacts/writeup.md"),),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+    calls = {"plan": 0, "writeup": 0}
+
+    def plan_handler(context):
+        calls["plan"] += 1
+        context.write_artifact(plan.outputs[0], "plan")
+
+    def writeup_handler(context):
+        calls["writeup"] += 1
+        context.write_artifact(writeup.outputs[0], "writeup")
+
+    first = kernel.run(
+        _run_spec(tmp_path, plan, writeup),
+        {"plan": plan_handler, "writeup": writeup_handler},
+    )
+    decision = kernel.decision_queue.pending(run_id="run_1")[0]
+    kernel.decide(decision.id, approved=True, actor="researcher")
+    resumed = kernel.resume(decision.id, {"plan": plan_handler, "writeup": writeup_handler})
+    model = project_run(events.events)
+
+    assert first[0].status == "human_decision_required"
+    assert [outcome.stage_id for outcome in resumed] == ["writeup"]
+    assert calls == {"plan": 1, "writeup": 1}
+    assert model.completed_stage_ids == ["plan", "writeup"]
+    assert model.stages["plan"].status == "completed"
+    assert model.stages["writeup"].status == "completed"
+
+
+def test_kernel_resume_requires_approved_decision(tmp_path: Path):
+    stage = StageSpec(
+        id="approval_gate",
+        title="Approval Gate",
+        kind="approval",
+        purpose="Wait for approval before running.",
+        outputs=(artifact("artifacts/approval.md"),),
+        pause_before=True,
+    )
+    kernel = ResearchKernel()
+
+    kernel.run(_run_spec(tmp_path, stage), {"approval_gate": lambda context: None})
+    decision = kernel.decision_queue.pending(run_id="run_1")[0]
+
+    with pytest.raises(ValueError, match="Decision must be approved before resume"):
+        kernel.resume(decision.id, {"approval_gate": lambda context: None})
+
+
 def test_kernel_enforces_pause_after_validated_stage(tmp_path: Path):
     stage = StageSpec(
         id="plan",

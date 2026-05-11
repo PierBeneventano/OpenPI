@@ -219,6 +219,7 @@ human pause policy = executable kernel behavior
 branches, joins, and loops = explicit kernel scheduling
 budget policy = enforced by RuntimeContext charges and kernel ledger
 human decisions = typed queue records with approve/reject events
+resume = approved decisions continue from kernel checkpoints
 model policy = enforced by RuntimeContext model invocation
 tool policy = enforced by RuntimeContext tool invocation
 artifact truth = declared schemas + explicit claim/evidence links
@@ -240,6 +241,12 @@ stage caps are enforced by the kernel ledger, and budget failures produce
 Human stops create durable decision records. A decision has an id, stage, reason,
 allowed actions, status, actor, and timestamps. Approval and rejection emit
 events that project back into the canonical run read model.
+
+When the kernel stops for a human decision, it saves a `RunCheckpoint` containing
+the remaining queue, completed stage ids, available artifacts, and visit counts.
+After approval, `ResearchKernel.resume(...)` emits `RunResumed` and continues
+from that checkpoint. Pause-before resumes by running the blocked stage;
+pause-after resumes with the next queued stage without rerunning completed work.
 
 Tools are registered with the kernel and invoked through
 `RuntimeContext.use_tool(...)`. A stage may only use tools declared in
@@ -269,22 +276,20 @@ available through `RuntimeContext.input_artifacts`.
 ## Rebuild Order
 
 1. Expand `msc_sdk.kernel` until it can express the ideal product semantics.
-2. Add durable checkpoint resume for approved human decisions.
-3. Define the ideal campaign graph in contracts, not in `graph.py`.
-4. Write pure stage handlers for planning, literature, hypothesis generation,
+2. Define the ideal campaign graph in contracts, not in `graph.py`.
+3. Write pure stage handlers for planning, literature, hypothesis generation,
    experiment design, execution, synthesis, writeup, and review.
-5. Bind specialist agents as implementations of stage handlers.
-6. Bind OpenClaude and VS Code only to kernel operations/read models.
-7. Retire legacy compatibility paths after the new kernel can produce the full
+4. Bind specialist agents as implementations of stage handlers.
+5. Bind OpenClaude and VS Code only to kernel operations/read models.
+6. Retire legacy compatibility paths after the new kernel can produce the full
    research artifact set.
 
 ## Remaining Fundamental Issues
 
 The major architectural risks still to remove are:
 
-1. Approved decisions do not yet resume a paused run from a durable checkpoint.
-2. Agent implementations are not yet bound to `StageSpec` as swappable adapters.
-3. The product shell still needs to consume kernel read models directly rather
+1. Agent implementations are not yet bound to `StageSpec` as swappable adapters.
+2. The product shell still needs to consume kernel read models directly rather
    than historical campaign-store projections.
 
 ## Design Standard
