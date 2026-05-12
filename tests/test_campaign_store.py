@@ -35,6 +35,7 @@ def test_campaign_store_creates_sqlite_jsonl_snapshot_and_scaffold(tmp_path: Pat
     assert graph["nodes"][0]["id"] == "persona_council"
     assert graph["nodes"][-1]["id"] == "validation_gate"
     assert graph["state"] == "planned"
+    assert graph["metadata"]["source"] == "kernel_graph_projection"
     assert "control" in graph["modes"]
     assert any(edge["kind"] == "loop" for edge in graph["edges"])
 
@@ -44,6 +45,30 @@ def test_campaign_store_creates_sqlite_jsonl_snapshot_and_scaffold(tmp_path: Pat
     events = store.events("consortium-graph-demo")["events"]
     assert any(event["type"] == "CampaignCreated" for event in events)
     assert any(event["type"] == "ArtifactDeclared" for event in events)
+
+
+def test_campaign_graph_creation_does_not_depend_on_stage_contract_nodes(tmp_path: Path, monkeypatch):
+    from msc_sdk import stage_contracts
+
+    def fail_to_node(*args, **kwargs):
+        raise AssertionError("StageContract.to_node should not build product graphs")
+
+    monkeypatch.setattr(stage_contracts.StageContract, "to_node", fail_to_node)
+    store = CampaignStore(tmp_path)
+
+    created = store.create_campaign(
+        title="Kernel Graph Demo",
+        objective="Project the campaign graph from kernel specs.",
+        template="literature_only",
+        budget=1,
+    )
+    graph = store.graph(created["campaign_id"])
+
+    assert graph["metadata"]["source"] == "kernel_graph_projection"
+    assert [node["id"] for node in graph["nodes"]][:2] == [
+        "persona_council",
+        "literature_review_agent",
+    ]
 
 
 def test_campaign_store_redacts_events_and_survives_reopen(tmp_path: Path):

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .events import redact
-from .stage_contracts import build_contract_graph, contracts_by_id, template_names
+from .stage_contracts import compile_kernel_graph, contracts_by_id, project_kernel_graph, template_names
 
 
 SCHEMA_VERSION = 1
@@ -1505,12 +1505,17 @@ class CampaignStore:
 
 def build_graph_ir(campaign_id: str, title: str, template: str, tier: str, budget: float) -> dict[str, Any]:
     template = template if template in TEMPLATE_NAMES else "consortium_scaffold"
-    return build_contract_graph(
+    graph = compile_kernel_graph(
+        graph_id=f"{campaign_id}:{template}",
+        template=template,
+        budget=budget,
+    )
+    return project_kernel_graph(
+        graph=graph,
         campaign_id=campaign_id,
         title=title,
         template=template,
         tier=tier,
-        budget=budget,
     )
 
 
