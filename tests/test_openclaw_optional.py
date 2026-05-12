@@ -65,6 +65,8 @@ def test_openclaw_launch_plan_is_dry_run(tmp_path: Path):
     assert plan["executes"] is False
     assert plan["command"] == ["bash", str(script)]
     assert plan["confirmation_required_for_mutations"] is True
+    assert plan["operation_contract"]["profile"] == "openclaw_read_only"
+    assert all(not operation["mutates"] for operation in plan["operation_contract"]["operations"])
 
 
 def test_openclaw_status_json_redacts_config(tmp_path: Path, monkeypatch):

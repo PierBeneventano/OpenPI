@@ -68,6 +68,46 @@ PUBLIC_COMMANDS = [
 ]
 
 
+AGENT_OPERATION_PROFILES = {
+    "read_only": {
+        "mutations_allowed": False,
+        "confirmation_required_for_mutations": True,
+    },
+    "operator": {
+        "mutations_allowed": True,
+        "confirmation_required_for_mutations": True,
+    },
+    "openclaude_v1": {
+        "mutations_allowed": True,
+        "confirmation_required_for_mutations": True,
+    },
+    "openclaw_read_only": {
+        "mutations_allowed": False,
+        "confirmation_required_for_mutations": True,
+    },
+}
+
+
+def public_operation_contract(profile: str = "read_only") -> dict[str, Any]:
+    """Return the public operation surface available to agent integrations."""
+
+    profile_data = AGENT_OPERATION_PROFILES.get(profile, AGENT_OPERATION_PROFILES["read_only"])
+    mutations_allowed = bool(profile_data["mutations_allowed"])
+    commands = [
+        command for command in PUBLIC_COMMANDS
+        if mutations_allowed or not command.mutates
+    ]
+    return {
+        "surface": "msc_cli_sdk_v1",
+        "profile": profile if profile in AGENT_OPERATION_PROFILES else "read_only",
+        "read_model_sources": ["kernel_events", "campaign_events"],
+        "storage_boundary": "agents must use public msc commands or SDK clients, not SQLite, status files, or legacy graph internals",
+        "mutations_allowed": mutations_allowed,
+        "confirmation_required_for_mutations": bool(profile_data["confirmation_required_for_mutations"]),
+        "operations": [command.to_dict() for command in commands],
+    }
+
+
 class ValidationClient:
     """Expose self-test metadata used by agent harnesses."""
 
@@ -87,3 +127,6 @@ class ValidationClient:
                 command.to_dict() for command in PUBLIC_COMMANDS if command.mutates
             ],
         }
+
+    def operation_contract(self, profile: str = "read_only") -> dict[str, Any]:
+        return {"ok": True, **public_operation_contract(profile)}

@@ -55,6 +55,12 @@ def test_openclaude_launch_plan_is_non_executing_and_scoped(tmp_path: Path):
     assert plan["cwd"] == str(tmp_path)
     assert plan["capability_profile"] == "openclaude_v1"
     assert plan["env"]["OPENAI_API_KEY"] == "[REDACTED]"
+    assert plan["operation_contract"]["surface"] == "msc_cli_sdk_v1"
+    assert plan["operation_contract"]["confirmation_required_for_mutations"] is True
+    assert any(
+        operation["operation"] == "campaigns.approve"
+        for operation in plan["operation_contract"]["operations"]
+    )
 
 
 def test_openclaude_cli_launch_defaults_to_plan_only(tmp_path: Path, monkeypatch):

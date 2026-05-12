@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .events import redact
+from .validation import public_operation_contract
 
 
 OPENCLAW_PROFILES = {
@@ -111,4 +112,5 @@ def openclaw_launch_plan(launch_script: str | Path | None) -> dict[str, Any]:
         "executes": False,
         "capability_profile": "read_only",
         "confirmation_required_for_mutations": True,
+        "operation_contract": public_operation_contract("openclaw_read_only"),
     }

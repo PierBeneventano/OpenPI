@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .validation import public_operation_contract
+
 OPENCLAUDE_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_OPENCLAUDE_MODEL = "openai/gpt-5-mini"
 
@@ -88,4 +90,5 @@ def openclaude_launch_plan(
         "env": openclaude_env_contract(openrouter_configured=openrouter_configured, model=model),
         "skill_path": str(openclaude_skill_path(project_root)),
         "capability_profile": "openclaude_v1",
+        "operation_contract": public_operation_contract("openclaude_v1"),
     }

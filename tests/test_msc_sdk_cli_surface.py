@@ -98,13 +98,18 @@ def test_artifacts_and_campaigns_cli_emit_dashboard_json(tmp_path: Path):
 def test_campaign_client_and_selftest_expose_parity_contract(tmp_path: Path):
     campaign = _make_campaign(tmp_path)
     graph = CampaignClient(tmp_path).graph(str(campaign))
-    commands = ValidationClient().commands()["commands"]
+    validation = ValidationClient()
+    commands = validation.commands()["commands"]
+    agent_contract = validation.operation_contract("read_only")
 
     assert graph["nodes"][0]["id"] == "persona_council"
     assert any(command["operation"] == "runs.inspect" for command in commands)
     assert any(command["operation"] == "campaigns.graph" for command in commands)
     assert any(command["operation"] == "campaigns.create" for command in commands)
     assert any(command["operation"] == "campaigns.explain_node" for command in commands)
+    assert agent_contract["surface"] == "msc_cli_sdk_v1"
+    assert all(not operation["mutates"] for operation in agent_contract["operations"])
+    assert "campaign_events" in agent_contract["read_model_sources"]
 
 
 def test_campaign_list_uses_store_only_and_ignores_template_placeholder(tmp_path: Path):

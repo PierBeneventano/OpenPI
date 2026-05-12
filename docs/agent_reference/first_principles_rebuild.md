@@ -245,6 +245,12 @@ The projection rules live in `msc_sdk.campaign_projection`, separate from
 `CampaignStore`, so future UX, OpenClaude, and OpenClaw integrations can depend
 on the read-side contract without importing storage and mutation internals.
 
+Agent integrations should also use the public operation contract exposed by
+`msc_sdk.validation.public_operation_contract(...)`. That contract names the
+supported CLI/SDK operations, capability profile, read-model sources, and
+mutation confirmation policy so OpenClaude/OpenClaw do not invent parallel
+control surfaces.
+
 The scheduler supports deterministic branch fan-out, join barriers, route
 conditions, and bounded loops. When a loop limit is reached, the kernel emits a
 human decision event instead of continuing autonomously.
