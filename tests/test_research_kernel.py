@@ -10,6 +10,7 @@ from msc_sdk.kernel import (
     GraphSpec,
     InputSpec,
     InMemoryEventBus,
+    KERNEL_NATIVE_STAGE_IDS,
     ModelPolicy,
     ModelRegistry,
     ResearchKernel,
@@ -21,12 +22,14 @@ from msc_sdk.kernel import (
     ToolRegistry,
     ValidationResult,
     ValidatorRegistry,
+    build_kernel_native_research_kernel,
     project_run,
 )
 from msc_sdk.kernel.engine import artifact, non_empty_artifact
 from msc_sdk.kernel.models import JsonlEventBus
 from msc_sdk.kernel.read_models import read_jsonl_events
 from msc_sdk.read_models import campaign_model_from_kernel_run
+from msc_sdk.stage_contracts import compile_kernel_graph
 
 
 def _run_spec(tmp_path: Path, *stages: StageSpec) -> RunSpec:
@@ -798,6 +801,39 @@ def test_product_campaign_read_model_can_project_from_kernel_events(tmp_path: Pa
     assert report.source_role == "deliverable"
     assert report.metadata["schema_id"] == "review_v1"
     assert report.metadata["claim_ids"] == ["claim:ready"]
+
+
+def test_kernel_native_literature_workflow_runs_without_langgraph(tmp_path: Path):
+    graph = compile_kernel_graph(
+        graph_id="literature-only",
+        template="literature_only",
+        budget=1,
+    )
+    events = InMemoryEventBus()
+    kernel = build_kernel_native_research_kernel(graph)
+    kernel.event_bus = events
+    run = RunSpec(
+        id="run_1",
+        campaign_id="campaign_1",
+        objective="Produce a literature-grounded research plan.",
+        workspace=tmp_path / "run_1",
+        graph=graph,
+        budget=BudgetPolicy(max_usd=1, spend_allowed=True),
+    )
+
+    outcomes = kernel.run(run)
+    all_outcomes = list(outcomes)
+    while outcomes and outcomes[-1].status == "human_decision_required":
+        decision = kernel.decision_queue.pending(run_id=run.id)[0]
+        kernel.decide(decision.id, approved=True, actor="researcher")
+        outcomes = kernel.resume(decision.id)
+        all_outcomes.extend(outcomes)
+    model = project_run(events.events)
+
+    assert model.completed_stage_ids == list(KERNEL_NATIVE_STAGE_IDS)
+    assert any(outcome.stage_id == "research_plan_writeup_agent" for outcome in all_outcomes)
+    assert model.status == "completed"
+    assert (tmp_path / "run_1" / "research_plan_writeup_agent" / "artifacts" / "research_plan.md").exists()
 
 
 def test_kernel_events_project_human_decision_required(tmp_path: Path):

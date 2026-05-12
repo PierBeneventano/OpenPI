@@ -51,6 +51,11 @@ from .read_models import (
     project_run,
     read_jsonl_events,
 )
+from .native_research import (
+    KERNEL_NATIVE_STAGE_IDS,
+    build_kernel_native_research_kernel,
+    register_kernel_native_adapters,
+)
 
 __all__ = [
     "ArtifactRecord",
@@ -92,6 +97,9 @@ __all__ = [
     "KernelArtifactReadModel",
     "KernelRunReadModel",
     "KernelStageReadModel",
+    "KERNEL_NATIVE_STAGE_IDS",
+    "build_kernel_native_research_kernel",
     "project_run",
     "read_jsonl_events",
+    "register_kernel_native_adapters",
 ]

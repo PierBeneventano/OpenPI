@@ -184,6 +184,8 @@ def template_node_ids(template: str) -> list[str]:
             "lit_review_gate",
             "brainstorm_agent",
             "brainstorm_artifact_gate",
+            "formalize_goals_entry",
+            "formalize_goals_agent",
             "research_plan_writeup_agent",
         ]
     if template == "experiment_design":
@@ -219,14 +221,16 @@ def compile_kernel_graph(
     ids = template_node_ids(template)
     all_contracts = contracts_by_id()
     contracts = [all_contracts[node_id] for node_id in ids if node_id in all_contracts]
+    included_stage_ids = set(ids)
     stages = tuple(
         _stage_spec_from_contract(
             contract,
-            included_stage_ids=set(ids),
+            included_stage_ids=included_stage_ids,
+            fallback_next_stage_id=contracts[index + 1].id if index + 1 < len(contracts) else None,
             total_budget_usd=budget,
             total_weight=_total_budget_weight(contracts),
         )
-        for contract in contracts
+        for index, contract in enumerate(contracts)
     )
     entry_stage_id = stages[0].id if stages else "empty"
     if not stages:
@@ -342,6 +346,7 @@ def _stage_spec_from_contract(
     contract: StageContract,
     *,
     included_stage_ids: set[str],
+    fallback_next_stage_id: str | None,
     total_budget_usd: float,
     total_weight: float,
 ) -> StageSpec:
@@ -358,6 +363,20 @@ def _stage_spec_from_contract(
         "required_artifact_contracts": [artifact.to_dict() for artifact in contract.required_artifacts],
         "optional_artifact_contracts": [artifact.to_dict() for artifact in contract.optional_artifacts],
     }
+    routes = tuple(
+        _route_spec(route)
+        for route in contract.allowed_routes
+        if route.target in included_stage_ids
+    )
+    if not routes and fallback_next_stage_id is not None:
+        routes = (
+            RouteSpec(
+                target=fallback_next_stage_id,
+                kind="next",
+                condition="always",
+                metadata={"legacy_kind": "template_order", "synthesized": True},
+            ),
+        )
     return StageSpec(
         id=contract.id,
         title=contract.title,
@@ -376,16 +395,9 @@ def _stage_spec_from_contract(
         adapter_id=f"historical.{contract.id}",
         budget=KernelBudgetPolicy(max_usd=budget_share, spend_allowed=contract.budget_policy.spend),
         failure=FailurePolicy(mode="stop_for_human"),
-        routes=tuple(
-            _route_spec(route)
-            for route in contract.allowed_routes
-            if route.target in included_stage_ids
-        ),
+        routes=routes,
         pause_before=any(policy.startswith("before_") for policy in contract.human_pause_policy),
-        pause_after=any(
-            policy.startswith("after_") or policy.startswith("on_")
-            for policy in contract.human_pause_policy
-        ),
+        pause_after=any(policy.startswith("after_") for policy in contract.human_pause_policy),
         metadata=metadata,
     )
 
