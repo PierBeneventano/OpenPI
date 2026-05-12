@@ -56,9 +56,11 @@ for (const expected of [
   "message.type === 'stopRun'",
   "message.type === 'interruptRun'",
   "message.type === 'sendInstruction'",
+  "message.type === 'submitFeedback'",
   "['campaigns', '--root', root, 'graph'",
   "['campaigns', '--root', root, 'inspect'",
   "['campaigns', '--root', root, 'artifacts'",
+  "['campaigns', '--root', root, 'events'",
   "['project', 'readiness', '--json']",
   "['selftest', 'commands', '--json']",
   "['openclaude', 'readiness', '--json']",
@@ -69,7 +71,7 @@ for (const expected of [
 
 assert(uiSource.includes('Campaign Workspace'));
 assert(uiSource.includes('New Campaign'));
-assert(uiSource.includes('Start Run'));
+assert(uiSource.includes('Start Local Run'));
 assert(uiSource.includes('Diagnostics'));
 assert(uiSource.includes('ErrorSummary'));
 assert(uiSource.includes('LoadingNotice'));
@@ -78,8 +80,12 @@ assert(uiSource.includes('state.loading && !state.loaded'));
 assert(uiSource.includes('RunStatusPanel'));
 assert(uiSource.includes('Start Campaign Run'));
 assert(uiSource.includes('RUN LOCAL'));
-assert(uiSource.includes("['graph', 'steer', 'artifacts']"));
-assert(uiSource.includes('OpenClaude Placeholder'));
+assert(uiSource.includes("['graph', 'feedback', 'artifacts']"));
+assert(uiSource.includes('HumanFeedbackForm'));
+assert(uiSource.includes('Record Feedback'));
+assert(uiSource.includes('Start First Local Run'));
+assert(uiSource.includes('No local process is attached to this dashboard.'));
+assert(uiSource.includes('Assistant readiness'));
 assert(uiSource.includes('InteractiveGraph'));
 assert(uiSource.includes('graph-canvas'));
 assert(uiSource.includes('layoutGraph'));
@@ -96,6 +102,8 @@ assert(!uiSource.includes('Local mode'));
 assert(extensionSource.includes('bundleExportRoot'));
 assert(extensionSource.includes('Closing a dashboard panel should not be a destructive run-control action'));
 assert(extensionSource.includes('refreshPromise'));
+assert(extensionSource.includes('campaignRunSummary'));
+assert(extensionSource.includes("'feedback'"));
 assert(extensionSource.includes("'create'"));
 assert(!extensionSource.includes('fs.writeFileSync(campaignPath'));
 

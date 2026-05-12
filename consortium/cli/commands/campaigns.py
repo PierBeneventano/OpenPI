@@ -110,6 +110,37 @@ def campaigns_events(ctx: click.Context, campaign_ref: str, limit: int | None, a
         click.echo(f"{event['created_at']} {event['type']}")
 
 
+@campaigns.command("feedback")
+@click.argument("campaign_ref")
+@click.option("--text", required=True, help="Human feedback to append to the campaign event stream.")
+@click.option("--node", "node_id", default=None, help="Optional graph node this feedback targets.")
+@click.option("--run-id", default=None, help="Optional run id this feedback targets.")
+@click.option("--type", "feedback_type", default="feedback", show_default=True, help="Feedback category.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_feedback(
+    ctx: click.Context,
+    campaign_ref: str,
+    text: str,
+    node_id: str | None,
+    run_id: str | None,
+    feedback_type: str,
+    as_json: bool,
+) -> None:
+    """Append auditable human feedback without mutating artifacts."""
+    data = CampaignClient(ctx.obj["campaign_root"]).feedback(
+        campaign_ref,
+        text=text,
+        node_id=node_id,
+        run_id=run_id,
+        feedback_type=feedback_type,
+    )
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(f"{data['campaign_id']}: feedback recorded")
+
+
 @campaigns.command("approve-graph")
 @click.argument("campaign_ref")
 @click.option("--graph-version", type=int, required=True, help="Graph version to approve.")

@@ -15,6 +15,8 @@ const emptyState = {
   campaignDetails: null,
   campaignGraph: null,
   campaignArtifacts: [],
+  campaignEvents: [],
+  campaignRunSummary: { runs: [], latestRun: null, feedback: [] },
   selectedGraphNode: null,
   artifactPreview: null,
   activeRun: null,
@@ -149,10 +151,11 @@ function CampaignWorkspace({ state, tab, setTab }) {
         <div className="header-actions">
           <span className={`pill status-${statusClass(statusOf(details))}`}>{statusOf(details)}</span>
           <span className="pill">{formatBudget(details.budget)}</span>
+          <button onClick={() => setTab('feedback')}>Give Feedback</button>
           {active ? (
             <button className="danger" onClick={() => vscode.postMessage({ type: 'stopRun' })}>Stop Run</button>
           ) : (
-            <button className="primary" onClick={() => setRunOpen(true)}>Start Run</button>
+            <button className="primary" onClick={() => setRunOpen(true)}>Start Local Run</button>
           )}
           <button onClick={() => vscode.postMessage({ type: 'refreshCampaign' })}>Refresh</button>
         </div>
@@ -163,7 +166,7 @@ function CampaignWorkspace({ state, tab, setTab }) {
       <ErrorSummary errors={state.errors || []} />
 
       <nav className="workspace-tabs">
-        {['graph', 'steer', 'artifacts'].map((name) => (
+        {['graph', 'feedback', 'artifacts'].map((name) => (
           <button key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>
             {capitalize(name)}
           </button>
@@ -172,7 +175,7 @@ function CampaignWorkspace({ state, tab, setTab }) {
 
       <RunStatusPanel state={state} onStart={() => setRunOpen(true)} />
       {tab === 'graph' ? <GraphTab state={state} /> : null}
-      {tab === 'steer' ? <SteerTab state={state} /> : null}
+      {tab === 'feedback' ? <FeedbackTab state={state} /> : null}
       {tab === 'artifacts' ? <ArtifactsTab state={state} /> : null}
       {runOpen ? <RunCampaignModal state={state} onClose={() => setRunOpen(false)} /> : null}
     </div>
@@ -182,14 +185,20 @@ function CampaignWorkspace({ state, tab, setTab }) {
 function RunStatusPanel({ state, onStart }) {
   const run = state.activeRun;
   const logs = state.runLog || [];
+  const summary = state.campaignRunSummary || {};
+  const latestRun = summary.latestRun || null;
   if (!run && !logs.length) {
     return (
       <section className="run-strip idle">
         <div>
-          <strong>No active run</strong>
-          <span>Start the local pipeline when the campaign graph and budget look right.</span>
+          <strong>{latestRun ? `Latest campaign run: ${latestRun.status || 'unknown'}` : 'Campaign run not started'}</strong>
+          <span>
+            {latestRun
+              ? `${latestRun.run_id || 'run'}${latestRun.exited_at ? ` | exited ${formatTime(latestRun.exited_at)}` : latestRun.started_at ? ` | started ${formatTime(latestRun.started_at)}` : ''}. No local process is attached to this dashboard.`
+              : 'This campaign has no recorded RunStarted event yet.'}
+          </span>
         </div>
-        <button className="primary" onClick={onStart}>Start Run</button>
+        <button className="primary" onClick={onStart}>{latestRun ? 'Start New Attempt' : 'Start First Local Run'}</button>
       </section>
     );
   }
@@ -206,7 +215,7 @@ function RunStatusPanel({ state, onStart }) {
         {run && ['running', 'stopping'].includes(run.status) ? (
           <button className="danger" onClick={() => vscode.postMessage({ type: 'stopRun' })}>Stop</button>
         ) : (
-          <button onClick={onStart}>Run Again</button>
+          <button onClick={onStart}>Start New Attempt</button>
         )}
       </div>
       <div className="run-log">
@@ -522,34 +531,107 @@ function GraphSvgNode({ node, selected }) {
   );
 }
 
-function SteerTab({ state }) {
+function FeedbackTab({ state }) {
   const active = state.activeRun && ['running', 'stopping'].includes(state.activeRun.status);
   const steering = state.steering || {};
+  const feedback = state.campaignRunSummary?.feedback || [];
   return (
     <main className="split-layout">
       <section className="panel">
-        <p className="eyebrow">Downstream assistant layer</p>
-        <h2>OpenClaude Placeholder</h2>
-        <p>
-          OpenClaude will become the assistant layer after the campaign UX has stable campaign, graph, artifact,
-          run, and preview primitives. This pass keeps it visible for readiness context only.
-        </p>
+        <p className="eyebrow">Researcher feedback</p>
+        <h2>Human Feedback</h2>
+        <HumanFeedbackForm state={state} />
+        <h3>Recent Feedback</h3>
+        {feedback.length ? (
+          <div className="feedback-list">
+            {feedback.slice(0, 6).map((item) => (
+              <div className="feedback-item" key={item.id || `${item.created_at}-${item.text}`}>
+                <div className="card-topline">
+                  <span className="pill">{item.type || 'feedback'}</span>
+                  {item.node_id ? <span className="pill">{item.node_id}</span> : null}
+                  <span>{formatTime(item.created_at)}</span>
+                </div>
+                <p>{item.text}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="subtle">No human feedback has been recorded for this campaign yet.</p>
+        )}
+      </section>
+
+      <section className="panel">
+        <p className="eyebrow">Live process control</p>
+        <h2>Low-Level Local Steering</h2>
+        {active ? (
+          <LowLevelSteering steering={steering} />
+        ) : (
+          <p className="subtle">Start a local run from this dashboard before live steering controls appear here. Campaign feedback can still be recorded without an active process.</p>
+        )}
+        <h3>Assistant readiness</h3>
         <dl className="definition-list">
           <dt>OpenClaude</dt><dd>{state.diagnostics?.openclaude?.launch_ready ? 'ready' : 'not ready'}</dd>
           <dt>OpenRouter</dt><dd>{state.settings?.openRouterConfigured ? 'configured' : 'missing'}</dd>
           <dt>Model</dt><dd>{state.diagnostics?.openclaude?.model || '-'}</dd>
         </dl>
       </section>
-
-      <section className="panel">
-        <h2>Low-Level Local Steering</h2>
-        {active ? (
-          <LowLevelSteering steering={steering} />
-        ) : (
-          <p className="subtle">Start a locally hosted campaign run before low-level steering controls appear here.</p>
-        )}
-      </section>
     </main>
+  );
+}
+
+function HumanFeedbackForm({ state }) {
+  const stages = graphNodesFromState(state);
+  const defaultNode = state.selectedGraphNode || stages[0]?.id || '';
+  const latestRun = state.campaignRunSummary?.latestRun || null;
+  const [draft, setDraft] = useState({
+    text: '',
+    nodeId: defaultNode,
+    feedbackType: 'feedback',
+    attachRun: Boolean(latestRun?.run_id)
+  });
+
+  useEffect(() => {
+    setDraft((current) => current.nodeId ? current : { ...current, nodeId: defaultNode });
+  }, [defaultNode]);
+
+  function update(key, value) {
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function submit(event) {
+    event.preventDefault();
+    const text = draft.text.trim();
+    if (!text) return;
+    vscode.postMessage({
+      type: 'submitFeedback',
+      text,
+      nodeId: draft.nodeId,
+      feedbackType: draft.feedbackType,
+      runId: draft.attachRun && latestRun?.run_id ? latestRun.run_id : ''
+    });
+    setDraft((current) => ({ ...current, text: '' }));
+  }
+
+  return (
+    <form className="feedback-form" onSubmit={submit}>
+      <label>Feedback<textarea value={draft.text} onChange={(event) => update('text', event.target.value)} placeholder="Tell the campaign what should change, what needs review, or what the next run should respect." /></label>
+      <div className="form-grid">
+        <label>Target stage<select value={draft.nodeId} onChange={(event) => update('nodeId', event.target.value)}>
+          <option value="">Whole campaign</option>
+          {stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.label || stage.id}</option>)}
+        </select></label>
+        <label>Kind<select value={draft.feedbackType} onChange={(event) => update('feedbackType', event.target.value)}>
+          <option value="feedback">Feedback</option>
+          <option value="revision">Revision request</option>
+          <option value="question">Question</option>
+          <option value="approval_note">Approval note</option>
+        </select></label>
+      </div>
+      {latestRun?.run_id ? (
+        <label className="check-line"><input type="checkbox" checked={draft.attachRun} onChange={(event) => update('attachRun', event.target.checked)} /> Attach to latest run</label>
+      ) : null}
+      <button className="primary" type="submit" disabled={!draft.text.trim()}>Record Feedback</button>
+    </form>
   );
 }
 
@@ -1089,6 +1171,13 @@ function formatRoutes(routes) {
 
 function basename(value) {
   return String(value || '').split('/').filter(Boolean).pop() || '';
+}
+
+function formatTime(value) {
+  if (!value) return '-';
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return String(value);
+  return new Date(parsed).toLocaleString();
 }
 
 function capitalize(value) {

@@ -441,6 +441,23 @@ marker path {
   flex-wrap: wrap;
   gap: 10px 16px;
 }
+.feedback-form {
+  display: grid;
+  gap: 10px;
+}
+.feedback-list {
+  display: grid;
+  gap: 8px;
+}
+.feedback-item {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  padding: 9px;
+}
+.feedback-item p {
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+}
 .toggle-row label,
 .spend-gate label {
   display: flex;

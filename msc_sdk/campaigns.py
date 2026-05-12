@@ -68,6 +68,26 @@ class CampaignClient:
     def events(self, campaign_ref: str | Path, *, limit: int | None = None) -> dict[str, Any]:
         return self.store.events(campaign_ref, limit=limit)
 
+    def feedback(
+        self,
+        campaign_ref: str | Path,
+        *,
+        text: str,
+        node_id: str | None = None,
+        run_id: str | None = None,
+        feedback_type: str = "feedback",
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        return self.store.record_instruction(
+            campaign_ref,
+            text=text,
+            instruction_type=feedback_type,
+            run_id=run_id,
+            direction="to_campaign",
+            actor=actor,
+            metadata={"node_id": node_id} if node_id else {},
+        )
+
     def approve_graph(self, campaign_ref: str | Path, graph_version: int, *, actor: str = "user") -> dict[str, Any]:
         campaign_id = self.store.resolve_ref(campaign_ref)
         return self.store.approve_graph(campaign_id, graph_version, actor=actor)

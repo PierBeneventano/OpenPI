@@ -888,7 +888,14 @@ class CampaignStore:
                 campaign_id=campaign_id,
                 event_type="InstructionSent",
                 actor=actor,
-                payload={"message_id": message_id, "run_id": run_id, "direction": direction, "text": text, "type": instruction_type},
+                payload={
+                    "message_id": message_id,
+                    "run_id": run_id,
+                    "direction": direction,
+                    "text": text,
+                    "type": instruction_type,
+                    "metadata": metadata or {},
+                },
             )
         return {"ok": True, "campaign_id": campaign_id, "message_id": message_id, "event": event}
 

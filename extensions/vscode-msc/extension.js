@@ -55,6 +55,8 @@ async function handleMessage(session, message) {
     session.state.campaignDetails = null;
     session.state.campaignGraph = null;
     session.state.campaignArtifacts = [];
+    session.state.campaignEvents = [];
+    session.state.campaignRunSummary = defaultRunSummary();
     session.state.selectedGraphNode = null;
     session.state.artifactPreview = null;
     postState(session);
@@ -83,6 +85,8 @@ async function handleMessage(session, message) {
     await interruptRun(session);
   } else if (message.type === 'sendInstruction') {
     await sendInstruction(session, message);
+  } else if (message.type === 'submitFeedback') {
+    await submitFeedback(session, message);
   }
 }
 
@@ -128,6 +132,8 @@ function initialState(root) {
     campaignDetails: null,
     campaignGraph: null,
     campaignArtifacts: [],
+    campaignEvents: [],
+    campaignRunSummary: defaultRunSummary(),
     selectedGraphNode: null,
     artifactPreview: null,
     settingsOpen: false,
@@ -287,11 +293,15 @@ async function loadCampaignWorkspace(root, campaignRef) {
   const inspect = await runJson(root, ['campaigns', '--root', root, 'inspect', campaignRef, '--json']);
   const graph = await runJson(root, ['campaigns', '--root', root, 'graph', campaignRef, '--json']);
   const artifacts = await runJson(root, ['campaigns', '--root', root, 'artifacts', campaignRef, '--json']);
+  const events = await runJson(root, ['campaigns', '--root', root, 'events', campaignRef, '--limit', '200', '--json']);
+  const campaignEvents = unwrap(events, 'campaignEvents').events || [];
   return {
     campaignDetails: unwrap(inspect, 'campaign'),
     campaignGraph: unwrap(graph, 'campaignGraph'),
     campaignArtifacts: normalizeArtifacts(unwrap(artifacts, 'artifacts')),
-    errors: [...inspect.errors, ...graph.errors, ...artifacts.errors]
+    campaignEvents,
+    campaignRunSummary: summarizeCampaignEvents(campaignEvents),
+    errors: [...inspect.errors, ...graph.errors, ...artifacts.errors, ...events.errors]
   };
 }
 
@@ -622,6 +632,67 @@ function formatTextPreview(content, ext) {
   return content;
 }
 
+function defaultRunSummary() {
+  return { runs: [], latestRun: null, feedback: [] };
+}
+
+function summarizeCampaignEvents(events) {
+  const runs = new Map();
+  const feedback = [];
+  for (const event of events || []) {
+    const type = String(event.type || '');
+    const payload = event.payload || {};
+    if (type === 'RunStarted') {
+      const runId = String(payload.run_id || event.id || '');
+      if (!runId) {
+        continue;
+      }
+      const current = runs.get(runId) || { run_id: runId };
+      runs.set(runId, {
+        ...current,
+        run_id: runId,
+        status: 'running',
+        pid: payload.pid || current.pid || null,
+        graph_version: payload.graph_version || current.graph_version || null,
+        command: payload.command || current.command || null,
+        started_at: event.created_at || current.started_at || null,
+        updated_at: event.created_at || current.updated_at || null
+      });
+    } else if (type === 'RunExited') {
+      const runId = String(payload.run_id || event.id || '');
+      if (!runId) {
+        continue;
+      }
+      const current = runs.get(runId) || { run_id: runId };
+      runs.set(runId, {
+        ...current,
+        run_id: runId,
+        status: String(payload.status || (payload.exit_code === 0 ? 'completed' : 'failed')),
+        exit_code: payload.exit_code,
+        exited_at: event.created_at || current.exited_at || null,
+        updated_at: event.created_at || current.updated_at || null
+      });
+    } else if (type === 'InstructionSent') {
+      feedback.push({
+        id: payload.message_id || event.id,
+        text: payload.text || '',
+        type: payload.type || 'feedback',
+        run_id: payload.run_id || null,
+        node_id: (payload.metadata && payload.metadata.node_id) || null,
+        direction: payload.direction || null,
+        created_at: event.created_at || null,
+        actor: event.actor || null
+      });
+    }
+  }
+  const runList = Array.from(runs.values()).sort((left, right) => String(right.updated_at || '').localeCompare(String(left.updated_at || '')));
+  return {
+    runs: runList,
+    latestRun: runList[0] || null,
+    feedback: feedback.sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')))
+  };
+}
+
 function unwrap(result, label) {
   if (result.ok) {
     return result.data || {};
@@ -848,6 +919,46 @@ async function sendInstruction(session, message) {
   }
   appendRunLog(session, 'system', 'Steering instruction sent.');
   await pollSteering(session);
+}
+
+async function submitFeedback(session, message) {
+  if (!session.state.selectedCampaign) {
+    setActionError(session, 'Select a campaign before recording feedback.');
+    return;
+  }
+  const text = String(message.text || '').trim();
+  if (!text) {
+    setActionError(session, 'Enter feedback before recording it.');
+    return;
+  }
+  const args = [
+    'campaigns',
+    '--root',
+    session.root,
+    'feedback',
+    session.state.selectedCampaign,
+    '--text',
+    text,
+    '--type',
+    oneOf(message.feedbackType, ['feedback', 'revision', 'question', 'approval_note'], 'feedback'),
+    '--json'
+  ];
+  const nodeId = String(message.nodeId || '').trim();
+  const runId = String(message.runId || '').trim();
+  if (nodeId) {
+    args.push('--node', nodeId);
+  }
+  if (runId) {
+    args.push('--run-id', runId);
+  }
+  const result = await runJson(session.root, args);
+  if (!result.ok) {
+    setActionError(session, result.error || result.stderr || 'Feedback could not be recorded.');
+    return;
+  }
+  session.state.actionError = null;
+  Object.assign(session.state, await loadCampaignWorkspace(session.root, session.state.selectedCampaign));
+  postState(session);
 }
 
 function startSteeringPolling(session) {

@@ -231,6 +231,28 @@ def test_campaign_cli_steering_surfaces_are_json_and_audited(tmp_path: Path):
     assert pause.exit_code == 0
     assert json.loads(pause.output)["status"] == "paused"
 
+    feedback = _invoke(
+        runner,
+        [
+            "campaigns",
+            "--root",
+            str(tmp_path),
+            "feedback",
+            "demo-campaign",
+            "--node",
+            "writeup_agent",
+            "--text",
+            "Please clarify the theorem statement before rerunning.",
+            "--json",
+        ],
+    )
+    assert feedback.exit_code == 0
+    feedback_data = json.loads(feedback.output)
+    assert feedback_data["message_id"]
+    assert feedback_data["event"]["type"] == "InstructionSent"
+    assert feedback_data["event"]["payload"]["type"] == "feedback"
+    assert feedback_data["event"]["payload"]["metadata"]["node_id"] == "writeup_agent"
+
     summary = _invoke(
         runner,
         ["campaigns", "--root", str(tmp_path), "summarize-artifacts", "demo-campaign", "--json"],

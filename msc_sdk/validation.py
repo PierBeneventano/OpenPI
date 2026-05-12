@@ -41,6 +41,7 @@ PUBLIC_COMMANDS = [
     CommandSpec("campaigns.import", "msc campaigns import <bundle_dir> --json", "CampaignClient.import_bundle(path)", "write.campaigns", True),
     CommandSpec("campaigns.export", "msc campaigns export <campaign> --json", "CampaignClient.export_bundle(ref)", "write.campaigns", True),
     CommandSpec("campaigns.events", "msc campaigns events <campaign> --json", "CampaignClient.events(ref)", "read.events"),
+    CommandSpec("campaigns.feedback", "msc campaigns feedback <campaign> --text <feedback> --json", "CampaignClient.feedback(ref, text=...)", "write.feedback", True),
     CommandSpec("campaigns.approve_graph", "msc campaigns approve-graph <campaign> --graph-version <n> --json", "CampaignClient.approve_graph(ref, n)", "write.campaigns", True),
     CommandSpec("campaigns.explain_node", "msc campaigns explain-node <campaign> <node> --json", "CampaignClient.explain_node(ref, node)", "read.campaigns"),
     CommandSpec("campaigns.propose_graph_change", "msc campaigns propose-graph-change <campaign> --json", "CampaignClient.propose_graph_change(...)", "write.approvals", True),
