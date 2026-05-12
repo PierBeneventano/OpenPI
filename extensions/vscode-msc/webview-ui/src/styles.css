@@ -76,6 +76,15 @@ h3 { font-size: 13px; margin: 18px 0 8px; }
 }
 .metrics-grid { grid-template-columns: repeat(4, minmax(120px, 1fr)); }
 .campaign-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.dashboard-loading {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.dashboard-loading .loading-empty {
+  grid-column: 1 / -1;
+}
 .metric, .campaign-card, .panel, .detail-panel, .preview-panel, .empty-panel {
   border: 1px solid var(--border);
   background: var(--panel);
@@ -84,6 +93,24 @@ h3 { font-size: 13px; margin: 18px 0 8px; }
 }
 .metric strong { display: block; font-size: 24px; margin: 3px 0; }
 .metric span, .metric small { color: var(--muted); }
+.skeleton-card {
+  min-height: 92px;
+}
+.skeleton-line {
+  display: block;
+  height: 10px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--border), var(--input), var(--border));
+  background-size: 220% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+.skeleton-line.short { width: 42%; }
+.skeleton-line.medium { width: 68%; height: 24px; margin: 9px 0; }
+.skeleton-line.tiny { width: 54%; }
+@keyframes shimmer {
+  0% { background-position: 120% 0; }
+  100% { background-position: -120% 0; }
+}
 .campaign-card h2 { margin: 8px 0 6px; }
 .campaign-card p { color: var(--muted); min-height: 38px; overflow-wrap: anywhere; }
 .card-topline, .card-facts, .artifact-actions, .workspace-title, .fact-row {
@@ -443,7 +470,7 @@ marker path {
 .log-list code { background: var(--bg); padding: 6px; overflow-wrap: anywhere; }
 
 @media (max-width: 900px) {
-  .metrics-grid, .split-layout, .artifact-layout, .filters, .form-grid { grid-template-columns: 1fr; }
+  .metrics-grid, .dashboard-loading, .split-layout, .artifact-layout, .filters, .form-grid { grid-template-columns: 1fr; }
   .run-strip { grid-template-columns: 1fr; }
   .home-header, .workspace-header { align-items: stretch; flex-direction: column; }
   .artifact-row { flex-direction: column; }

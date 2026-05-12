@@ -8,6 +8,7 @@ const emptyState = {
   root: '',
   view: 'home',
   loading: true,
+  loaded: false,
   campaigns: [],
   settings: {},
   diagnostics: {},
@@ -58,6 +59,7 @@ function App() {
 
 function Home({ state, newCampaignOpen, setNewCampaignOpen }) {
   const campaigns = state.campaigns || [];
+  const firstLoad = state.loading && !state.loaded;
   const totalArtifacts = campaigns.reduce((sum, campaign) => sum + Number(campaign.artifactCount || 0), 0);
   const activeCampaigns = campaigns.filter((campaign) => ['running', 'planned', 'draft'].includes(String(campaign.status || ''))).length;
 
@@ -80,40 +82,46 @@ function Home({ state, newCampaignOpen, setNewCampaignOpen }) {
       {state.actionError ? <div className="notice error">{state.actionError}</div> : null}
       <ErrorSummary errors={state.errors || []} />
 
-      <section className="metrics-grid">
-        <Metric label="Campaigns" value={campaigns.length} detail="local specs" />
-        <Metric label="Active" value={activeCampaigns} detail="draft, planned, or running" />
-        <Metric label="Artifacts" value={totalArtifacts} detail="declared and discovered" />
-        <Metric label="OpenRouter" value={state.settings?.openRouterConfigured ? 'Ready' : 'Missing'} detail="settings check" />
-      </section>
+      {firstLoad ? (
+        <DashboardLoadingState />
+      ) : (
+        <>
+          <section className="metrics-grid">
+            <Metric label="Campaigns" value={campaigns.length} detail="local specs" />
+            <Metric label="Active" value={activeCampaigns} detail="draft, planned, or running" />
+            <Metric label="Artifacts" value={totalArtifacts} detail="declared and discovered" />
+            <Metric label="OpenRouter" value={state.settings?.openRouterConfigured ? 'Ready' : 'Missing'} detail="settings check" />
+          </section>
 
-      <section className="campaign-grid">
-        {campaigns.length ? campaigns.map((campaign) => (
-          <button
-            key={campaign.path || campaign.name}
-            className="campaign-card"
-            onClick={() => vscode.postMessage({ type: 'selectCampaign', campaign: campaign.path || campaign.name })}
-          >
-            <div className="card-topline">
-              <span className={`status-dot status-${statusClass(campaign.status)}`} />
-              <span>{campaign.status || 'unknown'}</span>
-            </div>
-            <h2>{campaign.title || campaign.name || 'Untitled campaign'}</h2>
-            <p>{campaign.path || campaign.workspaceRoot || 'No path'}</p>
-            <div className="card-facts">
-              <span>{formatBudget(campaign.budget)}</span>
-              <span>{campaign.artifactCount || 0} artifacts</span>
-              <span>{campaign.requiredMissing || 0} missing</span>
-            </div>
-          </button>
-        )) : (
-          <div className="empty-panel">
-            <h2>No campaigns yet</h2>
-            <p>Create a draft campaign to start shaping the local workflow without launching anything.</p>
-            <button className="primary" onClick={() => setNewCampaignOpen(true)}>New Campaign</button>
-          </div>
-        )}
-      </section>
+          <section className="campaign-grid">
+            {campaigns.length ? campaigns.map((campaign) => (
+              <button
+                key={campaign.path || campaign.name}
+                className="campaign-card"
+                onClick={() => vscode.postMessage({ type: 'selectCampaign', campaign: campaign.path || campaign.name })}
+              >
+                <div className="card-topline">
+                  <span className={`status-dot status-${statusClass(campaign.status)}`} />
+                  <span>{campaign.status || 'unknown'}</span>
+                </div>
+                <h2>{campaign.title || campaign.name || 'Untitled campaign'}</h2>
+                <p>{campaign.path || campaign.workspaceRoot || 'No path'}</p>
+                <div className="card-facts">
+                  <span>{formatBudget(campaign.budget)}</span>
+                  <span>{campaign.artifactCount || 0} artifacts</span>
+                  <span>{campaign.requiredMissing || 0} missing</span>
+                </div>
+              </button>
+            )) : (
+              <div className="empty-panel">
+                <h2>No campaigns yet</h2>
+                <p>Create a draft campaign to start shaping the local workflow without launching anything.</p>
+                <button className="primary" onClick={() => setNewCampaignOpen(true)}>New Campaign</button>
+              </div>
+            )}
+          </section>
+        </>
+      )}
 
       {state.settingsOpen ? <DiagnosticsModal state={state} /> : null}
       {newCampaignOpen ? <NewCampaignModal onClose={() => setNewCampaignOpen(false)} /> : null}
@@ -744,8 +752,34 @@ function LoadingNotice() {
   return (
     <div className="loading-bar" role="status">
       <span className="spinner" />
-      <span>Refreshing local campaign state...</span>
+      <span>Loading local campaign state...</span>
     </div>
+  );
+}
+
+function DashboardLoadingState() {
+  return (
+    <section className="dashboard-loading" aria-label="Loading dashboard">
+      <div className="metric skeleton-card">
+        <span className="skeleton-line short" />
+        <strong className="skeleton-line medium" />
+        <small className="skeleton-line tiny" />
+      </div>
+      <div className="metric skeleton-card">
+        <span className="skeleton-line short" />
+        <strong className="skeleton-line medium" />
+        <small className="skeleton-line tiny" />
+      </div>
+      <div className="metric skeleton-card">
+        <span className="skeleton-line short" />
+        <strong className="skeleton-line medium" />
+        <small className="skeleton-line tiny" />
+      </div>
+      <div className="empty-panel loading-empty">
+        <h2>Loading campaigns</h2>
+        <p>Reading local campaign specs, artifacts, budget posture, and diagnostics.</p>
+      </div>
+    </section>
   );
 }
 

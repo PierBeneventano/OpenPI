@@ -28,7 +28,6 @@ function activate(context) {
 
     const session = createDashboardSession(panel, root);
     panel.webview.html = renderHtml(context, panel.webview);
-    refresh(session);
 
     panel.webview.onDidReceiveMessage(async (message) => {
       if (!message || !message.type) {
@@ -94,6 +93,7 @@ function createDashboardSession(panel, root) {
     activeProcess: null,
     stopTimer: null,
     steeringTimer: null,
+    refreshPromise: null,
     state: initialState(root)
   };
 }
@@ -122,6 +122,7 @@ function initialState(root) {
     loading: true,
     generatedAt: new Date().toISOString(),
     errors: [],
+    loaded: false,
     campaigns: [],
     selectedCampaign: null,
     campaignDetails: null,
@@ -154,6 +155,16 @@ function defaultSettings(root) {
 }
 
 async function refresh(session) {
+  if (session.refreshPromise) {
+    return session.refreshPromise;
+  }
+  session.refreshPromise = doRefresh(session).finally(() => {
+    session.refreshPromise = null;
+  });
+  return session.refreshPromise;
+}
+
+async function doRefresh(session) {
   const previous = session.state;
   session.state = { ...previous, loading: true, actionError: null };
   postState(session);
@@ -178,6 +189,7 @@ async function refresh(session) {
 async function collectDashboardData(root) {
   const state = initialState(root);
   state.loading = false;
+  state.loaded = true;
 
   const campaigns = await runJson(root, ['campaigns', '--root', root, 'list', '--json']);
   state.campaigns = await enrichCampaigns(root, unwrap(campaigns, 'campaigns').campaigns || []);
