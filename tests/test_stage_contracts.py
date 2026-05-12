@@ -4,7 +4,12 @@ from pathlib import Path
 import ast
 
 from consortium.stage_contracts.historical import HISTORICAL_RUNTIME_NODE_IDS
-from msc_sdk.stage_contracts import build_contract_graph, contracts_by_id, validate_contract_coverage
+from msc_sdk.stage_contracts import (
+    build_contract_graph,
+    compile_kernel_graph,
+    contracts_by_id,
+    validate_contract_coverage,
+)
 
 
 GRAPH_SOURCE = Path(__file__).resolve().parents[1] / "consortium" / "graph.py"
@@ -87,7 +92,7 @@ def test_contract_graph_projects_control_nodes_loops_and_artifacts():
     node_ids = {node["id"] for node in graph["nodes"]}
     edge_kinds = {edge["kind"] for edge in graph["edges"]}
 
-    assert graph["metadata"]["source"] == "stage_contract_registry"
+    assert graph["metadata"]["source"] == "kernel_graph_projection"
     assert graph["modes"] == ["pipeline", "control", "runtime"]
     assert "lit_review_gate" in node_ids
     assert "track_decomposition_gate" in node_ids
@@ -103,6 +108,35 @@ def test_contract_graph_projects_control_nodes_loops_and_artifacts():
     assert "artifacts/final_paper.md" in writeup["outputs"]
     assert writeup["metadata"]["purpose"]
     assert writeup["metadata"]["humanPausePolicy"]
+
+
+def test_historical_contracts_compile_to_kernel_graph_spec():
+    graph = compile_kernel_graph(
+        graph_id="demo:consortium_scaffold",
+        template="consortium_scaffold",
+        budget=1,
+    )
+    stages = graph.stage_map()
+    route_kinds = {
+        route.kind
+        for stage in graph.stages
+        for route in stage.routes
+    }
+
+    assert graph.entry_stage_id == "persona_council"
+    assert "lit_review_gate" in stages
+    assert "track_decomposition_gate" in stages
+    assert "theory_track" in stages
+    assert "experiment_track" in stages
+    assert "validation_gate" in stages
+    assert "iterate_entry" not in stages
+    assert {"loop", "branch", "join"} <= route_kinds
+    assert stages["writeup_agent"].adapter_id == "historical.writeup_agent"
+    assert "artifacts/final_paper.md" in [
+        artifact.path for artifact in stages["writeup_agent"].outputs
+    ]
+    assert stages["milestone_goals"].pause_before
+    assert stages["review_gate"].pause_after
 
 
 def test_scaffold_template_is_zero_spend_safe_before_runtime(tmp_path: Path):

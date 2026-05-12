@@ -514,6 +514,8 @@ class RouteSpec:
     condition: str = "always"
     kind: Literal["next", "branch", "join", "loop", "failure"] = "next"
     max_visits: int | None = None
+    description: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -533,6 +535,7 @@ class StageSpec:
     routes: tuple[RouteSpec, ...] = ()
     pause_before: bool = False
     pause_after: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def required_outputs(self) -> tuple[ArtifactSpec, ...]:

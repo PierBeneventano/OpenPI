@@ -12,6 +12,16 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from .kernel import (
+    ArtifactSpec,
+    BudgetPolicy as KernelBudgetPolicy,
+    FailurePolicy,
+    GraphSpec,
+    InputSpec,
+    RouteSpec,
+    StageSpec,
+)
+
 
 CONTRACT_GRAPH_VERSION = 1
 
@@ -198,48 +208,64 @@ def template_node_ids(template: str) -> list[str]:
     ]
 
 
-def build_contract_graph(
+def compile_kernel_graph(
     *,
-    campaign_id: str,
-    title: str,
+    graph_id: str,
     template: str,
-    tier: str,
-    budget: float,
-) -> dict[str, Any]:
-    """Build graph IR from contracts rather than a hand-maintained stage list."""
+    budget: float = 0.0,
+) -> GraphSpec:
+    """Compile historical source contracts into the kernel graph language."""
 
     ids = template_node_ids(template)
     all_contracts = contracts_by_id()
     contracts = [all_contracts[node_id] for node_id in ids if node_id in all_contracts]
-    total_weight = sum(
-        contract.budget_policy.relative_weight
-        for contract in contracts
-        if contract.budget_policy.spend
-    ) or 1.0
-
-    nodes: list[dict[str, Any]] = []
-    node_set = {contract.id for contract in contracts}
-    for order, contract in enumerate(contracts, start=1):
-        share = 0.0
-        if contract.budget_policy.spend:
-            share = float(budget) * (contract.budget_policy.relative_weight / total_weight)
-        nodes.append(
-            contract.to_node(
-                campaign_id=campaign_id,
-                template=template,
-                order=order,
-                tier=tier,
-                budget_share_usd=share,
-            )
+    stages = tuple(
+        _stage_spec_from_contract(
+            contract,
+            included_stage_ids=set(ids),
+            total_budget_usd=budget,
+            total_weight=_total_budget_weight(contracts),
         )
+        for contract in contracts
+    )
+    entry_stage_id = stages[0].id if stages else "empty"
+    if not stages:
+        stages = (
+            StageSpec(
+                id="empty",
+                title="Empty Graph",
+                kind="control",
+                purpose="Empty campaign template.",
+                metadata={"template": template},
+            ),
+        )
+    graph = GraphSpec(id=graph_id, stages=stages, entry_stage_id=entry_stage_id)
+    graph.validate()
+    return graph
 
+
+def project_kernel_graph(
+    *,
+    graph: GraphSpec,
+    campaign_id: str,
+    title: str,
+    template: str,
+    tier: str,
+) -> dict[str, Any]:
+    """Project a kernel graph spec into the product graph JSON shape."""
+
+    nodes = [
+        _stage_node(stage, campaign_id=campaign_id, template=template, tier=tier, order=order)
+        for order, stage in enumerate(graph.stages, start=1)
+    ]
+    node_set = {stage.id for stage in graph.stages}
     edges: list[dict[str, Any]] = []
     seen_edges: set[tuple[str, str, str]] = set()
-    for contract in contracts:
-        for route in contract.allowed_routes:
+    for stage in graph.stages:
+        for route in stage.routes:
             if route.target not in node_set:
                 continue
-            edge = route.to_edge(contract.id)
+            edge = _route_edge(stage.id, route)
             key = (edge["source"], edge["target"], edge["kind"])
             if key in seen_edges:
                 continue
@@ -256,12 +282,37 @@ def build_contract_graph(
         "nodes": nodes,
         "edges": edges,
         "metadata": {
-            "source": "stage_contract_registry",
+            "source": "kernel_graph_projection",
+            "kernelGraphId": graph.id,
             "template": template,
             "includesControlNodes": True,
             "graphEdits": "proposal_only",
         },
     }
+
+
+def build_contract_graph(
+    *,
+    campaign_id: str,
+    title: str,
+    template: str,
+    tier: str,
+    budget: float,
+) -> dict[str, Any]:
+    """Build graph IR from contracts rather than a hand-maintained stage list."""
+
+    graph = compile_kernel_graph(
+        graph_id=f"{campaign_id}:{template}",
+        template=template,
+        budget=budget,
+    )
+    return project_kernel_graph(
+        graph=graph,
+        campaign_id=campaign_id,
+        title=title,
+        template=template,
+        tier=tier,
+    )
 
 
 def validate_contract_coverage(runtime_node_ids: Iterable[str]) -> dict[str, Any]:
@@ -275,4 +326,200 @@ def validate_contract_coverage(runtime_node_ids: Iterable[str]) -> dict[str, Any
         "extra": sorted(registered - runtime),
         "runtime_count": len(runtime),
         "registered_count": len(registered),
+    }
+
+
+def _total_budget_weight(contracts: Iterable[StageContract]) -> float:
+    total = sum(
+        contract.budget_policy.relative_weight
+        for contract in contracts
+        if contract.budget_policy.spend
+    )
+    return total or 1.0
+
+
+def _stage_spec_from_contract(
+    contract: StageContract,
+    *,
+    included_stage_ids: set[str],
+    total_budget_usd: float,
+    total_weight: float,
+) -> StageSpec:
+    budget_share = 0.0
+    if contract.budget_policy.spend:
+        budget_share = float(total_budget_usd) * (contract.budget_policy.relative_weight / total_weight)
+    metadata = {
+        **dict(contract.metadata),
+        "contract_source": "historical_stage_contract",
+        "legacy_runtime_mapping": dict(contract.legacy_runtime_mapping),
+        "human_pause_policy": list(contract.human_pause_policy),
+        "failure_policy": contract.failure_policy,
+        "budget_policy": contract.budget_policy.to_dict(tier="kernel", budget_share_usd=budget_share),
+        "required_artifact_contracts": [artifact.to_dict() for artifact in contract.required_artifacts],
+        "optional_artifact_contracts": [artifact.to_dict() for artifact in contract.optional_artifacts],
+    }
+    return StageSpec(
+        id=contract.id,
+        title=contract.title,
+        kind=_stage_kind(contract.kind),
+        purpose=contract.purpose,
+        inputs=tuple(_input_spec(item, included_stage_ids) for item in contract.inputs),
+        outputs=tuple(
+            _artifact_spec(artifact, required=True)
+            for artifact in contract.required_artifacts
+        ) + tuple(
+            _artifact_spec(artifact, required=False)
+            for artifact in contract.optional_artifacts
+        ),
+        validator_ids=tuple(contract.validators),
+        tool_ids=tuple(contract.tool_families),
+        adapter_id=f"historical.{contract.id}",
+        budget=KernelBudgetPolicy(max_usd=budget_share, spend_allowed=contract.budget_policy.spend),
+        failure=FailurePolicy(mode="stop_for_human"),
+        routes=tuple(
+            _route_spec(route)
+            for route in contract.allowed_routes
+            if route.target in included_stage_ids
+        ),
+        pause_before=any(policy.startswith("before_") for policy in contract.human_pause_policy),
+        pause_after=any(
+            policy.startswith("after_") or policy.startswith("on_")
+            for policy in contract.human_pause_policy
+        ),
+        metadata=metadata,
+    )
+
+
+def _input_spec(value: str, included_stage_ids: set[str]) -> InputSpec:
+    if value in included_stage_ids:
+        return InputSpec(path="__stage_outputs__", source_stage_id=value, required=False)
+    return InputSpec(path=value, required=False)
+
+
+def _artifact_spec(artifact: ArtifactContract, *, required: bool) -> ArtifactSpec:
+    return ArtifactSpec(
+        path=artifact.path,
+        kind=artifact.kind,
+        required=required,
+        role="deliverable" if required else "diagnostic",
+        description=artifact.description,
+    )
+
+
+def _route_spec(route: RouteContract) -> RouteSpec:
+    return RouteSpec(
+        target=route.target,
+        condition=route.condition,
+        kind=_route_kind(route.kind),
+        description=route.description,
+        metadata={"legacy_kind": route.kind},
+    )
+
+
+def _stage_kind(kind: str) -> str:
+    if kind in {"gate", "router"}:
+        return "router"
+    if kind in {"approval"}:
+        return "approval"
+    if kind in {"control", "track"}:
+        return "control"
+    if kind in {"validator"}:
+        return "validator"
+    if kind in {"tool"}:
+        return "tool"
+    return "agent"
+
+
+def _route_kind(kind: str) -> str:
+    return {
+        "stage_order": "next",
+        "route": "next",
+        "revision_route": "next",
+        "subgraph": "next",
+        "fanout": "branch",
+        "fanin": "join",
+        "loop": "loop",
+        "failure": "failure",
+    }.get(kind, "next")
+
+
+def _stage_node(
+    stage: StageSpec,
+    *,
+    campaign_id: str,
+    template: str,
+    tier: str,
+    order: int,
+) -> dict[str, Any]:
+    metadata = dict(stage.metadata)
+    metadata.update(
+        {
+            "template": template,
+            "order": order,
+            "kind": metadata.get("legacy_kind") or stage.kind,
+            "purpose": stage.purpose,
+            "validators": list(stage.validator_ids),
+            "toolFamilies": list(stage.tool_ids),
+            "humanPausePolicy": list(metadata.get("human_pause_policy") or []),
+            "failurePolicy": metadata.get("failure_policy") or stage.failure.mode,
+            "allowedRoutes": [_route_edge(stage.id, route) for route in stage.routes],
+            "legacyRuntimeMapping": dict(metadata.get("legacy_runtime_mapping") or {}),
+            "requiredArtifactContracts": [
+                _artifact_contract_dict(artifact) for artifact in stage.outputs if artifact.required
+            ],
+            "optionalArtifactContracts": [
+                _artifact_contract_dict(artifact) for artifact in stage.outputs if not artifact.required
+            ],
+        }
+    )
+    return {
+        "id": stage.id,
+        "type": stage.metadata.get("legacy_kind") or stage.kind,
+        "title": stage.title,
+        "status": "planned",
+        "inputs": [
+            input_spec.source_stage_id or input_spec.path
+            for input_spec in stage.input_specs
+        ],
+        "outputs": [artifact.path for artifact in stage.outputs if artifact.required],
+        "optionalOutputs": [artifact.path for artifact in stage.outputs if not artifact.required],
+        "required_artifacts": [
+            _artifact_contract_dict(artifact) for artifact in stage.outputs if artifact.required
+        ],
+        "optional_artifacts": [
+            _artifact_contract_dict(artifact) for artifact in stage.outputs if not artifact.required
+        ],
+        "budgetPolicy": {
+            "tier": tier,
+            "maxUsd": stage.budget.max_usd,
+            "relativeWeight": (stage.metadata.get("budget_policy") or {}).get("relativeWeight", 0),
+            "spend": stage.budget.spend_allowed,
+            "notes": (stage.metadata.get("budget_policy") or {}).get("notes", ""),
+        },
+        "workspace": str(Path("results") / campaign_id / stage.id),
+        "metadata": metadata,
+    }
+
+
+def _route_edge(source: str, route: RouteSpec) -> dict[str, Any]:
+    metadata = dict(route.metadata)
+    if route.condition:
+        metadata["condition"] = route.condition
+    if route.description:
+        metadata["description"] = route.description
+    return {
+        "source": source,
+        "target": route.target,
+        "kind": metadata.get("legacy_kind") or route.kind,
+        "metadata": metadata,
+    }
+
+
+def _artifact_contract_dict(artifact: ArtifactSpec) -> dict[str, Any]:
+    return {
+        "path": artifact.path,
+        "kind": artifact.kind,
+        "required": artifact.required,
+        "description": artifact.description,
+        "legacy_paths": [],
     }
