@@ -104,9 +104,10 @@ function cleanupSession(session) {
     clearTimeout(session.stopTimer);
     session.stopTimer = null;
   }
-  if (session.activeProcess && !session.activeProcess.killed) {
-    session.activeProcess.kill('SIGTERM');
-  }
+  // Closing a dashboard panel should not be a destructive run-control action.
+  // The explicit Stop button owns process termination; panel disposal only
+  // detaches this UI session from further log/steering updates.
+  session.activeProcess = null;
 }
 
 function getWorkspaceRoot() {

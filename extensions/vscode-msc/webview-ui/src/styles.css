@@ -94,12 +94,59 @@ h3 { font-size: 13px; margin: 18px 0 8px; }
 .card-facts { flex-wrap: wrap; color: var(--muted); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .status-completed, .status-ready { border-color: var(--good); color: var(--good); }
-.status-running, .status-planned { border-color: var(--accent); color: var(--accent); }
-.status-failed, .status-missing { border-color: var(--bad); color: var(--bad); }
+.status-running, .status-planned, .status-approved, .status-exited { border-color: var(--accent); color: var(--accent); }
+.status-failed, .status-missing, .status-stopped { border-color: var(--bad); color: var(--bad); }
+.status-pending-approval, .status-human-decision-required, .status-stopping { border-color: var(--warn); color: var(--warn); }
 .status-draft, .status-unknown { border-color: var(--muted); color: var(--muted); }
-.status-dot.status-completed { background: var(--good); }
-.status-dot.status-running, .status-dot.status-planned { background: var(--accent); }
-.status-dot.status-failed { background: var(--bad); }
+.status-dot.status-completed, .status-dot.status-ready { background: var(--good); }
+.status-dot.status-running, .status-dot.status-planned, .status-dot.status-approved, .status-dot.status-exited { background: var(--accent); }
+.status-dot.status-failed, .status-dot.status-missing, .status-dot.status-stopped { background: var(--bad); }
+.status-dot.status-pending-approval, .status-dot.status-human-decision-required, .status-dot.status-stopping { background: var(--warn); }
+
+.loading-bar {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  padding: 8px 10px;
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.error-summary {
+  border: 1px solid var(--bad);
+  color: var(--bad);
+  margin-top: 12px;
+  padding: 8px 10px;
+}
+.error-summary summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.error-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.error-row {
+  display: grid;
+  gap: 3px;
+}
+.error-row span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
 
 .workspace-tabs {
   display: flex;
@@ -266,15 +313,21 @@ marker path {
 .graph-svg-node.status-ready > circle:not(.node-port) {
   fill: var(--good);
 }
-.graph-svg-node.status-running > circle:not(.node-port) {
+.graph-svg-node.status-running > circle:not(.node-port),
+.graph-svg-node.status-approved > circle:not(.node-port),
+.graph-svg-node.status-exited > circle:not(.node-port) {
   fill: var(--accent);
 }
 .graph-svg-node.status-failed > circle:not(.node-port),
-.graph-svg-node.status-missing > circle:not(.node-port) {
+.graph-svg-node.status-missing > circle:not(.node-port),
+.graph-svg-node.status-stopped > circle:not(.node-port) {
   fill: var(--bad);
 }
 .graph-svg-node.status-planned > circle:not(.node-port),
-.graph-svg-node.status-draft > circle:not(.node-port) {
+.graph-svg-node.status-draft > circle:not(.node-port),
+.graph-svg-node.status-pending-approval > circle:not(.node-port),
+.graph-svg-node.status-human-decision-required > circle:not(.node-port),
+.graph-svg-node.status-stopping > circle:not(.node-port) {
   fill: var(--warn);
 }
 .node-kind {

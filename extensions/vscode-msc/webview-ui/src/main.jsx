@@ -71,12 +71,14 @@ function Home({ state, newCampaignOpen, setNewCampaignOpen }) {
         </div>
         <div className="header-actions">
           <button onClick={() => vscode.postMessage({ type: 'refresh' })}>Refresh</button>
-          <button onClick={() => vscode.postMessage({ type: 'openSettings' })}>Settings</button>
+          <button onClick={() => vscode.postMessage({ type: 'openSettings' })}>Diagnostics</button>
           <button className="primary" onClick={() => setNewCampaignOpen(true)}>New Campaign</button>
         </div>
       </header>
 
+      {state.loading ? <LoadingNotice /> : null}
       {state.actionError ? <div className="notice error">{state.actionError}</div> : null}
+      <ErrorSummary errors={state.errors || []} />
 
       <section className="metrics-grid">
         <Metric label="Campaigns" value={campaigns.length} detail="local specs" />
@@ -113,7 +115,7 @@ function Home({ state, newCampaignOpen, setNewCampaignOpen }) {
         )}
       </section>
 
-      {state.settingsOpen ? <SettingsModal state={state} /> : null}
+      {state.settingsOpen ? <DiagnosticsModal state={state} /> : null}
       {newCampaignOpen ? <NewCampaignModal onClose={() => setNewCampaignOpen(false)} /> : null}
     </div>
   );
@@ -148,7 +150,9 @@ function CampaignWorkspace({ state, tab, setTab }) {
         </div>
       </header>
 
+      {state.loading ? <LoadingNotice /> : null}
       {state.actionError ? <div className="notice error">{state.actionError}</div> : null}
+      <ErrorSummary errors={state.errors || []} />
 
       <nav className="workspace-tabs">
         {['graph', 'steer', 'artifacts'].map((name) => (
@@ -222,6 +226,7 @@ function RunCampaignModal({ state, onClose }) {
     allowSpend: false,
     confirmation: ''
   });
+  const [formError, setFormError] = useState('');
 
   function update(key, value) {
     setRun((current) => ({ ...current, [key]: value }));
@@ -229,6 +234,19 @@ function RunCampaignModal({ state, onClose }) {
 
   function submit(event) {
     event.preventDefault();
+    const budget = Number.parseInt(String(run.budget), 10);
+    if (!run.task.trim()) {
+      setFormError('Enter a research task before starting a run.');
+      return;
+    }
+    if (!Number.isInteger(budget) || budget < 1 || budget > 10000) {
+      setFormError('Budget must be an integer between 1 and 10000.');
+      return;
+    }
+    if (!run.dryRun && (!run.allowSpend || run.confirmation !== 'RUN LOCAL')) {
+      setFormError('Real local runs require allow spend plus confirmation text RUN LOCAL.');
+      return;
+    }
     vscode.postMessage({ type: 'startRun', ...run });
     onClose();
   }
@@ -246,6 +264,7 @@ function RunCampaignModal({ state, onClose }) {
           </div>
           <button type="button" onClick={onClose}>Cancel</button>
         </div>
+        {formError ? <div className="notice error">{formError}</div> : null}
         <label>Task<textarea value={run.task} onChange={(event) => update('task', event.target.value)} required /></label>
         <div className="form-grid">
           <label>Run profile<select value={run.tier} onChange={(event) => update('tier', event.target.value)}>
@@ -639,14 +658,14 @@ function PreviewPanel({ preview }) {
   );
 }
 
-function SettingsModal({ state }) {
+function DiagnosticsModal({ state }) {
   const settings = state.settings || {};
   const commands = state.diagnostics?.commands || [];
   return (
     <div className="modal-backdrop">
       <section className="modal">
         <div className="modal-head">
-          <h2>Settings</h2>
+          <h2>Diagnostics</h2>
           <button onClick={() => vscode.postMessage({ type: 'closeSettings' })}>Close</button>
         </div>
         <dl className="definition-list">
@@ -677,7 +696,6 @@ function NewCampaignModal({ onClose }) {
     budgetCap: 20,
     tier: 'budget',
     outputFormat: 'markdown',
-    localMode: true,
     template: 'consortium_scaffold'
   });
 
@@ -688,7 +706,6 @@ function NewCampaignModal({ onClose }) {
   function submit(event) {
     event.preventDefault();
     vscode.postMessage({ type: 'createCampaign', draft });
-    onClose();
   }
 
   return (
@@ -717,10 +734,36 @@ function NewCampaignModal({ onClose }) {
             <option value="blank">blank</option>
           </select></label>
         </div>
-        <label className="check-line"><input type="checkbox" checked={draft.localMode} onChange={(event) => update('localMode', event.target.checked)} /> Local mode</label>
         <button className="primary" type="submit">Create Draft</button>
       </form>
     </div>
+  );
+}
+
+function LoadingNotice() {
+  return (
+    <div className="loading-bar" role="status">
+      <span className="spinner" />
+      <span>Refreshing local campaign state...</span>
+    </div>
+  );
+}
+
+function ErrorSummary({ errors }) {
+  const visible = (errors || []).filter(Boolean);
+  if (!visible.length) return null;
+  return (
+    <details className="error-summary">
+      <summary>{visible.length} dashboard command {visible.length === 1 ? 'issue' : 'issues'}</summary>
+      <div className="error-list">
+        {visible.map((error, index) => (
+          <div key={`${error.command || 'error'}-${index}`} className="error-row">
+            <strong>{error.command || 'Dashboard command'}</strong>
+            <span>{error.message || error.error || 'Command failed'}</span>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 

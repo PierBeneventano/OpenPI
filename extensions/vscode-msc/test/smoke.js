@@ -70,6 +70,9 @@ for (const expected of [
 assert(uiSource.includes('Campaign Workspace'));
 assert(uiSource.includes('New Campaign'));
 assert(uiSource.includes('Start Run'));
+assert(uiSource.includes('Diagnostics'));
+assert(uiSource.includes('ErrorSummary'));
+assert(uiSource.includes('LoadingNotice'));
 assert(uiSource.includes('RunStatusPanel'));
 assert(uiSource.includes('Start Campaign Run'));
 assert(uiSource.includes('RUN LOCAL'));
@@ -87,7 +90,9 @@ assert(uiSource.includes('live-smoke'));
 assert(uiSource.includes('consortium_budget'));
 assert(uiSource.includes('Bundle exports'));
 assert(!uiSource.includes('YAML exports'));
+assert(!uiSource.includes('Local mode'));
 assert(extensionSource.includes('bundleExportRoot'));
+assert(extensionSource.includes('Closing a dashboard panel should not be a destructive run-control action'));
 assert(extensionSource.includes("'create'"));
 assert(!extensionSource.includes('fs.writeFileSync(campaignPath'));
 
