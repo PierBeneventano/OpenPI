@@ -9,7 +9,7 @@ from msc_sdk.campaigns import CampaignClient
 from msc_sdk.stage_runtime import StageRunContext, materialize_stage_outputs
 
 
-def test_campaign_store_creates_sqlite_jsonl_snapshot_and_scaffold(tmp_path: Path):
+def test_campaign_store_creates_sqlite_jsonl_snapshot_and_declared_outputs(tmp_path: Path):
     store = CampaignStore(tmp_path)
 
     campaign = store.create_campaign(
@@ -40,8 +40,11 @@ def test_campaign_store_creates_sqlite_jsonl_snapshot_and_scaffold(tmp_path: Pat
     assert "control" in graph["modes"]
     assert any(edge["kind"] == "loop" for edge in graph["edges"])
 
-    artifact = tmp_path / "results" / "consortium-graph-demo" / "persona_council" / "artifacts" / "persona_debate.md"
-    assert artifact.exists()
+    artifact = store.artifacts("consortium-graph-demo", "persona_council")["stages"][0]["required_artifacts"][0]
+    assert artifact["path"] == "artifacts/persona_debate.md"
+    assert artifact["required"]
+    assert not artifact["exists"]
+    assert artifact["status"] == "declared"
 
     events = store.events("consortium-graph-demo")["events"]
     assert any(event["type"] == "CampaignCreated" for event in events)
@@ -160,7 +163,8 @@ def test_campaign_read_views_rebuild_from_events_without_cache_tables(tmp_path: 
 
     artifacts = store.artifacts("event-truth-demo", "persona_council")["stages"][0]["required_artifacts"]
     persona = next(artifact for artifact in artifacts if artifact["path"] == "artifacts/persona_debate.md")
-    assert persona["exists"]
+    assert not persona["exists"]
+    assert persona["status"] == "declared"
     assert persona["workspace"] == str(Path("results") / "event-truth-demo" / "persona_council")
 
     model = store.inspect_dict("event-truth-demo")

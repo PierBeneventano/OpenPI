@@ -657,7 +657,8 @@ function ArtifactsTab({ state }) {
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [stageFilter, setStageFilter] = useState('all');
-  const [existenceFilter, setExistenceFilter] = useState('all');
+  const [existenceFilter, setExistenceFilter] = useState('existing');
+  const [audienceFilter, setAudienceFilter] = useState('deliverables');
   const artifacts = state.campaignArtifacts || [];
   const stages = unique(artifacts.map((artifact) => artifact.stage_id).filter(Boolean));
   const types = unique(artifacts.map((artifact) => artifact.type).filter(Boolean));
@@ -671,7 +672,12 @@ function ArtifactsTab({ state }) {
       (existenceFilter === 'missing' && !artifact.exists) ||
       (existenceFilter === 'required' && artifact.required) ||
       (existenceFilter === 'optional' && !artifact.required);
-    return matchesQuery && matchesType && matchesStage && matchesExistence;
+    const audience = artifact.audience || artifact.metadata?.audience || '';
+    const matchesAudience = audienceFilter === 'all' ||
+      (audienceFilter === 'deliverables' && ['deliverable', 'evidence'].includes(audience)) ||
+      artifact.audience === audienceFilter ||
+      artifact.metadata?.audience === audienceFilter;
+    return matchesQuery && matchesType && matchesStage && matchesExistence && matchesAudience;
   });
 
   return (
@@ -689,10 +695,18 @@ function ArtifactsTab({ state }) {
           </select>
           <select value={existenceFilter} onChange={(event) => setExistenceFilter(event.target.value)}>
             <option value="all">All artifacts</option>
-            <option value="existing">Existing</option>
-            <option value="missing">Missing</option>
+            <option value="existing">Produced</option>
+            <option value="missing">Planned / missing</option>
             <option value="required">Required</option>
             <option value="optional">Optional</option>
+          </select>
+          <select value={audienceFilter} onChange={(event) => setAudienceFilter(event.target.value)}>
+            <option value="deliverables">Deliverables</option>
+            <option value="all">All audiences</option>
+            <option value="diagnostic">Diagnostics</option>
+            <option value="prompt">Prompts</option>
+            <option value="log">Logs</option>
+            <option value="system_state">System state</option>
           </select>
         </div>
         <ArtifactRows artifacts={filtered} />
@@ -704,7 +718,7 @@ function ArtifactsTab({ state }) {
 
 function ArtifactRows({ artifacts }) {
   if (!artifacts.length) {
-    return <p className="subtle">No artifacts found.</p>;
+    return <p className="subtle">No produced deliverables found for the current filters.</p>;
   }
   return (
     <div className="artifact-list">
@@ -716,7 +730,8 @@ function ArtifactRows({ artifacts }) {
           </div>
           <div className="artifact-actions">
             <span className="pill">{artifact.required ? 'required' : 'optional'}</span>
-            <span className="pill">{artifact.exists ? 'exists' : 'missing'}</span>
+            <span className="pill">{artifact.exists ? 'produced' : 'planned'}</span>
+            {artifact.audience || artifact.metadata?.audience ? <span className="pill">{artifact.audience || artifact.metadata?.audience}</span> : null}
             <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'previewArtifact', artifact })}>Preview</button>
             <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'openArtifact', artifact })}>Open</button>
           </div>

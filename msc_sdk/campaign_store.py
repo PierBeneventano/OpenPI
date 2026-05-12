@@ -246,8 +246,6 @@ class CampaignStore:
             self._write_graph(conn, campaign_id, graph)
             self._declare_graph_artifacts(conn, campaign_id, graph)
 
-        if template == "consortium_scaffold":
-            self.write_scaffold_artifacts(campaign_id)
         self.write_snapshot(campaign_id)
         self.export_bundle(campaign_id, actor="system")
         return self.inspect_dict(campaign_id)
