@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from msc_sdk.campaign_projection import CampaignEventProjector
 from msc_sdk.campaign_store import CampaignStore
 from msc_sdk.campaigns import CampaignClient
 from msc_sdk.stage_runtime import StageRunContext, materialize_stage_outputs
@@ -166,6 +167,73 @@ def test_campaign_read_views_rebuild_from_events_without_cache_tables(tmp_path: 
     assert model["status"] == "approved"
     assert model["metadata"]["source"] == "campaign_events"
     assert model["provenance"]["source"] == "campaign_events"
+
+
+def test_campaign_event_projector_is_independent_of_store(tmp_path: Path):
+    events = [
+        {
+            "id": "evt_1",
+            "campaign_id": "projector-demo",
+            "type": "CampaignCreated",
+            "actor": "user",
+            "created_at": "2026-01-01T00:00:00Z",
+            "payload": {
+                "title": "Projector Demo",
+                "objective": "Project without a store instance.",
+                "workspace_root": "results/projector-demo",
+                "budget": 1,
+                "tier": "budget",
+                "output_format": "markdown",
+            },
+        },
+        {
+            "id": "evt_2",
+            "campaign_id": "projector-demo",
+            "type": "GraphProjected",
+            "actor": "system",
+            "created_at": "2026-01-01T00:00:01Z",
+            "payload": {
+                "graph": {
+                    "campaign": "projector-demo",
+                    "version": 1,
+                    "state": "planned",
+                    "nodes": [{"id": "stage_one", "status": "planned"}],
+                    "edges": [],
+                    "metadata": {},
+                }
+            },
+        },
+        {
+            "id": "evt_3",
+            "campaign_id": "projector-demo",
+            "type": "ArtifactDeclared",
+            "actor": "system",
+            "created_at": "2026-01-01T00:00:02Z",
+            "payload": {
+                "artifact_id": "projector-demo:stage_one:artifacts/result.md",
+                "stage_id": "stage_one",
+                "path": "artifacts/result.md",
+                "kind": "md",
+                "required": True,
+                "workspace": "results/projector-demo/stage_one",
+            },
+        },
+        {
+            "id": "evt_4",
+            "campaign_id": "projector-demo",
+            "type": "GraphNodeStatusChanged",
+            "actor": "runner",
+            "created_at": "2026-01-01T00:00:03Z",
+            "payload": {"node_id": "stage_one", "status": "completed"},
+        },
+    ]
+
+    projection = CampaignEventProjector(tmp_path).project("projector-demo", events)
+
+    assert projection["campaign"]["title"] == "Projector Demo"
+    assert projection["graph"]["nodes"][0]["status"] == "completed"
+    assert projection["graph"]["metadata"]["read_source"] == "campaign_events"
+    assert projection["artifact_rows"][0]["path"] == "artifacts/result.md"
 
 
 def test_stage_run_context_writes_run_versioned_contract_artifact(tmp_path: Path, monkeypatch):

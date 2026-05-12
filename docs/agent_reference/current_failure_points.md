@@ -440,6 +440,7 @@ The contraction pass has begun:
 historical contracts -> compiled kernel GraphSpec
 campaign graph JSON -> kernel graph projection
 campaign graph/artifact reads -> campaign event projection
+campaign projection logic -> dedicated read-side module
 legacy optional dependencies -> quarantined test boundary
 full scaffold happy path -> kernel-native adapters
 StageContract graph builders -> retired

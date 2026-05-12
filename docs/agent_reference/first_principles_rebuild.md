@@ -241,6 +241,9 @@ campaign events. SQLite tables and exported JSON bundles remain useful indexes
 and interchange formats, but they are not the read authority for those product
 views. If the graph/artifact cache tables are deleted, the store can still
 recreate the researcher-facing graph and artifact catalog from the event stream.
+The projection rules live in `msc_sdk.campaign_projection`, separate from
+`CampaignStore`, so future UX, OpenClaude, and OpenClaw integrations can depend
+on the read-side contract without importing storage and mutation internals.
 
 The scheduler supports deterministic branch fan-out, join barriers, route
 conditions, and bounded loops. When a loop limit is reached, the kernel emits a
