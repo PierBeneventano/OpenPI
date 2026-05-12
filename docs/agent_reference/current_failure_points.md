@@ -424,6 +424,7 @@ artifact truth = schema validation + claim/evidence links
 stage preconditions = InputSpec resolution
 stage implementation = adapter registry binding
 product state = CampaignReadModel projection from KernelRunReadModel
+campaign graph/artifact views = projection from campaign events
 ```
 
 The remaining work is no longer to patch these primitives into the old graph.
@@ -438,6 +439,7 @@ The contraction pass has begun:
 ```text
 historical contracts -> compiled kernel GraphSpec
 campaign graph JSON -> kernel graph projection
+campaign graph/artifact reads -> campaign event projection
 legacy optional dependencies -> quarantined test boundary
 full scaffold happy path -> kernel-native adapters
 StageContract graph builders -> retired

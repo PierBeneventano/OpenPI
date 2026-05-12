@@ -44,6 +44,9 @@ def json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+EVENT_PROJECTION_SOURCE = "campaign_events"
+
+
 class CampaignStore:
     """Project-local campaign control/index plane."""
 
@@ -236,6 +239,7 @@ class CampaignStore:
                     "title": title,
                     "objective": objective,
                     "template": template,
+                    "workspace_root": workspace_root,
                     "budget": budget,
                     "tier": tier,
                     "output_format": output_format,
@@ -843,11 +847,15 @@ class CampaignStore:
                     "artifact_id": artifact_id,
                     "stage_id": stage_id,
                     "path": artifact_path,
+                    "kind": kind,
+                    "required": required,
+                    "producer_node_id": producer_node_id or stage_id,
                     "workspace": workspace,
                     "run_id": run_id,
                     "size_bytes": full.stat().st_size,
                     "checksum": checksum,
                     "source_role": "contract_runtime",
+                    "metadata": metadata or {},
                 },
             )
             if previous is None or previous["status"] != "existing" or previous["checksum"] != checksum:
@@ -918,9 +926,11 @@ class CampaignStore:
         raise FileNotFoundError(f"Campaign not found: {ref}")
 
     def inspect_dict(self, ref: str | Path) -> dict[str, Any]:
-        campaign = self.get_campaign(ref)
-        graph = self.graph(campaign["id"])
-        artifacts = self.artifacts(campaign["id"])
+        campaign_id = self.resolve_ref(ref)
+        projection = self._project_campaign(campaign_id)
+        campaign = projection["campaign"]
+        graph = self.graph(campaign_id)
+        artifacts = self.artifacts(campaign_id)
         return {
             "campaign_id": campaign["id"],
             "path": campaign["bundle_path"] or campaign["id"],
@@ -929,44 +939,34 @@ class CampaignStore:
             "status": campaign["status"],
             "budget": {"total_usd": None, "limit_usd": campaign["budget_cap_usd"], "metadata": {"tier": campaign["tier"], "output_format": campaign["output_format"]}},
             "stages": store_stages_from_graph(graph, artifacts, self.root, campaign["workspace_root"]),
-            "metadata": {"source": "sqlite", "graph_version": graph["version"], "graph_state": graph["state"], "objective": campaign["objective"]},
-            "provenance": {"reader": "msc_sdk.campaign_store.CampaignStore", "source": str(self.db_path)},
+            "metadata": {"source": EVENT_PROJECTION_SOURCE, "graph_version": graph["version"], "graph_state": graph["state"], "objective": campaign["objective"]},
+            "provenance": {
+                "reader": "msc_sdk.campaign_store.CampaignStore",
+                "source": EVENT_PROJECTION_SOURCE,
+                "cache": str(self.db_path),
+            },
         }
 
     def graph(self, ref: str | Path) -> dict[str, Any]:
         campaign_id = self.resolve_ref(ref)
-        with self.connect() as conn:
-            snapshot = conn.execute(
-                "SELECT * FROM graph_snapshots WHERE campaign_id=? ORDER BY version DESC LIMIT 1",
-                (campaign_id,),
-            ).fetchone()
-            if snapshot is None:
-                return {"campaign": campaign_id, "version": 0, "state": "planned", "nodes": [], "edges": []}
-            graph = json.loads(snapshot["graph_json"])
-            graph["state"] = snapshot["state"]
-            graph["version"] = snapshot["version"]
-            artifacts = self.artifacts(campaign_id)
-            by_stage: dict[str, list[dict[str, Any]]] = {}
-            optional_by_stage: dict[str, list[dict[str, Any]]] = {}
-            for stage in artifacts["stages"]:
-                by_stage[stage["stage_id"]] = stage["required_artifacts"]
-                optional_by_stage[stage["stage_id"]] = stage["optional_artifacts"]
-            for node in graph["nodes"]:
-                node["required_artifacts"] = by_stage.get(node["id"], [])
-                node["optional_artifacts"] = optional_by_stage.get(node["id"], [])
-            return graph
+        graph = self._project_campaign(campaign_id)["graph"]
+        artifacts = self.artifacts(campaign_id)
+        by_stage: dict[str, list[dict[str, Any]]] = {}
+        optional_by_stage: dict[str, list[dict[str, Any]]] = {}
+        for stage in artifacts["stages"]:
+            by_stage[stage["stage_id"]] = stage["required_artifacts"]
+            optional_by_stage[stage["stage_id"]] = stage["optional_artifacts"]
+        for node in graph["nodes"]:
+            node["required_artifacts"] = by_stage.get(node["id"], [])
+            node["optional_artifacts"] = optional_by_stage.get(node["id"], [])
+        return graph
 
     def artifacts(self, ref: str | Path, stage_id: str | None = None) -> dict[str, Any]:
         campaign_id = self.resolve_ref(ref)
-        with self.connect() as conn:
-            if stage_id is None:
-                rows = conn.execute("SELECT * FROM artifacts WHERE campaign_id=? ORDER BY stage_id, required DESC, path", (campaign_id,)).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM artifacts WHERE campaign_id=? AND stage_id=? ORDER BY required DESC, path",
-                    (campaign_id, stage_id),
-                ).fetchall()
-        collapsed = self._collapse_artifact_rows([dict(row) for row in rows])
+        rows = self._project_campaign(campaign_id)["artifact_rows"]
+        if stage_id is not None:
+            rows = [row for row in rows if row.get("stage_id") == stage_id]
+        collapsed = self._collapse_artifact_rows(rows)
         stages: dict[str, dict[str, Any]] = {}
         for row in collapsed:
             item = artifact_row_to_dict(row, self.root)
@@ -1010,11 +1010,27 @@ class CampaignStore:
 
     def events(self, ref: str | Path, *, limit: int | None = None) -> dict[str, Any]:
         campaign_id = self.resolve_ref(ref)
-        query = "SELECT * FROM campaign_events WHERE campaign_id=? ORDER BY created_at"
-        params: tuple[Any, ...] = (campaign_id,)
+        events = self._event_rows(campaign_id)
+        if limit is not None:
+            events = events[-limit:]
+        return {"ok": True, "campaign": campaign_id, "events": events}
+
+    def _project_campaign(self, campaign_id: str) -> dict[str, Any]:
+        events = self._event_rows(campaign_id)
+        return {
+            "campaign": self._project_campaign_header(campaign_id, events),
+            "graph": self._project_graph_from_events(campaign_id, events),
+            "artifact_rows": self._project_artifact_rows_from_events(campaign_id, events),
+            "events": events,
+        }
+
+    def _event_rows(self, campaign_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:
-            rows = conn.execute(query, params).fetchall()
-        events = [
+            rows = conn.execute(
+                "SELECT * FROM campaign_events WHERE campaign_id=? ORDER BY created_at, rowid",
+                (campaign_id,),
+            ).fetchall()
+        return [
             {
                 "id": row["id"],
                 "campaign_id": row["campaign_id"],
@@ -1025,9 +1041,210 @@ class CampaignStore:
             }
             for row in rows
         ]
-        if limit is not None:
-            events = events[-limit:]
-        return {"ok": True, "campaign": campaign_id, "events": events}
+
+    def _project_campaign_header(self, campaign_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+        created = next((event for event in events if event["type"] == "CampaignCreated"), None)
+        payload = dict(created["payload"]) if created else {}
+        legacy_row = self._legacy_campaign_row(campaign_id) if created is None else None
+        created_at = created["created_at"] if created else str((legacy_row or {}).get("created_at") or now_iso())
+        status = str((legacy_row or {}).get("status") or "draft")
+        updated_at = created_at
+        bundle_path = str((legacy_row or {}).get("bundle_path") or self.root / "campaigns" / campaign_id)
+        for event in events:
+            updated_at = event["created_at"]
+            event_type = event["type"]
+            event_payload = event["payload"]
+            if event_type == "GraphApproved":
+                status = "approved"
+            elif event_type == "GraphChangeProposed":
+                status = "pending_approval"
+            elif event_type == "CampaignPaused":
+                status = "paused"
+            elif event_type == "CampaignResumed":
+                status = "approved"
+            elif event_type == "CampaignStopped":
+                status = "stopped"
+            elif event_type == "RunStarted":
+                status = "running"
+            elif event_type == "RunExited":
+                status = "completed" if event_payload.get("status") == "completed" else "human_decision_required"
+            elif event_type == "ApprovalRequested":
+                status = "human_decision_required"
+            elif event_type == "ApprovalDecided":
+                status = "approved" if event_payload.get("status") == "approved" else "draft"
+            elif event_type == "CampaignExported":
+                bundle_path = str(event_payload.get("bundle_path") or bundle_path)
+        return {
+            "id": campaign_id,
+            "title": str(payload.get("title") or (legacy_row or {}).get("title") or campaign_id),
+            "objective": str(payload.get("objective") or (legacy_row or {}).get("objective") or ""),
+            "status": status,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "workspace_root": str(payload.get("workspace_root") or (legacy_row or {}).get("workspace_root") or Path("results") / campaign_id),
+            "budget_cap_usd": payload.get("budget") if "budget" in payload else (legacy_row or {}).get("budget_cap_usd"),
+            "tier": payload.get("tier") if "tier" in payload else (legacy_row or {}).get("tier"),
+            "output_format": payload.get("output_format") if "output_format" in payload else (legacy_row or {}).get("output_format"),
+            "bundle_path": bundle_path,
+        }
+
+    def _legacy_campaign_row(self, campaign_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM campaigns WHERE id=?", (campaign_id,)).fetchone()
+        return dict(row) if row is not None else None
+
+    def _project_graph_from_events(self, campaign_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+        graph: dict[str, Any] | None = None
+        state = "planned"
+        version = 0
+        node_status: dict[str, str] = {}
+        for event in events:
+            payload = event["payload"]
+            if event["type"] == "GraphProjected":
+                graph = json.loads(json.dumps(payload["graph"]))
+                state = str(graph.get("state") or state)
+                version = int(graph.get("version") or version or 1)
+                node_status = {
+                    str(node.get("id")): str(node.get("status") or "planned")
+                    for node in graph.get("nodes", [])
+                }
+            elif event["type"] == "GraphApproved":
+                state = "approved"
+                node_status = {node_id: "approved" for node_id in node_status}
+            elif event["type"] == "GraphNodeStatusChanged":
+                node_status[str(payload.get("node_id"))] = str(payload.get("status") or "unknown")
+        if graph is None:
+            graph = self._legacy_snapshot_graph(campaign_id)
+            state = str(graph.get("state") or state)
+            version = int(graph.get("version") or version)
+            node_status = {
+                str(node.get("id")): str(node.get("status") or "planned")
+                for node in graph.get("nodes", [])
+            }
+        graph["campaign"] = campaign_id
+        graph["state"] = state
+        graph["version"] = version
+        graph["metadata"] = {**dict(graph.get("metadata") or {}), "read_source": EVENT_PROJECTION_SOURCE}
+        for node in graph.get("nodes", []):
+            node_id = str(node.get("id"))
+            if node_id in node_status:
+                node["status"] = node_status[node_id]
+        return graph
+
+    def _legacy_snapshot_graph(self, campaign_id: str) -> dict[str, Any]:
+        with self.connect() as conn:
+            snapshot = conn.execute(
+                "SELECT * FROM graph_snapshots WHERE campaign_id=? ORDER BY version DESC LIMIT 1",
+                (campaign_id,),
+            ).fetchone()
+        if snapshot is None:
+            return {
+                "campaign": campaign_id,
+                "version": 0,
+                "state": "planned",
+                "nodes": [],
+                "edges": [],
+                "metadata": {"read_source": "empty"},
+            }
+        graph = json.loads(snapshot["graph_json"])
+        graph["state"] = snapshot["state"]
+        graph["version"] = snapshot["version"]
+        graph["metadata"] = {**dict(graph.get("metadata") or {}), "read_source": "legacy_snapshot_fallback"}
+        return graph
+
+    def _project_artifact_rows_from_events(self, campaign_id: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows: dict[str, dict[str, Any]] = {}
+        declarations_by_key: dict[tuple[str, str, int], dict[str, Any]] = {}
+        for event in events:
+            payload = event["payload"]
+            if event["type"] == "ArtifactDeclared":
+                row = self._artifact_declaration_row(campaign_id, payload)
+                rows[row["id"]] = row
+                declarations_by_key[(str(row["stage_id"]), str(row["path"]), int(row["required"]))] = row
+            elif event["type"] == "ArtifactIndexed":
+                row = self._artifact_index_row(campaign_id, payload, declarations_by_key)
+                rows[row["id"]] = row
+        if not rows:
+            return list(self._legacy_artifact_rows(campaign_id).values())
+        return sorted(
+            rows.values(),
+            key=lambda row: (
+                str(row.get("stage_id") or ""),
+                -int(row.get("required") or 0),
+                str(row.get("path") or ""),
+                str(row.get("id") or ""),
+            ),
+        )
+
+    def _artifact_declaration_row(self, campaign_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        stage_id = str(payload.get("stage_id") or "")
+        path = str(payload.get("path") or "")
+        required = 1 if payload.get("required") else 0
+        artifact_id = str(payload.get("artifact_id") or f"{campaign_id}:{stage_id}:{path}")
+        metadata = dict(payload.get("metadata") or {})
+        metadata.setdefault("workspace", str(payload.get("workspace") or Path("results") / campaign_id / stage_id))
+        metadata.setdefault("audience", artifact_audience(source_role=metadata.get("source_role", "raw"), required=bool(required)))
+        return {
+            "id": artifact_id,
+            "campaign_id": campaign_id,
+            "stage_id": stage_id,
+            "path": path,
+            "kind": str(payload.get("kind") or Path(path).suffix.replace(".", "") or "markdown"),
+            "required": required,
+            "status": "declared",
+            "producer_node_id": str(payload.get("producer_node_id") or stage_id),
+            "size_bytes": None,
+            "checksum": None,
+            "metadata_json": json_dumps(metadata),
+        }
+
+    def _artifact_index_row(
+        self,
+        campaign_id: str,
+        payload: dict[str, Any],
+        declarations_by_key: dict[tuple[str, str, int], dict[str, Any]],
+    ) -> dict[str, Any]:
+        stage_id = str(payload.get("stage_id") or "")
+        path = str(payload.get("path") or "")
+        required = 1 if payload.get("required") else 0
+        declared = declarations_by_key.get((stage_id, path, required))
+        if declared is None and "required" not in payload:
+            declared = declarations_by_key.get((stage_id, path, 1)) or declarations_by_key.get((stage_id, path, 0))
+            if declared is not None:
+                required = int(declared.get("required") or 0)
+        artifact_id = str(payload.get("artifact_id") or (declared or {}).get("id") or f"{campaign_id}:{stage_id}:{path}:event")
+        metadata = dict(payload.get("metadata") or {})
+        if declared is not None:
+            metadata = {**json.loads(declared.get("metadata_json") or "{}"), **metadata}
+        if payload.get("workspace"):
+            metadata["workspace"] = payload["workspace"]
+        if payload.get("run_id"):
+            metadata["run_id"] = payload["run_id"]
+        if payload.get("source_role"):
+            metadata["source_role"] = payload["source_role"]
+        metadata.setdefault("workspace", str(Path("results") / campaign_id / stage_id))
+        metadata.setdefault("audience", artifact_audience(source_role=metadata.get("source_role", "raw"), required=bool(required)))
+        return {
+            "id": artifact_id,
+            "campaign_id": campaign_id,
+            "stage_id": stage_id,
+            "path": path,
+            "kind": str(payload.get("kind") or (declared or {}).get("kind") or Path(path).suffix.replace(".", "") or "artifact"),
+            "required": required,
+            "status": "existing",
+            "producer_node_id": str(payload.get("producer_node_id") or stage_id),
+            "size_bytes": payload.get("size_bytes"),
+            "checksum": payload.get("checksum"),
+            "metadata_json": json_dumps(metadata),
+        }
+
+    def _legacy_artifact_rows(self, campaign_id: str) -> dict[str, dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM artifacts WHERE campaign_id=? ORDER BY stage_id, required DESC, path",
+                (campaign_id,),
+            ).fetchall()
+        return {str(row["id"]): dict(row) for row in rows}
 
     def replay_jsonl(self) -> int:
         if not self.event_log_path.exists():
@@ -1114,8 +1331,14 @@ class CampaignStore:
                                     "artifact_id": artifact["id"],
                                     "stage_id": artifact.get("stage_id"),
                                     "path": artifact["path"],
+                                    "kind": artifact.get("kind"),
+                                    "required": artifact.get("required"),
+                                    "producer_node_id": artifact.get("stage_id"),
+                                    "workspace": artifact["workspace"],
                                     "size_bytes": full.stat().st_size,
                                     "checksum": checksum,
+                                    "source_role": artifact.get("source_role"),
+                                    "metadata": artifact.get("metadata") or {},
                                 },
                             )
 
@@ -1252,10 +1475,14 @@ class CampaignStore:
                     "artifact_id": artifact_id,
                     "stage_id": stage_id,
                     "path": rel_path,
+                    "kind": full.suffix.replace(".", "") or "text",
+                    "required": required,
+                    "producer_node_id": stage_id,
                     "workspace": workspace,
                     "size_bytes": full.stat().st_size,
                     "checksum": checksum,
                     "source_role": source_role,
+                    "metadata": {"contract_path": contract_path} if contract_path else {},
                 },
             )
 
@@ -1311,12 +1538,29 @@ class CampaignStore:
                 "INSERT INTO graph_edges(campaign_id, graph_version, source, target, kind, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
                 (campaign_id, graph["version"], edge["source"], edge["target"], edge["kind"], json_dumps(edge.get("metadata") or {})),
             )
+        self._append_event(
+            conn,
+            campaign_id=campaign_id,
+            event_type="GraphProjected",
+            actor="system",
+            payload={
+                "graph_version": graph["version"],
+                "state": graph["state"],
+                "graph": graph,
+            },
+        )
 
     def _declare_graph_artifacts(self, conn: sqlite3.Connection, campaign_id: str, graph: dict[str, Any]) -> None:
         for node in graph["nodes"]:
             for required, paths in ((True, node.get("outputs", [])), (False, node.get("optionalOutputs", []))):
                 for artifact_path in paths:
                     artifact_id = f"{campaign_id}:{node['id']}:{artifact_path}"
+                    kind = Path(artifact_path).suffix.replace(".", "") or "markdown"
+                    metadata = {
+                        "graph_version": graph["version"],
+                        "workspace": node.get("workspace") or str(Path("results") / campaign_id / node["id"]),
+                        "audience": "deliverable" if required else "evidence",
+                    }
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO artifacts
@@ -1329,13 +1573,13 @@ class CampaignStore:
                             campaign_id,
                             node["id"],
                             artifact_path,
-                            Path(artifact_path).suffix.replace(".", "") or "markdown",
+                            kind,
                             1 if required else 0,
                             "declared",
                             node["id"],
                             None,
                             None,
-                            json_dumps({"graph_version": graph["version"], "audience": "deliverable" if required else "evidence"}),
+                            json_dumps(metadata),
                         ),
                     )
                     self._append_event(
@@ -1343,7 +1587,16 @@ class CampaignStore:
                         campaign_id=campaign_id,
                         event_type="ArtifactDeclared",
                         actor="system",
-                        payload={"stage_id": node["id"], "path": artifact_path, "required": required},
+                        payload={
+                            "artifact_id": artifact_id,
+                            "stage_id": node["id"],
+                            "path": artifact_path,
+                            "kind": kind,
+                            "required": required,
+                            "producer_node_id": node["id"],
+                            "workspace": metadata["workspace"],
+                            "metadata": metadata,
+                        },
                     )
 
     def _import_bundle_artifacts(
@@ -1376,6 +1629,8 @@ class CampaignStore:
                     )
                     if not artifact_id.startswith(f"{campaign_id}:"):
                         artifact_id = f"{campaign_id}:{stage_id}:{artifact_path}:{'required' if required else 'optional'}"
+                    kind = str(artifact.get("kind") or artifact.get("type") or Path(artifact_path).suffix.replace(".", "") or "artifact")
+                    status = str(artifact.get("status") or ("existing" if artifact.get("exists") else "declared"))
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO artifacts
@@ -1388,15 +1643,45 @@ class CampaignStore:
                             campaign_id,
                             stage_id,
                             artifact_path,
-                            str(artifact.get("kind") or artifact.get("type") or Path(artifact_path).suffix.replace(".", "") or "artifact"),
+                            kind,
                             1 if required else 0,
-                            str(artifact.get("status") or ("existing" if artifact.get("exists") else "declared")),
+                            status,
                             str(artifact.get("producer_node_id") or stage_id or ""),
                             artifact.get("size_bytes"),
                             artifact.get("checksum"),
                             json_dumps(metadata),
                         ),
                     )
+                    declaration_payload = {
+                        "artifact_id": artifact_id,
+                        "stage_id": stage_id,
+                        "path": artifact_path,
+                        "kind": kind,
+                        "required": required,
+                        "producer_node_id": str(artifact.get("producer_node_id") or stage_id or ""),
+                        "workspace": metadata.get("workspace"),
+                        "metadata": metadata,
+                    }
+                    self._append_event(
+                        conn,
+                        campaign_id=campaign_id,
+                        event_type="ArtifactDeclared",
+                        actor="system",
+                        payload=declaration_payload,
+                    )
+                    if status == "existing" or artifact.get("exists"):
+                        self._append_event(
+                            conn,
+                            campaign_id=campaign_id,
+                            event_type="ArtifactIndexed",
+                            actor="system",
+                            payload={
+                                **declaration_payload,
+                                "size_bytes": artifact.get("size_bytes"),
+                                "checksum": artifact.get("checksum"),
+                                "source_role": metadata.get("source_role"),
+                            },
+                        )
 
     def _campaign_state_event(
         self,

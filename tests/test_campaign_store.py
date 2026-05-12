@@ -135,6 +135,39 @@ def test_event_jsonl_can_replay_into_fresh_db(tmp_path: Path):
     assert json.loads(lines[0])["type"] == "CampaignCreated"
 
 
+def test_campaign_read_views_rebuild_from_events_without_cache_tables(tmp_path: Path):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Event Truth Demo",
+        objective="Rebuild product views from events.",
+        template="consortium_scaffold",
+        budget=1,
+    )
+    store.approve_graph("event-truth-demo", 1)
+
+    with store.connect() as conn:
+        conn.execute("DELETE FROM graph_snapshots")
+        conn.execute("DELETE FROM graph_nodes")
+        conn.execute("DELETE FROM graph_edges")
+        conn.execute("DELETE FROM artifacts")
+
+    graph = store.graph("event-truth-demo")
+    assert graph["state"] == "approved"
+    assert graph["metadata"]["read_source"] == "campaign_events"
+    assert graph["nodes"][0]["id"] == "persona_council"
+    assert all(node["status"] == "approved" for node in graph["nodes"])
+
+    artifacts = store.artifacts("event-truth-demo", "persona_council")["stages"][0]["required_artifacts"]
+    persona = next(artifact for artifact in artifacts if artifact["path"] == "artifacts/persona_debate.md")
+    assert persona["exists"]
+    assert persona["workspace"] == str(Path("results") / "event-truth-demo" / "persona_council")
+
+    model = store.inspect_dict("event-truth-demo")
+    assert model["status"] == "approved"
+    assert model["metadata"]["source"] == "campaign_events"
+    assert model["provenance"]["source"] == "campaign_events"
+
+
 def test_stage_run_context_writes_run_versioned_contract_artifact(tmp_path: Path, monkeypatch):
     store = CampaignStore(tmp_path)
     store.create_campaign(

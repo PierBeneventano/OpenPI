@@ -236,6 +236,12 @@ The product-shell SDK can project `CampaignReadModel` directly from a
 CLI, and steering surfaces pointed at kernel events rather than campaign-store
 or filesystem interpretations.
 
+Campaign-store graph, artifact, and inspection views are now also rebuilt from
+campaign events. SQLite tables and exported JSON bundles remain useful indexes
+and interchange formats, but they are not the read authority for those product
+views. If the graph/artifact cache tables are deleted, the store can still
+recreate the researcher-facing graph and artifact catalog from the event stream.
+
 The scheduler supports deterministic branch fan-out, join barriers, route
 conditions, and bounded loops. When a loop limit is reached, the kernel emits a
 human decision event instead of continuing autonomously.
@@ -297,7 +303,9 @@ adapters should replace their deterministic content stage by stage.
 3. Replace proof adapters with production adapters for planning, literature,
    hypothesis generation, experiment design, execution, synthesis, writeup, and
    review.
-4. Delete legacy compatibility paths once kernel adapters produce the full
+4. Continue moving run, approval, budget, and steering read paths onto event
+   projections instead of cache tables or status files.
+5. Delete legacy compatibility paths once kernel adapters produce the full
    research artifact set.
 
 ## Remaining Fundamental Issues
