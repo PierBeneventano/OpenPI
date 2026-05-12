@@ -202,15 +202,26 @@ class ResearchKernel:
                 checkpoint_queue = [stage_id, *queue]
                 checkpoint_completed_order = list(completed_order)
                 checkpoint_artifacts = dict(available_artifacts)
-                if stage.pause_after and all(result.passed for result in outcome.validation):
-                    checkpoint_queue = [
-                        next_stage_id for next_stage_id in (outcome.next_stage_id,)
-                        if next_stage_id is not None
-                    ] + queue
+                if (
+                    stage.pause_after
+                    and bool(outcome.validation)
+                    and all(result.passed for result in outcome.validation)
+                ):
                     if stage_id not in completed:
                         checkpoint_completed_order.append(stage_id)
                     for artifact_record in outcome.artifacts:
                         checkpoint_artifacts[(artifact_record.stage_id, artifact_record.path)] = artifact_record
+                    checkpoint_completed = set(completed)
+                    checkpoint_completed.add(stage_id)
+                    checkpoint_queue = list(
+                        self._resume_queue_after_pause(
+                            run=run,
+                            stage=stage,
+                            outcome=outcome,
+                            completed=checkpoint_completed,
+                            visit_counts=visit_counts,
+                        )
+                    ) + queue
                 self._checkpoint(
                     run=run,
                     blocked_stage_id=stage_id,
@@ -712,6 +723,37 @@ class ResearchKernel:
             self._select_route(run, stage.id, route.target, route.kind, route.condition)
             self._enqueue(queue, route.target, scheduled, allow_completed=False, completed=completed)
         return tuple(scheduled), blocked
+
+    def _resume_queue_after_pause(
+        self,
+        *,
+        run: RunSpec,
+        stage: StageSpec,
+        outcome: StageOutcome,
+        completed: set[str],
+        visit_counts: dict[str, int],
+    ) -> tuple[str, ...]:
+        scheduled: list[str] = []
+        for route in stage.routes:
+            if route.condition != "always" and route.condition not in outcome.route_conditions:
+                continue
+            if route.kind == "failure":
+                continue
+            if route.kind == "loop":
+                max_visits = route.max_visits or stage.failure.max_retries + 1
+                if visit_counts.get(route.target, 0) >= max_visits:
+                    continue
+                self._enqueue([], route.target, scheduled, allow_completed=True)
+                continue
+            if route.kind == "join":
+                required_sources = self._join_sources(run, route.target)
+                waiting_for = sorted(source for source in required_sources if source not in completed)
+                if waiting_for:
+                    continue
+                self._enqueue([], route.target, scheduled, allow_completed=False, completed=completed)
+                continue
+            self._enqueue([], route.target, scheduled, allow_completed=False, completed=completed)
+        return tuple(scheduled)
 
     def _select_route(self, run: RunSpec, source: str, target: str, kind: str, condition: str) -> None:
         self.event_bus.emit(

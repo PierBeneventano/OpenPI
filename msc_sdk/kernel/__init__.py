@@ -53,6 +53,7 @@ from .read_models import (
 )
 from .native_research import (
     KERNEL_NATIVE_STAGE_IDS,
+    KERNEL_NATIVE_SCAFFOLD_STAGE_IDS,
     build_kernel_native_research_kernel,
     register_kernel_native_adapters,
 )
@@ -98,6 +99,7 @@ __all__ = [
     "KernelRunReadModel",
     "KernelStageReadModel",
     "KERNEL_NATIVE_STAGE_IDS",
+    "KERNEL_NATIVE_SCAFFOLD_STAGE_IDS",
     "build_kernel_native_research_kernel",
     "project_run",
     "read_jsonl_events",

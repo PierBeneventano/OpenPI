@@ -439,7 +439,7 @@ The contraction pass has begun:
 historical contracts -> compiled kernel GraphSpec
 campaign graph JSON -> kernel graph projection
 legacy optional dependencies -> quarantined test boundary
-literature-only workflow -> kernel-native adapters
+full scaffold happy path -> kernel-native adapters
 StageContract graph builders -> retired
 ```
 

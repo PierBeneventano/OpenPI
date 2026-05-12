@@ -26,6 +26,66 @@ KERNEL_NATIVE_STAGE_IDS = (
     "research_plan_writeup_agent",
 )
 
+KERNEL_NATIVE_SCAFFOLD_STAGE_IDS = (
+    "persona_council",
+    "literature_review_agent",
+    "lit_review_gate",
+    "brainstorm_agent",
+    "brainstorm_artifact_gate",
+    "formalize_goals_entry",
+    "formalize_goals_agent",
+    "research_plan_writeup_agent",
+    "track_decomposition_gate",
+    "milestone_goals",
+    "theory_track",
+    "math_literature_agent",
+    "math_proposer_agent",
+    "goal_tag_validation_gate",
+    "math_prover_agent",
+    "math_rigorous_verifier_agent",
+    "human_review_gate",
+    "math_empirical_verifier_agent",
+    "proof_transcription_agent",
+    "theory_track_repair_gate",
+    "experiment_track",
+    "experiment_literature_agent",
+    "experiment_design_agent",
+    "experimentation_agent",
+    "experiment_verification_agent",
+    "experiment_transcription_agent",
+    "track_merge",
+    "verify_completion",
+    "formalize_results_agent",
+    "duality_check",
+    "duality_gate",
+    "followup_lit_review",
+    "resource_preparation_agent",
+    "paper_contract_builder",
+    "writeup_agent",
+    "writeup_artifact_gate",
+    "proofreading_entry",
+    "proofreading_agent",
+    "proofread_gate",
+    "reviewer_agent",
+    "review_gate",
+    "milestone_review",
+    "validation_gate",
+)
+
+ROUTE_CONDITIONS_BY_STAGE = {
+    "lit_review_gate": ("feasible",),
+    "brainstorm_artifact_gate": ("valid",),
+    "milestone_goals": ("math_enabled_and_theory_questions", "empirical_questions_or_default"),
+    "theory_track": ("expanded_control_view",),
+    "theory_track_repair_gate": ("theory_complete",),
+    "experiment_track": ("expanded_control_view",),
+    "verify_completion": ("complete",),
+    "duality_gate": ("pass",),
+    "writeup_artifact_gate": ("valid",),
+    "proofread_gate": ("ready_for_review",),
+    "review_gate": ("review_accepted",),
+}
+
 
 def build_kernel_native_research_kernel(graph: GraphSpec) -> ResearchKernel:
     """Build a kernel runtime for the first native literature workflow."""
@@ -44,14 +104,19 @@ def build_kernel_native_research_kernel(graph: GraphSpec) -> ResearchKernel:
 
 
 def register_kernel_native_adapters(registry: StageAdapterRegistry) -> None:
-    registry.register("historical.persona_council", _persona_council)
-    registry.register("historical.literature_review_agent", _literature_review)
-    registry.register("historical.lit_review_gate", _literature_gate)
-    registry.register("historical.brainstorm_agent", _brainstorm)
-    registry.register("historical.brainstorm_artifact_gate", _brainstorm_gate)
-    registry.register("historical.formalize_goals_entry", _formalize_goals_entry)
-    registry.register("historical.formalize_goals_agent", _formalize_goals)
-    registry.register("historical.research_plan_writeup_agent", _research_plan)
+    handlers = {
+        "persona_council": _persona_council,
+        "literature_review_agent": _literature_review,
+        "lit_review_gate": _literature_gate,
+        "brainstorm_agent": _brainstorm,
+        "brainstorm_artifact_gate": _brainstorm_gate,
+        "formalize_goals_entry": _formalize_goals_entry,
+        "formalize_goals_agent": _formalize_goals,
+        "research_plan_writeup_agent": _research_plan,
+    }
+    for stage_id in KERNEL_NATIVE_SCAFFOLD_STAGE_IDS:
+        handler = handlers.get(stage_id) or _generic_stage(stage_id)
+        registry.register(f"historical.{stage_id}", handler)
 
 
 def register_declared_pass_validators(registry: ValidatorRegistry, graph: GraphSpec) -> None:
@@ -148,6 +213,59 @@ def _research_plan(context: RuntimeContext) -> None:
         "artifacts/research_plan.md",
         "# Research Plan\n\n1. Confirm assumptions.\n2. Run minimal experiments.\n3. Synthesize claims.",
     )
+
+
+def _generic_stage(stage_id: str):
+    def run(context: RuntimeContext) -> dict[str, list[str]] | None:
+        for artifact in context.stage.outputs:
+            context.write_artifact(artifact, _artifact_content(stage_id, artifact.path, artifact.kind))
+        conditions = ROUTE_CONDITIONS_BY_STAGE.get(stage_id)
+        if conditions:
+            return {"route_conditions": list(conditions)}
+        return None
+
+    return run
+
+
+def _artifact_content(stage_id: str, path: str, kind: str) -> object:
+    title = stage_id.replace("_", " ").title()
+    if kind == "json":
+        return {
+            "stage_id": stage_id,
+            "status": "complete",
+            "path": path,
+            "summary": f"{title} completed through the kernel-native adapter.",
+            **_json_decision_fields(stage_id),
+        }
+    if kind == "bib":
+        return "@article{kernel_native_2026,\n  title={Kernel Native Research Workflow},\n  year={2026}\n}\n"
+    if kind == "python":
+        return "def run():\n    return {'status': 'complete'}\n"
+    if kind == "tex":
+        return f"\\section{{{title}}}\nKernel-native {title.lower()} output.\n"
+    if kind == "pdf":
+        return b"%PDF-1.4\n% kernel-native placeholder\n"
+    return f"# {title}\n\nKernel-native {title.lower()} output for `{path}`.\n"
+
+
+def _json_decision_fields(stage_id: str) -> dict[str, object]:
+    if stage_id == "track_decomposition_gate":
+        return {"tracks": {"theory": True, "experiment": True}}
+    if stage_id == "milestone_goals":
+        return {"decision": "approved"}
+    if stage_id == "verify_completion":
+        return {"decision": "complete"}
+    if stage_id == "duality_gate":
+        return {"decision": "pass"}
+    if stage_id == "writeup_artifact_gate":
+        return {"decision": "valid"}
+    if stage_id == "proofread_gate":
+        return {"decision": "ready_for_review"}
+    if stage_id == "review_gate":
+        return {"decision": "review_accepted"}
+    if stage_id == "validation_gate":
+        return {"decision": "validated"}
+    return {}
 
 
 def _write_if_declared(context: RuntimeContext, path: str, content: object) -> None:

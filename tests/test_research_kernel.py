@@ -10,6 +10,7 @@ from msc_sdk.kernel import (
     GraphSpec,
     InputSpec,
     InMemoryEventBus,
+    KERNEL_NATIVE_SCAFFOLD_STAGE_IDS,
     KERNEL_NATIVE_STAGE_IDS,
     ModelPolicy,
     ModelRegistry,
@@ -836,6 +837,38 @@ def test_kernel_native_literature_workflow_runs_without_langgraph(tmp_path: Path
     assert (tmp_path / "run_1" / "research_plan_writeup_agent" / "artifacts" / "research_plan.md").exists()
 
 
+def test_kernel_native_scaffold_workflow_runs_without_langgraph(tmp_path: Path):
+    graph = compile_kernel_graph(
+        graph_id="scaffold",
+        template="consortium_scaffold",
+        budget=1,
+    )
+    events = InMemoryEventBus()
+    kernel = build_kernel_native_research_kernel(graph)
+    kernel.event_bus = events
+    run = RunSpec(
+        id="run_1",
+        campaign_id="campaign_1",
+        objective="Produce a complete kernel-native scaffold run.",
+        workspace=tmp_path / "run_1",
+        graph=graph,
+        budget=BudgetPolicy(max_usd=1, spend_allowed=True),
+    )
+
+    outcomes = kernel.run(run)
+    while outcomes and outcomes[-1].status == "human_decision_required":
+        decision = kernel.decision_queue.pending(run_id=run.id)[0]
+        kernel.decide(decision.id, approved=True, actor="researcher")
+        outcomes = kernel.resume(decision.id)
+    model = project_run(events.events)
+
+    assert model.status == "completed"
+    assert set(model.completed_stage_ids) == set(KERNEL_NATIVE_SCAFFOLD_STAGE_IDS) - {"followup_lit_review"}
+    assert model.completed_stage_ids[-1] == "validation_gate"
+    assert (tmp_path / "run_1" / "writeup_agent" / "artifacts" / "final_paper.md").exists()
+    assert (tmp_path / "run_1" / "validation_gate" / "artifacts" / "final_validation.json").exists()
+
+
 def test_kernel_events_project_human_decision_required(tmp_path: Path):
     stage = StageSpec(
         id="experiment",
@@ -1007,6 +1040,60 @@ def test_kernel_resume_after_pause_after_continues_with_next_stage(tmp_path: Pat
     assert model.completed_stage_ids == ["plan", "writeup"]
     assert model.stages["plan"].status == "completed"
     assert model.stages["writeup"].status == "completed"
+
+
+def test_kernel_resume_after_pause_after_schedules_branch_routes(tmp_path: Path):
+    gate = StageSpec(
+        id="gate",
+        title="Gate",
+        kind="approval",
+        purpose="Approve before fanout.",
+        outputs=(artifact("artifacts/gate.json", "json"),),
+        routes=(
+            RouteSpec(target="left", kind="branch", condition="approved"),
+            RouteSpec(target="right", kind="branch", condition="approved"),
+        ),
+        pause_after=True,
+    )
+    left = StageSpec(
+        id="left",
+        title="Left",
+        kind="agent",
+        purpose="Left branch.",
+        inputs=(InputSpec(path="artifacts/gate.json", source_stage_id="gate"),),
+        outputs=(artifact("artifacts/left.md"),),
+    )
+    right = StageSpec(
+        id="right",
+        title="Right",
+        kind="agent",
+        purpose="Right branch.",
+        inputs=(InputSpec(path="artifacts/gate.json", source_stage_id="gate"),),
+        outputs=(artifact("artifacts/right.md"),),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    def gate_handler(context):
+        context.write_artifact(gate.outputs[0], {"approved": True})
+        return {"route_condition": "approved"}
+
+    def branch_handler(context):
+        context.write_artifact(context.stage.outputs[0], context.stage.id)
+
+    kernel.run(
+        _run_spec(tmp_path, gate, left, right),
+        {"gate": gate_handler, "left": branch_handler, "right": branch_handler},
+    )
+    decision = kernel.decision_queue.pending(run_id="run_1")[0]
+    kernel.decide(decision.id, approved=True, actor="researcher")
+    resumed = kernel.resume(
+        decision.id,
+        {"gate": gate_handler, "left": branch_handler, "right": branch_handler},
+    )
+
+    assert [outcome.stage_id for outcome in resumed] == ["left", "right"]
+    assert all(outcome.status == "completed" for outcome in resumed)
 
 
 def test_kernel_resume_requires_approved_decision(tmp_path: Path):

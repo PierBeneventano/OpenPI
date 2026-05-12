@@ -284,6 +284,11 @@ runtime adapter, and `StageAdapterRegistry` supplies the handler. Tests may stil
 pass handlers directly, but product code should bind agents, tools, scripts, or
 future runtimes through adapter ids instead of hard-coded graph modules.
 
+The first kernel-native adapter pack can execute the compiled scaffold happy path
+without `consortium.graph`. These adapters are structured replacements that
+write declared artifacts through `RuntimeContext`; provider-backed production
+adapters should replace their deterministic content stage by stage.
+
 ## Rebuild Order
 
 1. Keep `msc_sdk.kernel` as the semantic center.
@@ -298,8 +303,9 @@ future runtimes through adapter ids instead of hard-coded graph modules.
 ## Remaining Fundamental Issues
 
 The old LangGraph engine is now proof material, not the product architecture.
-The remaining risks are production adapter coverage and deletion of legacy
-runtime/status-file compatibility once the kernel produces the full artifact set.
+The remaining risks are replacing deterministic scaffold adapters with
+provider-backed production adapters and deleting legacy runtime/status-file
+compatibility once the kernel produces research-grade artifacts.
 
 ## Design Standard
 
