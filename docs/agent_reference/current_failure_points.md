@@ -430,3 +430,19 @@ The remaining work is no longer to patch these primitives into the old graph.
 It is to express the full research workflow as `GraphSpec`/`StageSpec`
 contracts, bind production adapters for each stage, and retire legacy views once
 they are served by kernel events.
+
+## Reengineering Cutover Status
+
+The contraction pass has begun:
+
+```text
+historical contracts -> compiled kernel GraphSpec
+campaign graph JSON -> kernel graph projection
+legacy optional dependencies -> quarantined test boundary
+literature-only workflow -> kernel-native adapters
+StageContract graph builders -> retired
+```
+
+The LangGraph implementation should now be treated as proof/reference material.
+It may inform adapters, but it should not own product graph state, completion
+semantics, or researcher-facing runtime state.

@@ -27,7 +27,7 @@ from .read_models import (
 )
 from .runs import RunClient
 from .setup_state import SetupState
-from .stage_contracts import StageContract, historical_stage_contracts, validate_contract_coverage
+from .stage_contracts import compile_kernel_graph, project_kernel_graph, validate_contract_coverage
 from .validation import ValidationClient
 
 __all__ = [
@@ -48,11 +48,10 @@ __all__ = [
     "RunClient",
     "RunReadModel",
     "SetupState",
-    "StageContract",
     "StageReadModel",
     "ValidationClient",
     "campaign_model_from_kernel_run",
-    "historical_stage_contracts",
+    "compile_kernel_graph",
     "import_manifest",
     "inspect_campaign",
     "inspect_project",
@@ -61,6 +60,7 @@ __all__ = [
     "read_manifest",
     "read_budget_workspace",
     "project_readiness",
+    "project_kernel_graph",
     "validate_contract_coverage",
     "write_manifest",
 ]

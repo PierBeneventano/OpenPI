@@ -47,13 +47,10 @@ def test_campaign_store_creates_sqlite_jsonl_snapshot_and_scaffold(tmp_path: Pat
     assert any(event["type"] == "ArtifactDeclared" for event in events)
 
 
-def test_campaign_graph_creation_does_not_depend_on_stage_contract_nodes(tmp_path: Path, monkeypatch):
+def test_campaign_graph_creation_does_not_depend_on_stage_contract_nodes(tmp_path: Path):
     from msc_sdk import stage_contracts
 
-    def fail_to_node(*args, **kwargs):
-        raise AssertionError("StageContract.to_node should not build product graphs")
-
-    monkeypatch.setattr(stage_contracts.StageContract, "to_node", fail_to_node)
+    assert not hasattr(stage_contracts.StageContract, "to_node")
     store = CampaignStore(tmp_path)
 
     created = store.create_campaign(

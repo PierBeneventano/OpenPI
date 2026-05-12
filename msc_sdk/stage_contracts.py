@@ -102,47 +102,6 @@ class StageContract:
     legacy_runtime_mapping: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_node(
-        self,
-        *,
-        campaign_id: str,
-        template: str,
-        order: int,
-        tier: str,
-        budget_share_usd: float,
-    ) -> dict[str, Any]:
-        required_paths = [artifact.path for artifact in self.required_artifacts]
-        optional_paths = [artifact.path for artifact in self.optional_artifacts]
-        return {
-            "id": self.id,
-            "type": self.kind,
-            "title": self.title,
-            "status": "planned",
-            "inputs": list(self.inputs),
-            "outputs": required_paths,
-            "optionalOutputs": optional_paths,
-            "budgetPolicy": self.budget_policy.to_dict(
-                tier=tier,
-                budget_share_usd=budget_share_usd,
-            ),
-            "workspace": str(Path("results") / campaign_id / self.id),
-            "metadata": {
-                "template": template,
-                "order": order,
-                "kind": self.kind,
-                "purpose": self.purpose,
-                "validators": list(self.validators),
-                "toolFamilies": list(self.tool_families),
-                "humanPausePolicy": list(self.human_pause_policy),
-                "failurePolicy": self.failure_policy,
-                "allowedRoutes": [route.to_edge(self.id) for route in self.allowed_routes],
-                "legacyRuntimeMapping": dict(self.legacy_runtime_mapping),
-                "requiredArtifactContracts": [artifact.to_dict() for artifact in self.required_artifacts],
-                "optionalArtifactContracts": [artifact.to_dict() for artifact in self.optional_artifacts],
-                **dict(self.metadata),
-            },
-        }
-
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["required_artifacts"] = [artifact.to_dict() for artifact in self.required_artifacts]
@@ -293,30 +252,6 @@ def project_kernel_graph(
             "graphEdits": "proposal_only",
         },
     }
-
-
-def build_contract_graph(
-    *,
-    campaign_id: str,
-    title: str,
-    template: str,
-    tier: str,
-    budget: float,
-) -> dict[str, Any]:
-    """Build graph IR from contracts rather than a hand-maintained stage list."""
-
-    graph = compile_kernel_graph(
-        graph_id=f"{campaign_id}:{template}",
-        template=template,
-        budget=budget,
-    )
-    return project_kernel_graph(
-        graph=graph,
-        campaign_id=campaign_id,
-        title=title,
-        template=template,
-        tier=tier,
-    )
 
 
 def validate_contract_coverage(runtime_node_ids: Iterable[str]) -> dict[str, Any]:

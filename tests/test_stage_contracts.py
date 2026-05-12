@@ -5,9 +5,9 @@ import ast
 
 from consortium.stage_contracts.historical import HISTORICAL_RUNTIME_NODE_IDS
 from msc_sdk.stage_contracts import (
-    build_contract_graph,
     compile_kernel_graph,
     contracts_by_id,
+    project_kernel_graph,
     validate_contract_coverage,
 )
 
@@ -82,12 +82,17 @@ def test_contracts_include_product_semantics():
 
 
 def test_contract_graph_projects_control_nodes_loops_and_artifacts():
-    graph = build_contract_graph(
+    kernel_graph = compile_kernel_graph(
+        graph_id="demo:consortium_scaffold",
+        template="consortium_scaffold",
+        budget=1,
+    )
+    graph = project_kernel_graph(
+        graph=kernel_graph,
         campaign_id="demo",
         title="Demo",
         template="consortium_scaffold",
         tier="budget",
-        budget=1,
     )
     node_ids = {node["id"] for node in graph["nodes"]}
     edge_kinds = {edge["kind"] for edge in graph["edges"]}

@@ -286,19 +286,20 @@ future runtimes through adapter ids instead of hard-coded graph modules.
 
 ## Rebuild Order
 
-1. Expand `msc_sdk.kernel` until it can express the ideal product semantics.
-2. Define the ideal campaign graph in contracts, not in `graph.py`.
-3. Write pure stage handlers for planning, literature, hypothesis generation,
-   experiment design, execution, synthesis, writeup, and review.
-4. Retire legacy compatibility paths after the new kernel can produce the full
+1. Keep `msc_sdk.kernel` as the semantic center.
+2. Compile historical source contracts into `GraphSpec`/`StageSpec`; do not add
+   new product behavior to `StageContract`.
+3. Replace proof adapters with production adapters for planning, literature,
+   hypothesis generation, experiment design, execution, synthesis, writeup, and
+   review.
+4. Delete legacy compatibility paths once kernel adapters produce the full
    research artifact set.
 
 ## Remaining Fundamental Issues
 
-The major architectural risks still to remove are now above the kernel layer:
-porting the historical stage roster into ideal `GraphSpec` contracts, writing
-production adapters for each research stage, and retiring compatibility paths
-once the new kernel produces the full artifact set.
+The old LangGraph engine is now proof material, not the product architecture.
+The remaining risks are production adapter coverage and deletion of legacy
+runtime/status-file compatibility once the kernel produces the full artifact set.
 
 ## Design Standard
 
