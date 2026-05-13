@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from msc_sdk.campaign_projection import CampaignEventProjector
-from msc_sdk.campaign_store import CampaignStore
+from msc_sdk.campaign_store import CampaignStore, artifact_row_to_dict
 from msc_sdk.campaigns import CampaignClient
 from msc_sdk.stage_runtime import StageRunContext, materialize_stage_outputs
 
@@ -366,3 +366,47 @@ def test_run_scoped_artifacts_are_collapsed_to_researcher_artifact(tmp_path: Pat
     assert matrix_rows[0]["exists"]
     assert matrix_rows[0]["metadata"]["run_id"] == run["run_id"]
     assert matrix_rows[0]["audience"] == "deliverable"
+
+
+def test_legacy_scaffold_files_project_as_prompts_not_deliverables(tmp_path: Path):
+    workspace = tmp_path / "results" / "demo" / "literature_review_agent"
+    artifact = workspace / "artifacts" / "literature_matrix.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        "\n".join(
+            [
+                "# Literature Review",
+                "",
+                "Campaign: Demo",
+                "Stage: literature_review_agent",
+                "Kind: agent",
+                "Contract:",
+                "- Tool families: paper_search, llm",
+                "- Human pause policy: after_literature_feasibility",
+                "- Failure policy: stop_and_await_human_feedback",
+                "Research objective:",
+                "Test.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    row = artifact_row_to_dict(
+        {
+            "id": "demo:literature_review_agent:artifacts/literature_matrix.md",
+            "campaign_id": "demo",
+            "stage_id": "literature_review_agent",
+            "path": "artifacts/literature_matrix.md",
+            "kind": "md",
+            "required": 1,
+            "status": "existing",
+            "size_bytes": artifact.stat().st_size,
+            "metadata_json": json.dumps({"workspace": "results/demo/literature_review_agent"}),
+        },
+        tmp_path,
+    )
+
+    assert row["exists"]
+    assert row["status"] == "scaffold_prompt"
+    assert row["source_role"] == "scaffold_prompt"
+    assert row["audience"] == "prompt"

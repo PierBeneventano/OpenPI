@@ -1710,21 +1710,49 @@ def artifact_row_to_dict(row: dict[str, Any], root: Path) -> dict[str, Any]:
     metadata = json.loads(row.get("metadata_json") or "{}")
     workspace = metadata.get("workspace") or str(Path("results") / row["campaign_id"] / (row.get("stage_id") or ""))
     full = root / workspace / row["path"]
+    source_role = str(metadata.get("source_role") or "raw")
+    audience = str(metadata.get("audience") or "")
+    status = "existing" if full.exists() else row["status"]
+    if full.exists() and source_role == "raw" and looks_like_scaffold_artifact(full):
+        source_role = "scaffold_prompt"
+        audience = "prompt"
+        status = "scaffold_prompt"
+        metadata = {**metadata, "source_role": source_role, "audience": audience}
     return {
         "id": row["id"],
         "path": row["path"],
         "kind": row["kind"],
         "type": row["kind"],
         "exists": full.exists() or row["status"] == "existing",
-        "status": "existing" if full.exists() else row["status"],
+        "status": status,
         "size_bytes": full.stat().st_size if full.exists() else row["size_bytes"],
-        "source_role": metadata.get("source_role", "raw"),
-        "audience": metadata.get("audience") or artifact_audience(source_role=metadata.get("source_role", "raw"), required=bool(row["required"])),
+        "source_role": source_role,
+        "audience": audience or artifact_audience(source_role=source_role, required=bool(row["required"])),
         "required": bool(row["required"]),
         "stage_id": row.get("stage_id"),
         "workspace": workspace,
         "metadata": metadata,
     }
+
+
+def looks_like_scaffold_artifact(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")[:4096]
+    except OSError:
+        return False
+    if "\x00" in text:
+        return False
+    markers = [
+        "Campaign:",
+        "Stage:",
+        "Kind:",
+        "Contract:",
+        "Tool families:",
+        "Human pause policy:",
+        "Failure policy: stop_and_await_human_feedback",
+        "Research objective:",
+    ]
+    return sum(1 for marker in markers if marker in text) >= 5
 
 
 def store_stages_from_graph(graph: dict[str, Any], artifacts: dict[str, Any], root: Path, workspace_root: str) -> list[dict[str, Any]]:

@@ -24,7 +24,7 @@ def artifact_audience(*, source_role: str, required: bool) -> str:
         return "system_state"
     if source_role in {"stage_summary"}:
         return "diagnostic"
-    if source_role in {"prompt", "system_prompt"}:
+    if source_role in {"prompt", "system_prompt", "scaffold_prompt"}:
         return "prompt"
     if source_role in {"log"}:
         return "log"
