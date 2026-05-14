@@ -144,13 +144,13 @@ def test_historical_contracts_compile_to_kernel_graph_spec():
     assert stages["review_gate"].pause_after
 
 
-def test_scaffold_template_is_zero_spend_safe_before_runtime(tmp_path: Path):
+def test_scaffold_template_declares_outputs_without_writing_scaffolds(tmp_path: Path):
     from msc_sdk.campaign_store import CampaignStore
 
     store = CampaignStore(tmp_path)
     created = store.create_campaign(
         title="Zero Spend Scaffold",
-        objective="Render the graph and demo artifacts without launching a run.",
+        objective="Render the graph and planned outputs without launching execution.",
         template="consortium_scaffold",
         budget=1,
     )
@@ -158,4 +158,12 @@ def test_scaffold_template_is_zero_spend_safe_before_runtime(tmp_path: Path):
     graph = store.graph(created["campaign_id"])
     assert graph["state"] == "planned"
     assert all(node["status"] == "planned" for node in graph["nodes"])
-    assert (tmp_path / "results" / "zero-spend-scaffold" / "writeup_agent" / "artifacts" / "final_paper.md").exists()
+    writeup_node = next(node for node in graph["nodes"] if node["id"] == "writeup_agent")
+    final_paper = next(
+        artifact
+        for artifact in writeup_node["required_artifacts"]
+        if artifact["path"] == "artifacts/final_paper.md"
+    )
+    assert final_paper["status"] == "declared"
+    assert not final_paper["exists"]
+    assert not (tmp_path / "results" / "zero-spend-scaffold" / "writeup_agent" / "artifacts" / "final_paper.md").exists()
