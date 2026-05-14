@@ -76,6 +76,8 @@ assert(uiSource.includes('DashboardLoadingState'));
 assert(uiSource.includes('state.loading && !state.loaded'));
 assert(uiSource.includes('CampaignExecutionPanel'));
 assert(uiSource.includes('Continue Campaign'));
+assert(uiSource.includes('diagnostic log lines'));
+assert(uiSource.includes('Process Log'));
 assert(uiSource.includes('RUN LOCAL'));
 assert(uiSource.includes("['graph', 'decisions', 'deliverables', 'feedback', 'diagnostics']"));
 assert(uiSource.includes('DecisionsTab'));

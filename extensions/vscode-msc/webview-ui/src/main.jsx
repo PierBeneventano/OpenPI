@@ -229,13 +229,7 @@ function CampaignExecutionPanel({ state, onStart }) {
           <button onClick={onStart}>Continue Campaign</button>
         )}
       </div>
-      <div className="run-log">
-        {logs.slice(-8).map((entry, index) => (
-          <code key={`${entry.timestamp || ''}-${index}`} className={`log-${entry.stream || 'system'}`}>
-            {entry.text}
-          </code>
-        ))}
-      </div>
+      {logs.length ? <span className="pill">{logs.length} diagnostic log lines</span> : null}
     </section>
   );
 }
@@ -765,6 +759,7 @@ function DeliverablesTab({ state }) {
 function DiagnosticsTab({ state }) {
   const events = state.campaignEvents || [];
   const diagnosticArtifacts = state.campaignDiagnosticArtifacts || [];
+  const logs = state.runLog || [];
   return (
     <main className="split-layout">
       <section className="panel">
@@ -773,11 +768,26 @@ function DiagnosticsTab({ state }) {
         <dl className="definition-list">
           <dt>Events</dt><dd>{events.length}</dd>
           <dt>Diagnostic files</dt><dd>{diagnosticArtifacts.length}</dd>
+          <dt>Process log lines</dt><dd>{logs.length}</dd>
           <dt>Execution attempts</dt><dd>{state.campaignExecution?.attempts?.length || 0}</dd>
           <dt>Read source</dt><dd>{state.campaignWorkspace?.provenance?.source || '-'}</dd>
         </dl>
         <h3>Diagnostic Files</h3>
         <ArtifactRows artifacts={diagnosticArtifacts} />
+      </section>
+      <section className="panel">
+        <h2>Process Log</h2>
+        {logs.length ? (
+          <div className="run-log diagnostic-log">
+            {logs.slice(-80).map((entry, index) => (
+              <code key={`${entry.timestamp || ''}-${index}`} className={`log-${entry.stream || 'system'}`}>
+                {entry.text}
+              </code>
+            ))}
+          </div>
+        ) : (
+          <p className="subtle">No local process log is attached to this dashboard session.</p>
+        )}
       </section>
       <section className="panel">
         <h2>Recent Events</h2>
