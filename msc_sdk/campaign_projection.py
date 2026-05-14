@@ -80,9 +80,9 @@ class CampaignEventProjector:
                 status = "approved"
             elif event_type == "CampaignStopped":
                 status = "stopped"
-            elif event_type == "RunStarted":
+            elif event_type in {"RunStarted", "CampaignExecutionStarted"}:
                 status = "running"
-            elif event_type == "RunExited":
+            elif event_type in {"RunExited", "CampaignExecutionCompleted", "CampaignExecutionFailed"}:
                 status = "completed" if event_payload.get("status") == "completed" else "human_decision_required"
             elif event_type == "ApprovalRequested":
                 status = "human_decision_required"

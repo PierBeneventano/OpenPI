@@ -31,6 +31,9 @@ class CampaignClient:
             "stages": [stage.to_dict() for stage in campaign.stages],
         }
 
+    def workspace(self, ref: str | Path) -> dict[str, Any]:
+        return self.store.workspace_read_model(ref)
+
     def graph(self, ref: str | Path) -> dict[str, Any]:
         return self.store.graph(ref)
 

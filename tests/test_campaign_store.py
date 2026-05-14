@@ -173,6 +173,49 @@ def test_campaign_read_views_rebuild_from_events_without_cache_tables(tmp_path: 
     assert model["provenance"]["source"] == "campaign_events"
 
 
+def test_campaign_workspace_model_uses_campaign_execution_and_deliverables(tmp_path: Path, monkeypatch):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Workspace Demo",
+        objective="Expose one campaign workspace read model.",
+        template="literature_only",
+        budget=1,
+    )
+    run = store.record_run_started("workspace-demo", command=["msc", "run"], pid=321)
+    monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
+    monkeypatch.setenv("MSC_CAMPAIGN_ID", "workspace-demo")
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+
+    ctx = StageRunContext.from_env("literature_review_agent")
+    assert ctx is not None
+    ctx.write_required("artifacts/literature_matrix.md", "# Matrix")
+    store.record_instruction(
+        "workspace-demo",
+        text="Tighten the literature criteria before continuing.",
+        instruction_type="revision",
+        direction="to_campaign",
+        metadata={"node_id": "literature_review_agent"},
+    )
+
+    workspace = store.workspace_read_model("workspace-demo")
+
+    assert workspace["schema"] == "msc.campaign.workspace.v1"
+    assert workspace["campaign"]["objective"] == "Expose one campaign workspace read model."
+    assert workspace["execution"]["status"] == "running"
+    assert workspace["execution"]["latest_attempt"]["execution_id"] == run["run_id"]
+    assert workspace["safe_next_actions"] == ["pause-campaign", "record-feedback"]
+    assert workspace["graph"]["metadata"]["source"] == "kernel_graph_projection"
+    assert [artifact["path"] for artifact in workspace["deliverables"]] == ["artifacts/literature_matrix.md"]
+    assert all(artifact["audience"] in {"deliverable", "evidence"} for artifact in workspace["deliverables"])
+    assert workspace["feedback"][0]["target"]["node_id"] == "literature_review_agent"
+    assert workspace["feedback"][0]["type"] == "revision"
+
+    events = [event["type"] for event in store.events("workspace-demo")["events"]]
+    assert "RunStarted" in events
+    assert "CampaignExecutionStarted" in events
+    assert "HumanFeedbackRecorded" in events
+
+
 def test_campaign_event_projector_is_independent_of_store(tmp_path: Path):
     events = [
         {

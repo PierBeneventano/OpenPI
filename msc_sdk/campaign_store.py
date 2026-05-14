@@ -535,6 +535,281 @@ class CampaignStore:
             "missing_required_artifacts": missing_required,
         }
 
+    def workspace_read_model(self, campaign_ref: str | Path) -> dict[str, Any]:
+        """Return the product-facing campaign workspace model.
+
+        This is the canonical read surface for UIs and steering layers. It
+        keeps legacy run/process details available as diagnostics, but the main
+        shape is campaign execution, decisions, graph, feedback, and
+        deliverables.
+        """
+
+        campaign_id = self.resolve_ref(campaign_ref)
+        projection = self._project_campaign(campaign_id)
+        campaign = projection["campaign"]
+        graph = self.graph(campaign_id)
+        artifacts = self.artifacts(campaign_id)
+        events = projection["events"]
+        flat_artifacts = [
+            artifact
+            for stage in artifacts["stages"]
+            for artifact in [*stage["required_artifacts"], *stage["optional_artifacts"]]
+        ]
+        decisions = self._decision_read_models(campaign_id)
+        pending_decisions = [decision for decision in decisions if decision["status"] == "pending"]
+        feedback = self._feedback_read_models(events)
+        execution = self._campaign_execution_read_model(
+            campaign=campaign,
+            graph=graph,
+            events=events,
+            pending_decisions=pending_decisions,
+        )
+        deliverables = [
+            artifact for artifact in flat_artifacts
+            if artifact["exists"] and artifact.get("audience") in {"deliverable", "evidence"}
+        ]
+        planned_outputs = [
+            artifact for artifact in flat_artifacts
+            if not artifact["exists"] and artifact.get("audience") in {"deliverable", "evidence"}
+        ]
+        diagnostics = [
+            artifact for artifact in flat_artifacts
+            if artifact.get("audience") in {"diagnostic", "log", "prompt", "system_state"}
+        ]
+        safe_next_actions = self._workspace_safe_next_actions(
+            execution_status=execution["status"],
+            pending_decisions=pending_decisions,
+            graph=graph,
+        )
+        return {
+            "ok": True,
+            "schema": "msc.campaign.workspace.v1",
+            "campaign": {
+                "id": campaign["id"],
+                "title": campaign["title"],
+                "objective": campaign["objective"],
+                "status": campaign["status"],
+                "created_at": campaign["created_at"],
+                "updated_at": campaign["updated_at"],
+                "workspace_root": campaign["workspace_root"],
+                "budget_cap_usd": campaign["budget_cap_usd"],
+                "tier": campaign["tier"],
+                "output_format": campaign["output_format"],
+                "bundle_path": campaign["bundle_path"],
+            },
+            "execution": execution,
+            "safe_next_actions": safe_next_actions,
+            "graph": graph,
+            "decisions": decisions,
+            "pending_decisions": pending_decisions,
+            "feedback": feedback,
+            "deliverables": deliverables,
+            "planned_outputs": planned_outputs,
+            "diagnostics": {
+                "artifacts": diagnostics,
+                "events": events,
+                "legacy_attempts": execution["attempts"],
+            },
+            "provenance": {
+                "source": EVENT_PROJECTION_SOURCE,
+                "reader": "msc_sdk.campaign_store.CampaignStore.workspace_read_model",
+            },
+        }
+
+    def _decision_read_models(self, campaign_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM approvals WHERE campaign_id=? ORDER BY created_at DESC",
+                (campaign_id,),
+            ).fetchall()
+        decisions: list[dict[str, Any]] = []
+        for row in rows:
+            metadata = json.loads(row["metadata_json"] or "{}")
+            decisions.append(
+                {
+                    "id": row["id"],
+                    "campaign_id": row["campaign_id"],
+                    "target_type": row["target_type"],
+                    "target_id": row["target_id"],
+                    "status": row["status"],
+                    "created_at": row["created_at"],
+                    "decided_at": row["decided_at"],
+                    "actor": row["actor"],
+                    "reason": metadata.get("reason") or metadata.get("error") or metadata.get("requested_status") or row["target_type"],
+                    "safe_next_actions": list(metadata.get("safe_next_actions") or self._safe_actions_for_decision(row["target_type"])),
+                    "evidence": metadata.get("evidence") or metadata.get("missing_required_artifacts") or [],
+                    "metadata": metadata,
+                }
+            )
+        return decisions
+
+    @staticmethod
+    def _safe_actions_for_decision(target_type: str) -> list[str]:
+        if target_type == "stage_completion":
+            return ["approve", "rerun-stage", "rewrite-stage", "request-repair"]
+        if target_type == "stage_failure":
+            return ["rerun-stage", "rewrite-stage", "request-repair", "abort"]
+        if target_type == "graph_change":
+            return ["approve", "reject", "revise-proposal"]
+        if target_type == "failure_recovery":
+            return ["rerun-stage", "rewind", "request-repair", "abort"]
+        return ["approve", "reject"]
+
+    @staticmethod
+    def _feedback_read_models(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        feedback: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for event in events:
+            payload = event["payload"]
+            if event["type"] not in {"InstructionSent", "HumanFeedbackRecorded"}:
+                continue
+            if event["type"] == "InstructionSent" and payload.get("direction") != "to_campaign":
+                continue
+            event_id = str(payload.get("message_id") or payload.get("feedback_id") or event["id"])
+            if event_id in seen:
+                continue
+            seen.add(event_id)
+            metadata = dict(payload.get("metadata") or {})
+            feedback.append(
+                {
+                    "id": event_id,
+                    "text": str(payload.get("text") or ""),
+                    "type": str(payload.get("type") or payload.get("feedback_type") or "feedback"),
+                    "target": {
+                        "scope": "stage" if metadata.get("node_id") else "campaign",
+                        "node_id": metadata.get("node_id"),
+                        "artifact_id": metadata.get("artifact_id"),
+                        "decision_id": metadata.get("decision_id"),
+                    },
+                    "execution_id": payload.get("execution_id") or payload.get("run_id"),
+                    "created_at": event["created_at"],
+                    "actor": event["actor"],
+                    "metadata": metadata,
+                }
+            )
+        return sorted(feedback, key=lambda item: str(item["created_at"]), reverse=True)
+
+    def _campaign_execution_read_model(
+        self,
+        *,
+        campaign: dict[str, Any],
+        graph: dict[str, Any],
+        events: list[dict[str, Any]],
+        pending_decisions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        attempts: dict[str, dict[str, Any]] = {}
+        current_stage_id = self._current_stage_id(graph)
+        status = "not_started"
+        started_at = None
+        updated_at = campaign.get("updated_at")
+        for event in events:
+            payload = event["payload"]
+            event_type = event["type"]
+            updated_at = event["created_at"]
+            if event_type in {"RunStarted", "CampaignExecutionStarted"}:
+                execution_id = str(payload.get("execution_id") or payload.get("run_id") or event["id"])
+                attempt = attempts.setdefault(execution_id, {"execution_id": execution_id, "run_id": payload.get("run_id")})
+                attempt.update(
+                    {
+                        "status": "running",
+                        "pid": payload.get("pid"),
+                        "command": payload.get("command"),
+                        "graph_version": payload.get("graph_version"),
+                        "started_at": event["created_at"],
+                        "updated_at": event["created_at"],
+                    }
+                )
+                status = "running"
+                started_at = started_at or event["created_at"]
+            elif event_type in {"RunExited", "CampaignExecutionCompleted", "CampaignExecutionFailed"}:
+                execution_id = str(payload.get("execution_id") or payload.get("run_id") or event["id"])
+                attempt = attempts.setdefault(execution_id, {"execution_id": execution_id, "run_id": payload.get("run_id")})
+                attempt_status = str(payload.get("status") or ("completed" if payload.get("exit_code") == 0 else "failed"))
+                attempt.update(
+                    {
+                        "status": attempt_status,
+                        "exit_code": payload.get("exit_code"),
+                        "exited_at": event["created_at"],
+                        "updated_at": event["created_at"],
+                    }
+                )
+                status = "completed" if attempt_status == "completed" else "human_decision_required"
+            elif event_type == "GraphNodeStatusChanged":
+                if payload.get("status") in {"running", "human_decision_required", "failed"}:
+                    current_stage_id = str(payload.get("node_id") or current_stage_id or "")
+            elif event_type in {"ApprovalRequested", "HumanDecisionRequired"}:
+                status = "human_decision_required"
+                target_id = payload.get("target_id") or payload.get("stage_id")
+                if target_id:
+                    current_stage_id = str(target_id)
+            elif event_type == "CampaignPaused":
+                status = "paused"
+            elif event_type == "CampaignStopped":
+                status = "stopped"
+            elif event_type == "CampaignResumed":
+                status = "ready"
+        if pending_decisions:
+            status = "human_decision_required"
+            current_stage_id = str(pending_decisions[0].get("target_id") or current_stage_id or "")
+        return {
+            "status": status,
+            "started_at": started_at,
+            "updated_at": updated_at,
+            "current_stage_id": current_stage_id,
+            "pending_decision_count": len(pending_decisions),
+            "attempts": sorted(
+                attempts.values(),
+                key=lambda item: str(item.get("updated_at") or item.get("started_at") or ""),
+                reverse=True,
+            ),
+            "latest_attempt": next(
+                iter(
+                    sorted(
+                        attempts.values(),
+                        key=lambda item: str(item.get("updated_at") or item.get("started_at") or ""),
+                        reverse=True,
+                    )
+                ),
+                None,
+            ),
+        }
+
+    @staticmethod
+    def _current_stage_id(graph: dict[str, Any]) -> str | None:
+        nodes = list(graph.get("nodes") or [])
+        for status in ("running", "human_decision_required", "failed"):
+            match = next((node for node in nodes if node.get("status") == status), None)
+            if match:
+                return str(match.get("id") or "")
+        match = next((node for node in nodes if node.get("status") in {"planned", "approved"}), None)
+        return str(match.get("id") or "") if match else None
+
+    @staticmethod
+    def _workspace_safe_next_actions(
+        *,
+        execution_status: str,
+        pending_decisions: list[dict[str, Any]],
+        graph: dict[str, Any],
+    ) -> list[str]:
+        if pending_decisions:
+            actions: list[str] = []
+            for decision in pending_decisions:
+                for action in decision.get("safe_next_actions") or []:
+                    if action not in actions:
+                        actions.append(action)
+            return actions or ["review-decision"]
+        if execution_status == "not_started":
+            return ["start-campaign"]
+        if execution_status in {"paused", "ready", "human_decision_required"}:
+            return ["continue-campaign", "record-feedback"]
+        if execution_status == "running":
+            return ["pause-campaign", "record-feedback"]
+        if execution_status == "completed":
+            return ["review-deliverables", "record-feedback", "rerun-stage"]
+        if graph.get("nodes"):
+            return ["continue-campaign"]
+        return ["define-graph"]
+
     def update_node_status(
         self,
         campaign_ref: str | Path,
@@ -735,6 +1010,20 @@ class CampaignStore:
                 actor=actor,
                 payload={"run_id": run_id, "pid": pid, "command": command_json, "graph_version": graph_version},
             )
+            self._append_event(
+                conn,
+                campaign_id=campaign_id,
+                event_type="CampaignExecutionStarted",
+                actor=actor,
+                payload={
+                    "execution_id": run_id,
+                    "run_id": run_id,
+                    "pid": pid,
+                    "command": command_json,
+                    "graph_version": graph_version,
+                    "compatibility_event_id": event["id"],
+                },
+            )
         return {"ok": True, "campaign_id": campaign_id, "run_id": run_id, "event": event}
 
     def record_run_exited(
@@ -768,6 +1057,20 @@ class CampaignStore:
                 event_type="RunExited",
                 actor=actor,
                 payload={"run_id": run_id, "status": run_status, "exit_code": exit_code, **(metadata or {})},
+            )
+            self._append_event(
+                conn,
+                campaign_id=campaign_id,
+                event_type="CampaignExecutionCompleted" if run_status == "completed" else "CampaignExecutionFailed",
+                actor=actor,
+                payload={
+                    "execution_id": run_id,
+                    "run_id": run_id,
+                    "status": run_status,
+                    "exit_code": exit_code,
+                    "compatibility_event_id": event["id"],
+                    **(metadata or {}),
+                },
             )
             approval = None
             if run_status != "completed":
@@ -895,6 +1198,22 @@ class CampaignStore:
                     "metadata": metadata or {},
                 },
             )
+            if direction == "to_campaign":
+                self._append_event(
+                    conn,
+                    campaign_id=campaign_id,
+                    event_type="HumanFeedbackRecorded",
+                    actor=actor,
+                    payload={
+                        "feedback_id": message_id,
+                        "run_id": run_id,
+                        "execution_id": run_id,
+                        "text": text,
+                        "feedback_type": instruction_type,
+                        "metadata": metadata or {},
+                        "compatibility_event_id": event["id"],
+                    },
+                )
         return {"ok": True, "campaign_id": campaign_id, "message_id": message_id, "event": event}
 
     def list_campaigns(self) -> list[dict[str, Any]]:
