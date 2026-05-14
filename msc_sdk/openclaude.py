@@ -83,13 +83,22 @@ def openclaude_launch_plan(
     extra_args: list[str] | None = None,
 ) -> dict[str, Any]:
     """Return an auditable launch plan without executing OpenClaude."""
-    args = ["openclaude", *(extra_args or [])]
+    root = Path(project_root).resolve()
+    skill = openclaude_skill_path(root)
+    args = [
+        "openclaude",
+        "--append-system-prompt-file",
+        str(skill),
+        "--add-dir",
+        str(root),
+        *(extra_args or []),
+    ]
     return {
         "ok": openrouter_configured,
         "command": args,
-        "cwd": str(Path(project_root).resolve()),
+        "cwd": str(root),
         "env": openclaude_env_contract(openrouter_configured=openrouter_configured, model=model),
-        "skill_path": str(openclaude_skill_path(project_root)),
+        "skill_path": str(skill),
         "capability_profile": "openclaude_v1",
         "operation_contract": public_operation_contract("openclaude_v1"),
     }

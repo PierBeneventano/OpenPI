@@ -52,7 +52,9 @@ def test_openclaude_launch_plan_is_non_executing_and_scoped(tmp_path: Path):
     )
 
     assert plan["ok"] is True
-    assert plan["command"] == ["openclaude", "--help"]
+    assert plan["command"][-1] == "--help"
+    assert "--append-system-prompt-file" in plan["command"]
+    assert "--add-dir" in plan["command"]
     assert plan["cwd"] == str(tmp_path)
     assert plan["capability_profile"] == "openclaude_v1"
     assert plan["env"]["OPENAI_API_KEY"] == "[REDACTED]"
@@ -78,7 +80,9 @@ def test_openclaude_cli_launch_defaults_to_plan_only(tmp_path: Path, monkeypatch
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["execute"] is False
-    assert data["command"] == ["openclaude", "--help"]
+    assert data["command"][-1] == "--help"
+    assert "--append-system-prompt-file" in data["command"]
+    assert "--add-dir" in data["command"]
     assert data["env"]["OPENAI_API_KEY"] == "[REDACTED]"
     assert "not-a-real-openrouter-key" not in result.output
 

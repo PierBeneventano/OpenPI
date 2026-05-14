@@ -29,7 +29,10 @@ integrations/openclaude/launch_openclaude_msc.sh
 ```
 
 The launcher delegates to `msc openclaude launch --execute`, so it uses the
-same shell/config-dir/repo-env resolution as the rest of the SDK.
+same shell/config-dir/repo-env resolution as the rest of the SDK. The launch
+command injects `MSC_SKILL.md` with `--append-system-prompt-file` and grants the
+repo as an allowed directory, so the chat session starts as the MSc campaign
+researcher harness rather than a generic OpenClaude session.
 
 OpenClaude must operate through public `msc` SDK/CLI/harness commands. It should
 not edit protected prompts, graph logic, campaign semantics, generated papers,

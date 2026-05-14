@@ -157,7 +157,7 @@ def openclaude_launch_cmd(
     env["OPENAI_API_KEY"] = env["OPENROUTER_API_KEY"]
     env["OPENAI_BASE_URL"] = OPENCLAUDE_BASE_URL
     env["OPENAI_MODEL"] = ctx.obj["openclaude_model"]
-    proc = subprocess.run(["openclaude", *openclaude_args], cwd=project_root, env=env)
+    proc = subprocess.run(plan["command"], cwd=project_root, env=env)
     raise SystemExit(proc.returncode)
 
 
