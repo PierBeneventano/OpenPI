@@ -7,6 +7,12 @@ prototype valuable.
 The old proof-of-concept staging notes have been pruned. The current reference
 set is intentionally smaller and more product-forward:
 
+- [Target Product Model](target_product_model.md): signed-off north star for
+  the campaign-as-research-attempt product model.
+- [Core SDK Implementation Plan](core_sdk_implementation_plan.md): plan for
+  implementing the SDK around the target model.
+- [Extension UI Implementation Plan](extension_ui_implementation_plan.md): plan
+  for making the VS Code extension follow the target researcher experience.
 - [V1 Product Requirements](v1_product_requirements.md): target user, product
   promise, required workflows, OpenClaude steering, artifact expectations, and
   acceptance criteria.
