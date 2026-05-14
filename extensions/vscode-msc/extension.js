@@ -53,9 +53,16 @@ async function handleMessage(session, message) {
     session.state.view = 'home';
     session.state.selectedCampaign = null;
     session.state.campaignDetails = null;
+    session.state.campaignWorkspace = null;
     session.state.campaignGraph = null;
     session.state.campaignArtifacts = [];
     session.state.campaignEvents = [];
+    session.state.campaignExecution = null;
+    session.state.campaignDecisions = [];
+    session.state.campaignFeedback = [];
+    session.state.campaignDeliverables = [];
+    session.state.campaignPlannedOutputs = [];
+    session.state.campaignDiagnosticArtifacts = [];
     session.state.campaignRunSummary = defaultRunSummary();
     session.state.selectedGraphNode = null;
     session.state.artifactPreview = null;
@@ -77,10 +84,10 @@ async function handleMessage(session, message) {
     await previewArtifactForSession(session, message.artifact || {});
   } else if (message.type === 'openArtifact') {
     await openArtifactForSession(session, message.artifact || {});
-  } else if (message.type === 'startRun') {
-    await startRun(session, message);
-  } else if (message.type === 'stopRun') {
-    stopRun(session);
+  } else if (message.type === 'startCampaign' || message.type === 'startRun') {
+    await startCampaignExecution(session, message);
+  } else if (message.type === 'stopCampaign' || message.type === 'stopRun') {
+    stopCampaignExecution(session);
   } else if (message.type === 'interruptRun') {
     await interruptRun(session);
   } else if (message.type === 'sendInstruction') {
@@ -130,9 +137,16 @@ function initialState(root) {
     campaigns: [],
     selectedCampaign: null,
     campaignDetails: null,
+    campaignWorkspace: null,
     campaignGraph: null,
     campaignArtifacts: [],
     campaignEvents: [],
+    campaignExecution: null,
+    campaignDecisions: [],
+    campaignFeedback: [],
+    campaignDeliverables: [],
+    campaignPlannedOutputs: [],
+    campaignDiagnosticArtifacts: [],
     campaignRunSummary: defaultRunSummary(),
     selectedGraphNode: null,
     artifactPreview: null,
@@ -290,19 +304,72 @@ async function selectCampaign(session, campaignRef) {
 }
 
 async function loadCampaignWorkspace(root, campaignRef) {
-  const inspect = await runJson(root, ['campaigns', '--root', root, 'inspect', campaignRef, '--json']);
-  const graph = await runJson(root, ['campaigns', '--root', root, 'graph', campaignRef, '--json']);
-  const artifacts = await runJson(root, ['campaigns', '--root', root, 'artifacts', campaignRef, '--json']);
-  const events = await runJson(root, ['campaigns', '--root', root, 'events', campaignRef, '--limit', '200', '--json']);
-  const campaignEvents = unwrap(events, 'campaignEvents').events || [];
+  const workspaceResult = await runJson(root, ['campaigns', '--root', root, 'workspace', campaignRef, '--json']);
+  const workspace = unwrap(workspaceResult, 'campaignWorkspace');
+  const diagnostics = workspace.diagnostics || {};
+  const campaignEvents = Array.isArray(diagnostics.events) ? diagnostics.events : [];
+  const deliverables = Array.isArray(workspace.deliverables) ? workspace.deliverables : [];
+  const plannedOutputs = Array.isArray(workspace.planned_outputs) ? workspace.planned_outputs : [];
+  const diagnosticArtifacts = Array.isArray(diagnostics.artifacts) ? diagnostics.artifacts : [];
+  const allArtifacts = [...deliverables, ...plannedOutputs, ...diagnosticArtifacts];
   return {
-    campaignDetails: unwrap(inspect, 'campaign'),
-    campaignGraph: unwrap(graph, 'campaignGraph'),
-    campaignArtifacts: normalizeArtifacts(unwrap(artifacts, 'artifacts')),
+    campaignWorkspace: workspace,
+    campaignDetails: campaignDetailsFromWorkspace(workspace),
+    campaignGraph: workspace.graph || {},
+    campaignArtifacts: normalizeArtifacts({ artifacts: allArtifacts }),
+    campaignExecution: workspace.execution || null,
+    campaignDecisions: workspace.pending_decisions || workspace.decisions || [],
+    campaignFeedback: workspace.feedback || [],
+    campaignDeliverables: normalizeArtifacts({ artifacts: deliverables }),
+    campaignPlannedOutputs: normalizeArtifacts({ artifacts: plannedOutputs }),
+    campaignDiagnosticArtifacts: normalizeArtifacts({ artifacts: diagnosticArtifacts }),
     campaignEvents,
-    campaignRunSummary: summarizeCampaignEvents(campaignEvents),
-    errors: [...inspect.errors, ...graph.errors, ...artifacts.errors, ...events.errors]
+    campaignRunSummary: summarizeCampaignWorkspace(workspace, campaignEvents),
+    errors: workspaceResult.errors || []
   };
+}
+
+function campaignDetailsFromWorkspace(workspace) {
+  const campaign = workspace.campaign || {};
+  return {
+    campaign_id: campaign.id,
+    path: campaign.bundle_path || campaign.id,
+    name: campaign.title || campaign.id,
+    objective: campaign.objective || '',
+    workspace_root: campaign.workspace_root || '',
+    status: campaign.status || workspace.execution?.status || 'unknown',
+    budget: { limit_usd: campaign.budget_cap_usd, metadata: { tier: campaign.tier, output_format: campaign.output_format } },
+    stages: stagesFromWorkspace(workspace),
+    metadata: {
+      source: workspace.provenance?.source || 'campaign_workspace',
+      objective: campaign.objective || '',
+      safe_next_actions: workspace.safe_next_actions || []
+    },
+    provenance: workspace.provenance || {}
+  };
+}
+
+function stagesFromWorkspace(workspace) {
+  const graph = workspace.graph || {};
+  const artifacts = normalizeArtifacts({
+    artifacts: [
+      ...(workspace.deliverables || []),
+      ...(workspace.planned_outputs || []),
+      ...((workspace.diagnostics && workspace.diagnostics.artifacts) || [])
+    ]
+  });
+  return (graph.nodes || []).map((node) => {
+    const stageArtifacts = artifacts.filter((artifact) => artifact.stage_id === node.id);
+    return {
+      stage_id: node.id,
+      name: node.title || node.label || node.id,
+      status: node.status || 'planned',
+      workspace: node.workspace,
+      required_artifacts: stageArtifacts.filter((artifact) => artifact.required),
+      optional_artifacts: stageArtifacts.filter((artifact) => !artifact.required),
+      metadata: node.metadata || {}
+    };
+  });
 }
 
 async function createCampaignDraftForSession(session, draft) {
@@ -636,14 +703,28 @@ function defaultRunSummary() {
   return { runs: [], latestRun: null, feedback: [] };
 }
 
+function summarizeCampaignWorkspace(workspace, events) {
+  const summary = summarizeCampaignEvents(events || []);
+  const execution = workspace.execution || {};
+  if (execution.latest_attempt) {
+    summary.latestRun = {
+      ...(summary.latestRun || {}),
+      ...execution.latest_attempt,
+      run_id: execution.latest_attempt.run_id || execution.latest_attempt.execution_id
+    };
+  }
+  summary.feedback = Array.isArray(workspace.feedback) ? workspace.feedback : summary.feedback;
+  return summary;
+}
+
 function summarizeCampaignEvents(events) {
   const runs = new Map();
   const feedback = [];
   for (const event of events || []) {
     const type = String(event.type || '');
     const payload = event.payload || {};
-    if (type === 'RunStarted') {
-      const runId = String(payload.run_id || event.id || '');
+    if (type === 'RunStarted' || type === 'CampaignExecutionStarted') {
+      const runId = String(payload.run_id || payload.execution_id || event.id || '');
       if (!runId) {
         continue;
       }
@@ -658,8 +739,8 @@ function summarizeCampaignEvents(events) {
         started_at: event.created_at || current.started_at || null,
         updated_at: event.created_at || current.updated_at || null
       });
-    } else if (type === 'RunExited') {
-      const runId = String(payload.run_id || event.id || '');
+    } else if (type === 'RunExited' || type === 'CampaignExecutionCompleted' || type === 'CampaignExecutionFailed') {
+      const runId = String(payload.run_id || payload.execution_id || event.id || '');
       if (!runId) {
         continue;
       }
@@ -672,12 +753,12 @@ function summarizeCampaignEvents(events) {
         exited_at: event.created_at || current.exited_at || null,
         updated_at: event.created_at || current.updated_at || null
       });
-    } else if (type === 'InstructionSent') {
+    } else if (type === 'InstructionSent' || type === 'HumanFeedbackRecorded') {
       feedback.push({
-        id: payload.message_id || event.id,
+        id: payload.message_id || payload.feedback_id || event.id,
         text: payload.text || '',
-        type: payload.type || 'feedback',
-        run_id: payload.run_id || null,
+        type: payload.type || payload.feedback_type || 'feedback',
+        run_id: payload.run_id || payload.execution_id || null,
         node_id: (payload.metadata && payload.metadata.node_id) || null,
         direction: payload.direction || null,
         created_at: event.created_at || null,
@@ -746,9 +827,9 @@ function runMsc(root, args) {
   });
 }
 
-async function startRun(session, message) {
+async function startCampaignExecution(session, message) {
   if (session.activeProcess) {
-    setActionError(session, 'A run is already active in this dashboard.');
+    setActionError(session, 'Campaign execution is already active in this dashboard.');
     return;
   }
 
@@ -827,13 +908,13 @@ function normalizeRunOptions(message) {
 
 function validateRunOptions(options) {
   if (!options.task) {
-    return 'Enter a research task before starting a run.';
+    return 'The campaign goal is required before starting execution.';
   }
   if (!Number.isInteger(options.budget) || options.budget < 1 || options.budget > 10000) {
     return 'Budget must be an integer between 1 and 10000.';
   }
   if (!options.dryRun && (!options.allowSpend || options.confirmation !== RUN_CONFIRMATION)) {
-    return `Real local runs require allow spend plus confirmation text ${RUN_CONFIRMATION}.`;
+    return `Real local execution requires allow spend plus confirmation text ${RUN_CONFIRMATION}.`;
   }
   return null;
 }
@@ -870,9 +951,9 @@ function buildRunArgs(options, root) {
   return args;
 }
 
-function stopRun(session) {
+function stopCampaignExecution(session) {
   if (!session.activeProcess) {
-    setActionError(session, 'No active run to stop.');
+    setActionError(session, 'No active campaign execution to stop.');
     return;
   }
   appendRunLog(session, 'system', 'Stop requested: sending SIGINT.');
@@ -881,7 +962,7 @@ function stopRun(session) {
   session.activeProcess.kill('SIGINT');
   session.stopTimer = setTimeout(() => {
     if (session.activeProcess) {
-      appendRunLog(session, 'system', 'Run still active after SIGINT; sending SIGTERM.');
+      appendRunLog(session, 'system', 'Campaign execution still active after SIGINT; sending SIGTERM.');
       session.activeProcess.kill('SIGTERM');
     }
   }, 5000);
@@ -889,7 +970,7 @@ function stopRun(session) {
 
 async function interruptRun(session) {
   if (!session.activeProcess) {
-    setActionError(session, 'Start a local run before sending steering commands.');
+    setActionError(session, 'Start campaign execution before sending steering commands.');
     return;
   }
   const result = await steeringRequest('POST', '/interrupt');
@@ -903,7 +984,7 @@ async function interruptRun(session) {
 
 async function sendInstruction(session, message) {
   if (!session.activeProcess) {
-    setActionError(session, 'Start a local run before sending steering instructions.');
+    setActionError(session, 'Start campaign execution before sending steering instructions.');
     return;
   }
   const text = String(message.text || '').trim();

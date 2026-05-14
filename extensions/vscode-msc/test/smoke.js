@@ -52,15 +52,12 @@ for (const expected of [
   "message.type === 'selectGraphNode'",
   "message.type === 'previewArtifact'",
   "message.type === 'openArtifact'",
-  "message.type === 'startRun'",
-  "message.type === 'stopRun'",
+  "message.type === 'startCampaign'",
+  "message.type === 'stopCampaign'",
   "message.type === 'interruptRun'",
   "message.type === 'sendInstruction'",
   "message.type === 'submitFeedback'",
-  "['campaigns', '--root', root, 'graph'",
-  "['campaigns', '--root', root, 'inspect'",
-  "['campaigns', '--root', root, 'artifacts'",
-  "['campaigns', '--root', root, 'events'",
+  "['campaigns', '--root', root, 'workspace'",
   "['project', 'readiness', '--json']",
   "['selftest', 'commands', '--json']",
   "['openclaude', 'readiness', '--json']",
@@ -71,19 +68,20 @@ for (const expected of [
 
 assert(uiSource.includes('Campaign Workspace'));
 assert(uiSource.includes('New Campaign'));
-assert(uiSource.includes('Start Local Run'));
+assert(uiSource.includes('Start Campaign'));
 assert(uiSource.includes('Diagnostics'));
 assert(uiSource.includes('ErrorSummary'));
 assert(uiSource.includes('LoadingNotice'));
 assert(uiSource.includes('DashboardLoadingState'));
 assert(uiSource.includes('state.loading && !state.loaded'));
-assert(uiSource.includes('RunStatusPanel'));
-assert(uiSource.includes('Start Campaign Run'));
+assert(uiSource.includes('CampaignExecutionPanel'));
+assert(uiSource.includes('Continue Campaign'));
 assert(uiSource.includes('RUN LOCAL'));
-assert(uiSource.includes("['graph', 'feedback', 'artifacts']"));
+assert(uiSource.includes("['graph', 'decisions', 'deliverables', 'feedback', 'diagnostics']"));
+assert(uiSource.includes('DecisionsTab'));
+assert(uiSource.includes('DeliverablesTab'));
 assert(uiSource.includes('HumanFeedbackForm'));
 assert(uiSource.includes('Record Feedback'));
-assert(uiSource.includes('Start First Local Run'));
 assert(uiSource.includes('No local process is attached to this dashboard.'));
 assert(uiSource.includes('Assistant readiness'));
 assert(uiSource.includes("useState('existing')"));
@@ -157,7 +155,7 @@ assert.strictEqual(liveSmokeOptions.tier, 'live-smoke');
 assert.strictEqual(extension.validateRunOptions(liveSmokeOptions), null);
 assert.strictEqual(
   extension.validateRunOptions({ task: 'Spend', dryRun: false, budget: 20, allowSpend: false, confirmation: '' }),
-  'Real local runs require allow spend plus confirmation text RUN LOCAL.'
+  'Real local execution requires allow spend plus confirmation text RUN LOCAL.'
 );
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'msc-extension-'));
