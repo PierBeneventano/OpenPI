@@ -19,6 +19,7 @@ class ProjectInspection:
     python_executable: str
     openrouter_configured: bool
     writable_index_default: str
+    openrouter_source: str | None = None
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -39,13 +40,15 @@ class ProjectClient:
             warnings.append("project_root_not_found")
         if results_dir is None:
             warnings.append("results_dir_not_found")
+        _env, sources = _resolved_runtime_env(project_root, self.start)
         return ProjectInspection(
             cwd=str(self.start),
             project_root=str(project_root) if project_root else None,
             results_dir=str(results_dir) if results_dir else None,
             python_executable=sys.executable,
-            openrouter_configured=bool(os.environ.get("OPENROUTER_API_KEY")),
+            openrouter_configured=bool(_env.get("OPENROUTER_API_KEY")),
             writable_index_default=".msc_index",
+            openrouter_source=sources.get("OPENROUTER_API_KEY"),
             warnings=warnings,
         )
 
@@ -100,3 +103,60 @@ def _find_results_dir(start: Path, project_root: Path | None) -> Path | None:
         if resolved.is_dir():
             return resolved
     return None
+
+
+def _resolved_runtime_env(project_root: Path | None, start: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """Resolve non-secret runtime env availability for read-only project checks.
+
+    This intentionally mirrors the CLI's shell/config/repo environment layering
+    without importing CLI modules into the SDK. Values are returned for internal
+    checks only; callers should expose sources, never secret values.
+    """
+
+    env = dict(os.environ)
+    sources = {key: "shell" for key, value in env.items() if value}
+    protected = set(sources)
+
+    if project_root is not None and _should_use_repo_env(project_root, start):
+        for key, value in _load_env_file(project_root / ".env").items():
+            if not env.get(key):
+                env[key] = value
+                sources[key] = "repo-env"
+
+    for key, value in _load_env_file(Path.home() / ".msc" / ".env").items():
+        if key in protected:
+            continue
+        env[key] = value
+        sources[key] = "config-dir"
+
+    return env, sources
+
+
+def _should_use_repo_env(project_root: Path, start: Path) -> bool:
+    override = os.getenv("CONSORTIUM_USE_REPO_ENV", "").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    if override in {"0", "false", "no", "off"}:
+        return False
+    try:
+        current = start.resolve()
+        root = project_root.resolve()
+    except OSError:
+        return False
+    return current == root or root in current.parents
+
+
+def _load_env_file(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _sep, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and value:
+            values[key] = value
+    return values
