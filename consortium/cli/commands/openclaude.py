@@ -13,6 +13,7 @@ from consortium.cli.core.paths import find_project_root
 from msc_sdk.openclaude import (
     DEFAULT_OPENCLAUDE_MODEL,
     OPENCLAUDE_BASE_URL,
+    openclaude_campaign_harness,
     openclaude_env_contract,
     openclaude_launch_plan,
     openclaude_readiness,
@@ -80,6 +81,29 @@ def openclaude_skill_path_cmd(ctx: click.Context, as_json: bool) -> None:
         _emit_json(data)
         return
     click.echo(readiness.skill_path)
+
+
+@openclaude.command("campaign-harness")
+@click.argument("campaign_ref")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def openclaude_campaign_harness_cmd(ctx: click.Context, campaign_ref: str, as_json: bool) -> None:
+    """Return the OpenClaude researcher harness packet for a campaign."""
+    project_root = _project_root()
+    readiness = _readiness(ctx)
+    data = openclaude_campaign_harness(
+        campaign_ref,
+        project_root=project_root,
+        openrouter_configured=readiness.openrouter_configured,
+        openrouter_source=readiness.openrouter_source,
+        model=ctx.obj["openclaude_model"],
+    )
+    if as_json:
+        _emit_json(data)
+        return
+    campaign = data["workspace"]["campaign"]
+    execution = data["workspace"]["execution"]
+    click.echo(f"{campaign['id']}: {execution['status']}")
 
 
 @openclaude.command("launch")

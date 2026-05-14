@@ -9,6 +9,7 @@ from click.testing import CliRunner
 
 from consortium.cli.core.env_manager import save_env_file
 from consortium.cli.main import cli
+from msc_sdk.campaign_store import CampaignStore
 from msc_sdk.openclaude import openclaude_env_contract, openclaude_launch_plan
 
 
@@ -82,6 +83,44 @@ def test_openclaude_cli_launch_defaults_to_plan_only(tmp_path: Path, monkeypatch
     assert "not-a-real-openrouter-key" not in result.output
 
 
+def test_openclaude_campaign_harness_exposes_workspace_and_guardrails(tmp_path: Path, monkeypatch):
+    runner = CliRunner()
+    config_dir = tmp_path / "cfg"
+    save_env_file({"OPENROUTER_API_KEY": "not-a-real-openrouter-key"}, str(config_dir))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
+    (repo / "consortium").mkdir()
+    (repo / "results").mkdir()
+    store = CampaignStore(repo)
+    store.create_campaign(
+        title="Harness Demo",
+        objective="Let OpenClaude inspect and steer the campaign.",
+        template="literature_only",
+        budget=1,
+    )
+    monkeypatch.chdir(repo)
+
+    result = _invoke(
+        runner,
+        ["--config-dir", str(config_dir), "openclaude", "campaign-harness", "harness-demo", "--json"],
+    )
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["schema"] == "msc.openclaude.campaign_harness.v1"
+    assert data["workspace"]["campaign"]["id"] == "harness-demo"
+    assert data["workspace"]["execution"]["status"] == "not_started"
+    assert data["readiness"]["openrouter_configured"] is True
+    assert data["operation_contract"]["profile"] == "openclaude_v1"
+    assert any(
+        operation["operation"] == "campaigns.workspace"
+        for operation in data["operation_contract"]["operations"]
+    )
+    assert "run_status.json" in data["guardrails"]["do_not_use_as_truth"]
+    assert "not-a-real-openrouter-key" not in result.output
+
+
 def test_openclaude_skill_preserves_kernel_guardrails():
     skill = Path("integrations/openclaude/MSC_SKILL.md").read_text()
 
@@ -89,3 +128,5 @@ def test_openclaude_skill_preserves_kernel_guardrails():
     assert "Do not directly edit" in skill
     assert "consortium/prompts/" in skill
     assert "confirmation" in skill.lower()
+    assert "msc openclaude campaign-harness <campaign> --json" in skill
+    assert "campaign execution" in skill
