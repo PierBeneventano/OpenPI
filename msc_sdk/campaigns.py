@@ -61,6 +61,9 @@ class CampaignClient:
             actor=actor,
         )
 
+    def delete(self, campaign_ref: str | Path, *, actor: str = "user", delete_files: bool = True) -> dict[str, Any]:
+        return self.store.delete_campaign(campaign_ref, actor=actor, delete_files=delete_files)
+
     def import_bundle(self, bundle_path: str | Path, *, actor: str = "user") -> dict[str, Any]:
         return self.store.import_bundle(bundle_path, actor=actor)
 

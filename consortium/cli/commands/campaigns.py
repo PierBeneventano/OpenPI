@@ -69,6 +69,23 @@ def campaigns_create(
     click.echo(f"{data['campaign_id']}: {data['status']}")
 
 
+@campaigns.command("delete")
+@click.argument("campaign_ref")
+@click.option("--confirm", required=True, help="Must be DELETE to confirm destructive deletion.")
+@click.option("--keep-files", is_flag=True, help="Delete campaign records but leave bundle/results files in place.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_delete(ctx: click.Context, campaign_ref: str, confirm: str, keep_files: bool, as_json: bool) -> None:
+    """Delete a campaign and, by default, its local bundle/results files."""
+    if confirm != "DELETE":
+        raise click.ClickException("Refusing to delete campaign without --confirm DELETE.")
+    data = CampaignClient(ctx.obj["campaign_root"]).delete(campaign_ref, delete_files=not keep_files)
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(f"{data['campaign_id']}: deleted")
+
+
 @campaigns.command("import")
 @click.argument("bundle_path")
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")

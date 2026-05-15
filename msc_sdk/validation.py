@@ -15,6 +15,7 @@ class CommandSpec:
     sdk: str
     capability: str
     mutates: bool = False
+    destructive: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -39,6 +40,7 @@ PUBLIC_COMMANDS = [
     CommandSpec("campaigns.status", "msc campaigns status <campaign> --json", "CampaignClient.status(ref)", "read.campaigns"),
     CommandSpec("campaigns.artifacts", "msc campaigns artifacts <campaign> --json", "CampaignClient.artifacts(ref)", "read.artifacts"),
     CommandSpec("campaigns.create", "msc campaigns create --title <title> --objective <text> --json", "CampaignClient.create(...)", "write.campaigns", True),
+    CommandSpec("campaigns.delete", "msc campaigns delete <campaign> --confirm DELETE --json", "CampaignClient.delete(ref)", "delete.campaigns", True, True),
     CommandSpec("campaigns.import", "msc campaigns import <bundle_dir> --json", "CampaignClient.import_bundle(path)", "write.campaigns", True),
     CommandSpec("campaigns.export", "msc campaigns export <campaign> --json", "CampaignClient.export_bundle(ref)", "write.campaigns", True),
     CommandSpec("campaigns.events", "msc campaigns events <campaign> --json", "CampaignClient.events(ref)", "read.events"),
@@ -101,9 +103,10 @@ def public_operation_contract(profile: str = "read_only") -> dict[str, Any]:
 
     profile_data = AGENT_OPERATION_PROFILES.get(profile, AGENT_OPERATION_PROFILES["read_only"])
     mutations_allowed = bool(profile_data["mutations_allowed"])
+    destructive_allowed = bool(profile_data.get("destructive_allowed", False))
     commands = [
         command for command in PUBLIC_COMMANDS
-        if mutations_allowed or not command.mutates
+        if (mutations_allowed or not command.mutates) and (destructive_allowed or not command.destructive)
     ]
     return {
         "surface": "msc_cli_sdk_v1",

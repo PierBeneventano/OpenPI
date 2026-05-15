@@ -75,6 +75,8 @@ async function handleMessage(session, message) {
     postState(session);
   } else if (message.type === 'createCampaign' || message.type === 'createCampaignDraft') {
     await createCampaignDraftForSession(session, message.draft || {});
+  } else if (message.type === 'deleteCampaign') {
+    await deleteCampaignForSession(session, message);
   } else if (message.type === 'openSettings') {
     session.state.settingsOpen = true;
     postState(session);
@@ -497,6 +499,47 @@ async function createCampaignDraftForSession(session, draft) {
   const created = result.data && result.data.campaign ? result.data.campaign : result.data;
   await refresh(session);
   await selectCampaign(session, created.campaign_id || created.path || created.name);
+}
+
+async function deleteCampaignForSession(session, message) {
+  const campaignRef = String(message.campaign || session.state.selectedCampaign || '').trim();
+  if (!campaignRef) {
+    setActionError(session, 'Select a campaign before deleting it.');
+    return;
+  }
+  if (message.confirm !== 'DELETE') {
+    setActionError(session, 'Campaign deletion requires confirmation text DELETE.');
+    return;
+  }
+  if (session.activeProcess) {
+    setActionError(session, 'Stop the active campaign process before deleting this campaign.');
+    return;
+  }
+  const result = await runJson(session.root, [
+    'campaigns',
+    '--root',
+    session.root,
+    'delete',
+    campaignRef,
+    '--confirm',
+    'DELETE',
+    '--json'
+  ]);
+  if (!result.ok) {
+    setActionError(session, result.error || result.stderr || 'Campaign could not be deleted.');
+    return;
+  }
+  if (session.openClaudeProcess) {
+    session.openClaudeProcess.kill('SIGTERM');
+    session.openClaudeProcess = null;
+  }
+  const state = await collectDashboardData(session.root);
+  state.view = 'home';
+  state.selectedCampaign = null;
+  state.actionError = null;
+  state.openClaude = defaultOpenClaudeState();
+  session.state = state;
+  postState(session);
 }
 
 async function previewArtifactForSession(session, artifact) {

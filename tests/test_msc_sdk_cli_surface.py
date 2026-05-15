@@ -181,6 +181,21 @@ def test_local_first_campaign_cli_create_events_export_and_approve(tmp_path: Pat
     assert (bundle_path / "graph.json").exists()
 
 
+def test_campaign_cli_delete_removes_campaign_files(tmp_path: Path):
+    runner = CliRunner()
+    _make_campaign(tmp_path)
+
+    delete = _invoke(
+        runner,
+        ["campaigns", "--root", str(tmp_path), "delete", "demo-campaign", "--confirm", "DELETE", "--json"],
+    )
+
+    assert delete.exit_code == 0
+    assert json.loads(delete.output)["deleted"] is True
+    assert not (tmp_path / "campaigns" / "demo-campaign").exists()
+    assert not (tmp_path / ".msc" / "snapshots" / "demo-campaign.graph.json").exists()
+
+
 def test_campaign_cli_steering_surfaces_are_json_and_audited(tmp_path: Path):
     runner = CliRunner()
     _make_campaign(tmp_path)

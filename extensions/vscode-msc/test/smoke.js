@@ -47,6 +47,7 @@ for (const expected of [
   "message.type === 'selectCampaign'",
   "message.type === 'backToCampaigns'",
   "message.type === 'createCampaign'",
+  "message.type === 'deleteCampaign'",
   "message.type === 'openSettings'",
   "message.type === 'refreshCampaign'",
   "message.type === 'selectGraphNode'",
@@ -88,6 +89,8 @@ assert(uiSource.includes('saved chat message'));
 assert(uiSource.includes('chatEndRef'));
 assert(uiSource.includes('Autonomous Action Log'));
 assert(uiSource.includes('New Campaign'));
+assert(uiSource.includes('confirmDeleteCampaign'));
+assert(uiSource.includes('Type DELETE to confirm'));
 assert(uiSource.includes('Start Campaign'));
 assert(uiSource.includes('Diagnostics'));
 assert(uiSource.includes('ErrorSummary'));
@@ -125,6 +128,8 @@ assert(uiSource.includes('Bundle exports'));
 assert(!uiSource.includes('YAML exports'));
 assert(!uiSource.includes('Local mode'));
 assert(extensionSource.includes('bundleExportRoot'));
+assert(extensionSource.includes("'delete'"));
+assert(extensionSource.includes("'--confirm'"));
 assert(extensionSource.includes('Closing a dashboard panel should not be a destructive run-control action'));
 assert(extensionSource.includes('refreshPromise'));
 assert(extensionSource.includes('campaignRunSummary'));

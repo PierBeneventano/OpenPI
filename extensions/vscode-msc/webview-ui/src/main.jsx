@@ -105,11 +105,12 @@ function Home({ state, newCampaignOpen, setNewCampaignOpen }) {
           </section>
 
           <section className="campaign-grid">
-            {campaigns.length ? campaigns.map((campaign) => (
-              <button
-                key={campaign.path || campaign.name}
+            {campaigns.length ? campaigns.map((campaign) => {
+              const campaignRef = campaign.path || campaign.name;
+              return (
+              <article
+                key={campaignRef}
                 className="campaign-card"
-                onClick={() => vscode.postMessage({ type: 'selectCampaign', campaign: campaign.path || campaign.name })}
               >
                 <div className="card-topline">
                   <span className={`status-dot status-${statusClass(campaign.status)}`} />
@@ -122,8 +123,12 @@ function Home({ state, newCampaignOpen, setNewCampaignOpen }) {
                   <span>{campaign.artifactCount || 0} outputs</span>
                   <span>{campaign.requiredMissing || 0} planned</span>
                 </div>
-              </button>
-            )) : (
+                <div className="card-actions">
+                  <button className="primary" onClick={() => vscode.postMessage({ type: 'selectCampaign', campaign: campaignRef })}>Open</button>
+                  <button className="danger" onClick={() => confirmDeleteCampaign(campaign)}>Delete</button>
+                </div>
+              </article>
+            );}) : (
               <div className="empty-panel">
                 <h2>No campaigns yet</h2>
                 <p>Create a draft campaign to start shaping the local workflow without launching anything.</p>
@@ -138,6 +143,18 @@ function Home({ state, newCampaignOpen, setNewCampaignOpen }) {
       {newCampaignOpen ? <NewCampaignModal onClose={() => setNewCampaignOpen(false)} /> : null}
     </div>
   );
+}
+
+function confirmDeleteCampaign(campaign) {
+  const campaignRef = campaign.path || campaign.name || campaign.campaign_id || campaign.title;
+  const label = campaign.title || campaign.name || campaignRef || 'this campaign';
+  if (!campaignRef) return;
+  const confirmed = window.prompt(
+    `Delete ${label} and its local campaign/results files? Type DELETE to confirm.`
+  );
+  if (confirmed === 'DELETE') {
+    vscode.postMessage({ type: 'deleteCampaign', campaign: campaignRef, confirm: 'DELETE' });
+  }
 }
 
 function CampaignWorkspace({ state, tab, setTab }) {
@@ -165,6 +182,7 @@ function CampaignWorkspace({ state, tab, setTab }) {
           <span className="pill">{currentStage?.label || 'No active stage'}</span>
           <button className="primary" onClick={() => setChatOpen(true)}>AI Helper</button>
           <button onClick={() => vscode.postMessage({ type: 'refreshCampaign' })}>Refresh</button>
+          <button className="danger" onClick={() => confirmDeleteCampaign({ path: state.selectedCampaign, title })}>Delete</button>
         </div>
       </header>
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +40,22 @@ def slugify(value: str) -> str:
 def stable_id(*parts: str) -> str:
     digest = hashlib.sha256("::".join(parts).encode("utf-8")).hexdigest()[:16]
     return f"evt_{digest}"
+
+
+def safe_chat_name(value: str) -> str:
+    raw = str(value or "campaign")
+    base = Path(raw).name
+    basename = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-") or "campaign"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+    return f"{basename[:70]}-{digest}"
+
+
+def path_is_inside(path_value: Path, root: Path) -> bool:
+    try:
+        path_value.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def json_dumps(value: Any) -> str:
@@ -1442,6 +1459,46 @@ class CampaignStore:
         links = self._context_link_read_models(self._event_rows(campaign_id))
         return {"ok": True, "campaign": campaign_id, "links": links, "active_links": [link for link in links if link["status"] == "active"]}
 
+    def delete_campaign(self, campaign_ref: str | Path, *, actor: str = "user", delete_files: bool = True) -> dict[str, Any]:
+        campaign_id = self.resolve_ref(campaign_ref)
+        campaign = self.get_campaign(campaign_id)
+        candidates = self._campaign_delete_paths(campaign_id, campaign)
+        removed_paths: list[str] = []
+        skipped_paths: list[str] = []
+
+        if delete_files:
+            for candidate in candidates:
+                result = self._remove_path_inside_root(candidate)
+                if result["removed"]:
+                    removed_paths.append(result["path"])
+                elif result["path"]:
+                    skipped_paths.append(result["path"])
+
+        with self.connect() as conn:
+            for table in (
+                "graph_nodes",
+                "graph_edges",
+                "artifacts",
+                "runs",
+                "steering_messages",
+                "approvals",
+                "graph_snapshots",
+                "campaign_events",
+            ):
+                conn.execute(f"DELETE FROM {table} WHERE campaign_id=?", (campaign_id,))
+            conn.execute("DELETE FROM campaigns WHERE id=?", (campaign_id,))
+
+        self._purge_campaign_from_event_log(campaign_id)
+        return {
+            "ok": True,
+            "campaign_id": campaign_id,
+            "deleted": True,
+            "delete_files": delete_files,
+            "removed_paths": removed_paths,
+            "skipped_paths": skipped_paths,
+            "actor": actor,
+        }
+
     def list_campaigns(self) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute("SELECT * FROM campaigns ORDER BY updated_at DESC, created_at DESC").fetchall()
@@ -1878,6 +1935,62 @@ class CampaignStore:
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
         graph = self.graph(campaign_id)
         (self.snapshot_dir / f"{campaign_id}.graph.json").write_text(json.dumps(graph, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _campaign_delete_paths(self, campaign_id: str, campaign: dict[str, Any]) -> list[Path]:
+        paths: list[Path] = [
+            self.root / "campaigns" / campaign_id,
+            self.root / "results" / campaign_id,
+            self.snapshot_dir / f"{campaign_id}.graph.json",
+            self.root / ".msc" / "openclaude_chats" / f"{safe_chat_name(campaign_id)}.json",
+        ]
+        bundle_path = campaign.get("bundle_path")
+        if bundle_path:
+            paths.append(self._rooted_path(bundle_path))
+        workspace_root = campaign.get("workspace_root")
+        if workspace_root:
+            paths.append(self._rooted_path(workspace_root))
+
+        unique: list[Path] = []
+        seen: set[Path] = set()
+        for item in paths:
+            resolved = item.resolve()
+            if resolved not in seen:
+                unique.append(resolved)
+                seen.add(resolved)
+        return unique
+
+    def _rooted_path(self, value: str | Path) -> Path:
+        path_value = Path(value)
+        return path_value if path_value.is_absolute() else self.root / path_value
+
+    def _remove_path_inside_root(self, target: Path) -> dict[str, Any]:
+        resolved = target.resolve()
+        if not path_is_inside(resolved, self.root):
+            return {"removed": False, "path": str(resolved), "reason": "outside_root"}
+        if not resolved.exists():
+            return {"removed": False, "path": "", "reason": "missing"}
+        if resolved.is_dir():
+            shutil.rmtree(resolved)
+        else:
+            resolved.unlink()
+        return {"removed": True, "path": str(resolved)}
+
+    def _purge_campaign_from_event_log(self, campaign_id: str) -> None:
+        if not self.event_log_path.exists():
+            return
+        kept: list[str] = []
+        for line in self.event_log_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                kept.append(line)
+                continue
+            if event.get("campaign_id") != campaign_id:
+                kept.append(line)
+        content = "\n".join(kept)
+        self.event_log_path.write_text(f"{content}\n" if content else "", encoding="utf-8")
 
     def _unique_campaign_id(self, base: str) -> str:
         candidate = base

@@ -113,12 +113,13 @@ h3 { font-size: 13px; margin: 18px 0 8px; }
 }
 .campaign-card h2 { margin: 8px 0 6px; }
 .campaign-card p { color: var(--muted); min-height: 38px; overflow-wrap: anywhere; }
-.card-topline, .card-facts, .artifact-actions, .workspace-title, .fact-row {
+.card-topline, .card-facts, .card-actions, .artifact-actions, .workspace-title, .fact-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 .card-facts { flex-wrap: wrap; color: var(--muted); }
+.card-actions { margin-top: 12px; flex-wrap: wrap; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .status-completed, .status-ready { border-color: var(--good); color: var(--good); }
 .status-running, .status-planned, .status-approved, .status-exited { border-color: var(--accent); color: var(--accent); }

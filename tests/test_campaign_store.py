@@ -125,6 +125,33 @@ def test_bundle_export_import_and_client_reads_store_only(tmp_path: Path):
     assert all(row.get("source") == "sqlite" for row in list_rows)
 
 
+def test_campaign_delete_removes_records_bundle_results_snapshots_and_events(tmp_path: Path):
+    client = CampaignClient(tmp_path)
+    created = client.create(
+        title="Delete Demo",
+        objective="Exercise destructive campaign cleanup.",
+        template="literature_only",
+        budget=1,
+    )
+    campaign_id = created["campaign_id"]
+    results_file = tmp_path / "results" / campaign_id / "literature_review_agent" / "artifacts" / "literature_matrix.md"
+    results_file.parent.mkdir(parents=True)
+    results_file.write_text("# Matrix\n", encoding="utf-8")
+    chat_file = tmp_path / ".msc" / "openclaude_chats" / "delete-demo-faa3429ebb.json"
+    chat_file.parent.mkdir(parents=True)
+    chat_file.write_text("{}", encoding="utf-8")
+
+    deleted = client.delete(campaign_id)
+
+    assert deleted["ok"]
+    assert not (tmp_path / "campaigns" / campaign_id).exists()
+    assert not (tmp_path / "results" / campaign_id).exists()
+    assert not (tmp_path / ".msc" / "snapshots" / f"{campaign_id}.graph.json").exists()
+    assert not chat_file.exists()
+    assert client.list() == []
+    assert campaign_id not in (tmp_path / ".msc" / "events" / "campaigns.jsonl").read_text(encoding="utf-8")
+
+
 def test_event_jsonl_can_replay_into_fresh_db(tmp_path: Path):
     store = CampaignStore(tmp_path)
     store.create_campaign(title="Replay Demo", objective="Replay events.", template="blank", budget=1)
