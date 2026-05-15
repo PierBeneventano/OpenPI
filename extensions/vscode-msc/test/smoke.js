@@ -126,6 +126,7 @@ assert(extensionSource.includes("'feedback'"));
 assert(extensionSource.includes("'create'"));
 assert(extensionSource.includes('openClaude'));
 assert(extensionSource.includes('stream-json'));
+assert(extensionSource.includes('--verbose'));
 assert(extensionSource.includes('context-pack'));
 assert(!extensionSource.includes('fs.writeFileSync(campaignPath'));
 
@@ -133,6 +134,14 @@ const parsed = extension.consumeJsonLines('{"type":"content_block_delta","delta"
 assert.strictEqual(parsed.items.length, 2);
 assert.strictEqual(parsed.remainder, 'partial');
 assert.strictEqual(extension.textFromOpenClaudeEvent(parsed.items[0]), 'Hello');
+assert.strictEqual(
+  extension.textFromOpenClaudeEvent({ type: 'stream_event', event: { type: 'content_block_delta', delta: { text: ' streamed' } } }),
+  ' streamed'
+);
+assert.strictEqual(
+  extension.textFromOpenClaudeEvent({ type: 'result', result: 'done' }, true),
+  ''
+);
 const prompt = extension.buildOpenClaudePrompt(
   { state: { selectedCampaign: 'demo-campaign' } },
   'Review the matrix.',

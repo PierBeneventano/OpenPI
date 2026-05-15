@@ -1187,6 +1187,7 @@ async function sendOpenClaudeMessage(session, message) {
     '--execute',
     '--',
     '-p',
+    '--verbose',
     '--output-format',
     'stream-json',
     '--include-partial-messages',
@@ -1202,7 +1203,7 @@ async function sendOpenClaudeMessage(session, message) {
     const parsed = consumeJsonLines(stdoutBuffer);
     stdoutBuffer = parsed.remainder;
     for (const item of parsed.items) {
-      const textPart = textFromOpenClaudeEvent(item);
+      const textPart = textFromOpenClaudeEvent(item, Boolean(assistantText));
       if (textPart) {
         assistantText += textPart;
         updateStreamingAssistantMessage(session, assistantText);
@@ -1235,6 +1236,13 @@ async function sendOpenClaudeMessage(session, message) {
       status: code === 0 ? 'ready' : 'error',
       error: code === 0 ? null : `OpenClaude exited with code ${code == null ? 'null' : code}${signal ? ` (${signal})` : ''}.`
     };
+    if (code !== 0 && !assistantText) {
+      session.state.openClaude.transcript = appendChatMessage(session.state.openClaude?.transcript || [], {
+        role: 'system',
+        text: session.state.openClaude.error || 'OpenClaude exited before returning a response.',
+        timestamp: new Date().toISOString()
+      });
+    }
     appendOpenClaudeAction(session, { kind: 'command', status: code === 0 ? 'completed' : 'failed', text: `OpenClaude exited with code ${code == null ? 'null' : code}.`, timestamp: new Date().toISOString() });
     Object.assign(session.state, await loadCampaignWorkspace(session.root, session.state.selectedCampaign));
     postState(session);
@@ -1395,15 +1403,18 @@ function consumeJsonLines(buffer) {
   return { items, remainder };
 }
 
-function textFromOpenClaudeEvent(event) {
+function textFromOpenClaudeEvent(event, hasStreamingText = false) {
   if (!event || typeof event !== 'object') return '';
+  if (event.type === 'stream_event' && event.event) {
+    return textFromOpenClaudeEvent(event.event, hasStreamingText);
+  }
   if (typeof event.text === 'string') return event.text;
   if (typeof event.content === 'string') return event.content;
   if (typeof event.delta === 'string') return event.delta;
-  if (event.type === 'assistant' && event.message?.content) return contentToText(event.message.content);
-  if (event.type === 'message' && event.message?.role === 'assistant') return contentToText(event.message.content);
   if (event.type === 'content_block_delta' && event.delta?.text) return event.delta.text;
-  if (event.type === 'result' && event.result) return typeof event.result === 'string' ? event.result : JSON.stringify(event.result);
+  if (event.type === 'assistant' && event.message?.content) return hasStreamingText ? '' : contentToText(event.message.content);
+  if (event.type === 'message' && event.message?.role === 'assistant') return hasStreamingText ? '' : contentToText(event.message.content);
+  if (event.type === 'result' && event.result) return hasStreamingText ? '' : (typeof event.result === 'string' ? event.result : JSON.stringify(event.result));
   return '';
 }
 
