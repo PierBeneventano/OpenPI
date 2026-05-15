@@ -75,7 +75,9 @@ for (const expected of [
 }
 
 assert(uiSource.includes('Campaign Workspace'));
-assert(uiSource.includes('OpenClaude Research Campaign'));
+assert(uiSource.includes('Research Graph'));
+assert(uiSource.includes('AI Helper'));
+assert(uiSource.includes('FloatingOpenClaude'));
 assert(uiSource.includes('Ask OpenClaude to drive the campaign'));
 assert(uiSource.includes('Link to Chat'));
 assert(uiSource.includes('Autonomous Action Log'));
@@ -91,7 +93,7 @@ assert(uiSource.includes('Continue Campaign'));
 assert(uiSource.includes('diagnostic log lines'));
 assert(uiSource.includes('Process Log'));
 assert(uiSource.includes('RUN LOCAL'));
-assert(uiSource.includes("['graph', 'decisions', 'deliverables', 'feedback', 'diagnostics']"));
+assert(uiSource.includes("['decisions', 'deliverables', 'feedback', 'diagnostics']"));
 assert(uiSource.includes('DecisionsTab'));
 assert(uiSource.includes('DeliverablesTab'));
 assert(uiSource.includes('HumanFeedbackForm'));

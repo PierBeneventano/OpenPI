@@ -183,11 +183,11 @@ h3 { font-size: 13px; margin: 18px 0 8px; }
 }
 .workspace-tabs button { border-width: 0 1px 0 0; min-width: 100px; }
 .workspace-tabs button.active { border-bottom: 2px solid var(--accent); background: var(--panel); }
-.chat-workspace {
+.chat-workspace, .graph-workspace {
   display: grid;
   gap: 14px;
 }
-.chat-header {
+.chat-header, .graph-header {
   border-bottom: 1px solid var(--border);
   padding-bottom: 12px;
 }
@@ -200,6 +200,12 @@ h3 { font-size: 13px; margin: 18px 0 8px; }
 .openclaude-layout {
   display: grid;
   grid-template-columns: minmax(420px, 1fr) minmax(280px, 360px);
+  gap: 14px;
+  align-items: start;
+}
+.graph-primary-layout {
+  display: grid;
+  grid-template-columns: 1fr;
   gap: 14px;
   align-items: start;
 }
@@ -284,9 +290,19 @@ h3 { font-size: 13px; margin: 18px 0 8px; }
   display: grid;
   gap: 0;
 }
+.graph-primary-layout .context-rail {
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+}
 .context-rail section {
   padding: 12px;
   border-bottom: 1px solid var(--border);
+}
+.graph-primary-layout .context-rail section {
+  border-bottom: 0;
+  border-right: 1px solid var(--border);
+}
+.graph-primary-layout .context-rail section:last-child {
+  border-right: 0;
 }
 .definition-list.compact {
   grid-template-columns: 84px 1fr;
@@ -321,6 +337,86 @@ h3 { font-size: 13px; margin: 18px 0 8px; }
 }
 .inspector-body {
   padding: 0 12px 12px;
+}
+.ai-helper-button {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 20;
+  width: 68px;
+  min-height: 68px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  gap: 0;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+.ai-helper-button span {
+  font-weight: 700;
+  font-size: 18px;
+  line-height: 1;
+}
+.ai-helper-button small {
+  font-size: 10px;
+  line-height: 1;
+}
+.floating-openclaude {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 30;
+  width: min(520px, calc(100vw - 36px));
+  max-height: min(760px, calc(100vh - 36px));
+  border: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.34);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+.floating-openclaude-head {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.floating-openclaude-head h2 {
+  margin-bottom: 0;
+}
+.floating-openclaude-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.floating-openclaude > .model-control {
+  max-width: none;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.floating-openclaude .chat-panel {
+  min-height: 0;
+  max-height: none;
+  border: 0;
+  grid-template-rows: auto auto auto minmax(180px, 1fr) auto;
+}
+.floating-openclaude .chat-status-row {
+  display: none;
+}
+.floating-openclaude .chat-transcript {
+  min-height: 220px;
+  max-height: min(360px, calc(100vh - 390px));
+}
+.floating-openclaude .suggestion-row {
+  max-height: 96px;
+  overflow: auto;
+}
+.floating-openclaude .chat-composer textarea {
+  min-height: 78px;
 }
 .run-strip {
   border: 1px solid var(--border);
@@ -632,9 +728,21 @@ marker path {
 .log-list code { background: var(--bg); padding: 6px; overflow-wrap: anywhere; }
 
 @media (max-width: 900px) {
-  .metrics-grid, .dashboard-loading, .split-layout, .artifact-layout, .filters, .form-grid, .openclaude-layout, .model-control { grid-template-columns: 1fr; }
+  .metrics-grid, .dashboard-loading, .split-layout, .artifact-layout, .filters, .form-grid, .openclaude-layout, .graph-primary-layout, .model-control { grid-template-columns: 1fr; }
   .run-strip { grid-template-columns: 1fr; }
   .home-header, .workspace-header { align-items: stretch; flex-direction: column; }
   .artifact-row { flex-direction: column; }
   .header-actions, .artifact-actions, .run-actions { justify-content: flex-start; }
+  .floating-openclaude {
+    inset: 12px;
+    width: auto;
+    max-height: none;
+  }
+  .graph-primary-layout .context-rail {
+    grid-template-columns: 1fr;
+  }
+  .graph-primary-layout .context-rail section {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
 }

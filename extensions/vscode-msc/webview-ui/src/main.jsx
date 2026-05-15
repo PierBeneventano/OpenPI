@@ -141,19 +141,21 @@ function Home({ state, newCampaignOpen, setNewCampaignOpen }) {
 }
 
 function CampaignWorkspace({ state, tab, setTab }) {
+  const [chatOpen, setChatOpen] = useState(false);
   const details = state.campaignDetails || {};
   const title = details.name || details.campaign_id || basename(state.selectedCampaign) || 'Campaign';
   const execution = state.campaignExecution || {};
   const currentStage = graphNodesFromState(state).find((node) => node.id === execution.current_stage_id);
   const openClaude = state.openClaude || emptyState.openClaude;
+  const inspectorTab = tab === 'graph' ? 'decisions' : tab;
 
   return (
-    <div className="app-shell workspace-shell chat-workspace">
-      <header className="workspace-header chat-header">
+    <div className="app-shell workspace-shell graph-workspace">
+      <header className="workspace-header graph-header">
         <div className="workspace-title">
           <button onClick={() => vscode.postMessage({ type: 'backToCampaigns' })}>Back</button>
           <div>
-            <p className="eyebrow">OpenClaude Research Campaign</p>
+            <p className="eyebrow">Research Graph</p>
             <h1>{title}</h1>
             <p className="subtle">{details.metadata?.objective || details.path || state.selectedCampaign}</p>
           </div>
@@ -161,9 +163,7 @@ function CampaignWorkspace({ state, tab, setTab }) {
         <div className="header-actions">
           <span className={`pill status-${statusClass(statusOf(details))}`}>{statusOf(details)}</span>
           <span className="pill">{currentStage?.label || 'No active stage'}</span>
-          <ModelSelector openClaude={openClaude} />
-          <button onClick={() => vscode.postMessage({ type: 'openClaudeStart', model: openClaude.model })}>Refresh Context</button>
-          <button className="danger" onClick={() => vscode.postMessage({ type: 'openClaudeStop' })}>Stop OpenClaude</button>
+          <button className="primary" onClick={() => setChatOpen(true)}>AI Helper</button>
           <button onClick={() => vscode.postMessage({ type: 'refreshCampaign' })}>Refresh</button>
         </div>
       </header>
@@ -172,28 +172,58 @@ function CampaignWorkspace({ state, tab, setTab }) {
       {state.actionError ? <div className="notice error">{state.actionError}</div> : null}
       <ErrorSummary errors={state.errors || []} />
 
-      <main className="openclaude-layout">
-        <OpenClaudeChat state={state} />
+      <main className="graph-primary-layout">
+        <GraphTab state={state} />
         <ContextRail state={state} currentStage={currentStage} />
       </main>
 
       <section className="inspector-stack">
         <div className="inspector-tabs">
-          {['graph', 'decisions', 'deliverables', 'feedback', 'diagnostics'].map((name) => (
-            <button key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>
+          {['decisions', 'deliverables', 'feedback', 'diagnostics'].map((name) => (
+            <button key={name} className={inspectorTab === name ? 'active' : ''} onClick={() => setTab(name)}>
               {capitalize(name)}
             </button>
           ))}
         </div>
         <div className="inspector-body">
-          {tab === 'graph' ? <GraphTab state={state} /> : null}
-          {tab === 'decisions' ? <DecisionsTab state={state} /> : null}
-          {tab === 'deliverables' ? <DeliverablesTab state={state} /> : null}
-          {tab === 'feedback' ? <FeedbackTab state={state} /> : null}
-          {tab === 'diagnostics' ? <DiagnosticsTab state={state} /> : null}
+          {inspectorTab === 'decisions' ? <DecisionsTab state={state} /> : null}
+          {inspectorTab === 'deliverables' ? <DeliverablesTab state={state} /> : null}
+          {inspectorTab === 'feedback' ? <FeedbackTab state={state} /> : null}
+          {inspectorTab === 'diagnostics' ? <DiagnosticsTab state={state} /> : null}
         </div>
       </section>
+      <FloatingOpenClaude state={state} open={chatOpen} setOpen={setChatOpen} />
     </div>
+  );
+}
+
+function FloatingOpenClaude({ state, open, setOpen }) {
+  const openClaude = state.openClaude || emptyState.openClaude;
+  if (!open) {
+    return (
+      <button className="ai-helper-button" onClick={() => setOpen(true)} aria-label="Open AI helper">
+        <span>AI</span>
+        <small>{openClaude.status || 'idle'}</small>
+      </button>
+    );
+  }
+  return (
+    <section className="floating-openclaude" aria-label="AI helper">
+      <div className="floating-openclaude-head">
+        <div>
+          <p className="eyebrow">AI Helper</p>
+          <h2>OpenClaude</h2>
+        </div>
+        <div className="floating-openclaude-actions">
+          <span className={`pill status-${statusClass(openClaude.status || 'idle')}`}>{openClaude.status || 'idle'}</span>
+          <button onClick={() => vscode.postMessage({ type: 'openClaudeStart', model: openClaude.model })}>Refresh</button>
+          <button className="danger" onClick={() => vscode.postMessage({ type: 'openClaudeStop' })}>Stop</button>
+          <button onClick={() => setOpen(false)}>Hide</button>
+        </div>
+      </div>
+      <ModelSelector openClaude={openClaude} />
+      <OpenClaudeChat state={state} />
+    </section>
   );
 }
 
