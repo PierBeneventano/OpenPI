@@ -36,6 +36,7 @@ const emptyState = {
 function App() {
   const [state, setState] = useState(emptyState);
   const [newCampaignOpen, setNewCampaignOpen] = useState(false);
+  const [deleteCandidate, setDeleteCandidate] = useState(null);
   const [workspaceTab, setWorkspaceTab] = useState('graph');
 
   useEffect(() => {
@@ -51,24 +52,32 @@ function App() {
 
   if (state.view === 'campaign') {
     return (
-      <CampaignWorkspace
-        state={state}
-        tab={workspaceTab}
-        setTab={setWorkspaceTab}
-      />
+      <>
+        <CampaignWorkspace
+          state={state}
+          tab={workspaceTab}
+          setTab={setWorkspaceTab}
+          requestDelete={setDeleteCandidate}
+        />
+        {deleteCandidate ? <DeleteCampaignModal target={deleteCandidate} onClose={() => setDeleteCandidate(null)} /> : null}
+      </>
     );
   }
 
   return (
-    <Home
-      state={state}
-      newCampaignOpen={newCampaignOpen}
-      setNewCampaignOpen={setNewCampaignOpen}
-    />
+    <>
+      <Home
+        state={state}
+        newCampaignOpen={newCampaignOpen}
+        setNewCampaignOpen={setNewCampaignOpen}
+        requestDelete={setDeleteCandidate}
+      />
+      {deleteCandidate ? <DeleteCampaignModal target={deleteCandidate} onClose={() => setDeleteCandidate(null)} /> : null}
+    </>
   );
 }
 
-function Home({ state, newCampaignOpen, setNewCampaignOpen }) {
+function Home({ state, newCampaignOpen, setNewCampaignOpen, requestDelete }) {
   const campaigns = state.campaigns || [];
   const firstLoad = state.loading && !state.loaded;
   const totalArtifacts = campaigns.reduce((sum, campaign) => sum + Number(campaign.artifactCount || 0), 0);
@@ -125,7 +134,7 @@ function Home({ state, newCampaignOpen, setNewCampaignOpen }) {
                 </div>
                 <div className="card-actions">
                   <button className="primary" onClick={() => vscode.postMessage({ type: 'selectCampaign', campaign: campaignRef })}>Open</button>
-                  <button className="danger" onClick={() => confirmDeleteCampaign(campaign)}>Delete</button>
+                  <button className="danger" onClick={() => requestDelete(deleteTargetForCampaign(campaign))}>Delete</button>
                 </div>
               </article>
             );}) : (
@@ -145,19 +154,46 @@ function Home({ state, newCampaignOpen, setNewCampaignOpen }) {
   );
 }
 
-function confirmDeleteCampaign(campaign) {
-  const campaignRef = campaign.path || campaign.name || campaign.campaign_id || campaign.title;
-  const label = campaign.title || campaign.name || campaignRef || 'this campaign';
-  if (!campaignRef) return;
-  const confirmed = window.prompt(
-    `Delete ${label} and its local campaign/results files? Type DELETE to confirm.`
-  );
-  if (confirmed === 'DELETE') {
-    vscode.postMessage({ type: 'deleteCampaign', campaign: campaignRef, confirm: 'DELETE' });
-  }
+function deleteTargetForCampaign(campaign) {
+  const ref = campaign.path || campaign.name || campaign.campaign_id || campaign.id || campaign.title;
+  return {
+    ref,
+    label: campaign.title || campaign.name || campaign.campaign_id || campaign.id || ref || 'this campaign'
+  };
 }
 
-function CampaignWorkspace({ state, tab, setTab }) {
+function DeleteCampaignModal({ target, onClose }) {
+  const [confirmation, setConfirmation] = useState('');
+  const canDelete = confirmation === 'DELETE' && target?.ref;
+  function submit(event) {
+    event.preventDefault();
+    if (!canDelete) return;
+    vscode.postMessage({ type: 'deleteCampaign', campaign: target.ref, confirm: 'DELETE' });
+    onClose();
+  }
+  return (
+    <div className="modal-backdrop">
+      <form className="modal delete-modal" onSubmit={submit}>
+        <div className="modal-head">
+          <div>
+            <h2>Delete Campaign</h2>
+            <p className="subtle">{target.label}</p>
+          </div>
+          <button type="button" onClick={onClose}>Cancel</button>
+        </div>
+        <div className="notice error">
+          This removes the campaign record, campaign bundle, results workspace, graph snapshot, and local chat history.
+        </div>
+        <label>Type DELETE to confirm
+          <input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoFocus />
+        </label>
+        <button className="danger" type="submit" disabled={!canDelete}>Delete Campaign</button>
+      </form>
+    </div>
+  );
+}
+
+function CampaignWorkspace({ state, tab, setTab, requestDelete }) {
   const [chatOpen, setChatOpen] = useState(false);
   const details = state.campaignDetails || {};
   const title = details.name || details.campaign_id || basename(state.selectedCampaign) || 'Campaign';
@@ -182,7 +218,7 @@ function CampaignWorkspace({ state, tab, setTab }) {
           <span className="pill">{currentStage?.label || 'No active stage'}</span>
           <button className="primary" onClick={() => setChatOpen(true)}>AI Helper</button>
           <button onClick={() => vscode.postMessage({ type: 'refreshCampaign' })}>Refresh</button>
-          <button className="danger" onClick={() => confirmDeleteCampaign({ path: state.selectedCampaign, title })}>Delete</button>
+          <button className="danger" onClick={() => requestDelete(deleteTargetForCampaign({ path: state.selectedCampaign, title }))}>Delete</button>
         </div>
       </header>
 
