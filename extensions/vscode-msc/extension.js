@@ -505,16 +505,20 @@ async function deleteCampaignForSession(session, message) {
   const campaignRef = String(message.campaign || session.state.selectedCampaign || '').trim();
   if (!campaignRef) {
     setActionError(session, 'Select a campaign before deleting it.');
+    postDeleteCampaignResult(session, { ok: false, campaign: campaignRef, error: session.state.actionError });
     return;
   }
   if (message.confirm !== 'DELETE') {
     setActionError(session, 'Campaign deletion requires confirmation text DELETE.');
+    postDeleteCampaignResult(session, { ok: false, campaign: campaignRef, error: session.state.actionError });
     return;
   }
   if (session.activeProcess) {
     setActionError(session, 'Stop the active campaign process before deleting this campaign.');
+    postDeleteCampaignResult(session, { ok: false, campaign: campaignRef, error: session.state.actionError });
     return;
   }
+  postDeleteCampaignResult(session, { ok: true, status: 'started', campaign: campaignRef });
   session.state = {
     ...session.state,
     loading: true,
@@ -533,19 +537,51 @@ async function deleteCampaignForSession(session, message) {
   ]);
   if (!result.ok) {
     setActionError(session, result.error || result.stderr || 'Campaign could not be deleted.');
+    postDeleteCampaignResult(session, { ok: false, campaign: campaignRef, error: session.state.actionError });
     return;
   }
   if (session.openClaudeProcess) {
     session.openClaudeProcess.kill('SIGTERM');
     session.openClaudeProcess = null;
   }
-  const state = await collectDashboardData(session.root);
-  state.view = 'home';
-  state.selectedCampaign = null;
-  state.actionError = null;
-  state.openClaude = defaultOpenClaudeState();
-  session.state = state;
+  const deleted = result.data || {};
+  session.state = {
+    ...session.state,
+    loading: false,
+    view: 'home',
+    selectedCampaign: null,
+    campaignDetails: null,
+    campaignWorkspace: null,
+    campaignGraph: null,
+    campaignArtifacts: [],
+    campaignEvents: [],
+    campaignExecution: null,
+    campaignDecisions: [],
+    campaignFeedback: [],
+    campaignDeliverables: [],
+    campaignPlannedOutputs: [],
+    campaignDiagnosticArtifacts: [],
+    campaignRunSummary: defaultRunSummary(),
+    selectedGraphNode: null,
+    artifactPreview: null,
+    campaigns: filterDeletedCampaign(session.state.campaigns || [], campaignRef, deleted.campaign_id),
+    actionError: null,
+    openClaude: defaultOpenClaudeState()
+  };
+  postDeleteCampaignResult(session, { ok: true, status: 'completed', campaign: campaignRef, result: deleted });
   postState(session);
+}
+
+function postDeleteCampaignResult(session, payload) {
+  session.panel.webview.postMessage({ type: 'deleteCampaignResult', ...payload });
+}
+
+function filterDeletedCampaign(campaigns, campaignRef, campaignId) {
+  const targets = new Set([campaignRef, campaignId].filter(Boolean).map(String));
+  return campaigns.filter((campaign) => {
+    const refs = [campaign.path, campaign.name, campaign.campaign_id, campaign.id, campaign.title].filter(Boolean).map(String);
+    return !refs.some((ref) => targets.has(ref));
+  });
 }
 
 async function previewArtifactForSession(session, artifact) {

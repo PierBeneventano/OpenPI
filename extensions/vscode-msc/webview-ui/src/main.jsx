@@ -43,6 +43,26 @@ function App() {
     const listener = (event) => {
       if (event.data && event.data.type === 'state') {
         setState({ ...emptyState, ...event.data.state });
+      } else if (event.data && event.data.type === 'deleteCampaignResult') {
+        if (event.data.ok && event.data.status === 'completed') {
+          const deletedRef = String(event.data.campaign || '');
+          const deletedId = String(event.data.result?.campaign_id || '');
+          setState((current) => ({
+            ...current,
+            loading: false,
+            view: 'home',
+            selectedCampaign: null,
+            campaigns: (current.campaigns || []).filter((campaign) => !campaignMatchesAny(campaign, [deletedRef, deletedId])),
+            actionError: null
+          }));
+          setDeleteCandidate(null);
+        } else if (event.data.ok === false) {
+          setState((current) => ({
+            ...current,
+            loading: false,
+            actionError: event.data.error || 'Campaign could not be deleted.'
+          }));
+        }
       }
     };
     window.addEventListener('message', listener);
@@ -163,6 +183,12 @@ function Home({ state, newCampaignOpen, setNewCampaignOpen, requestDelete }) {
       {newCampaignOpen ? <NewCampaignModal onClose={() => setNewCampaignOpen(false)} /> : null}
     </div>
   );
+}
+
+function campaignMatchesAny(campaign, refs) {
+  const targets = new Set((refs || []).filter(Boolean).map(String));
+  const values = [campaign.path, campaign.name, campaign.campaign_id, campaign.id, campaign.title].filter(Boolean).map(String);
+  return values.some((value) => targets.has(value));
 }
 
 function deleteTargetForCampaign(campaign) {
