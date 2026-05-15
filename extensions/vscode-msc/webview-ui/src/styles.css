@@ -597,6 +597,12 @@ marker path {
   margin: 8px 0 0;
   overflow-wrap: anywhere;
 }
+.decision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
 .toggle-row label,
 .spend-gate label {
   display: flex;

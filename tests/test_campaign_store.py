@@ -250,6 +250,34 @@ def test_campaign_context_links_are_events_and_workspace_memory(tmp_path: Path):
     assert "ContextLinkUpdated" in event_types
 
 
+def test_failure_recovery_decision_is_researcher_readable(tmp_path: Path):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Failure UX Demo",
+        objective="Expose runtime failures as recovery decisions.",
+        template="literature_only",
+        budget=1,
+    )
+    run = store.record_run_started("failure-ux-demo", command=["msc", "run"], pid=42)
+    store.record_run_exited(
+        "failure-ux-demo",
+        run["run_id"],
+        exit_code=1,
+        metadata={"error": "Recursion limit of 25 reached without hitting a stop condition."},
+    )
+
+    workspace = store.workspace_read_model("failure-ux-demo")
+    decision = workspace["pending_decisions"][0]
+
+    assert workspace["execution"]["status"] == "human_decision_required"
+    assert workspace["execution"]["current_stage_id"] != run["run_id"]
+    assert decision["target_type"] == "failure_recovery"
+    assert decision["target_label"] == "latest failed execution"
+    assert decision["title"] == "Campaign execution needs loop recovery"
+    assert "looped until the runtime hit its recursion limit" in decision["summary"]
+    assert decision["reason"] == "Recursion limit of 25 reached without hitting a stop condition."
+
+
 def test_campaign_event_projector_is_independent_of_store(tmp_path: Path):
     events = [
         {

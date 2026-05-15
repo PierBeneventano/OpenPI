@@ -703,19 +703,45 @@ function DecisionsTab({ state }) {
           <div className="feedback-item" key={decision.id}>
             <div className="card-topline">
               <span className="pill">{decision.status || 'pending'}</span>
-              <span className="pill">{decision.target_id || decision.target_type || 'campaign'}</span>
+              <span className="pill">{decision.target_label || decision.target_type || 'campaign'}</span>
               <span>{formatTime(decision.created_at)}</span>
             </div>
-            <p>{decision.reason || decision.target_type || 'Human review is required.'}</p>
+            <h3>{decision.title || 'Human review needed'}</h3>
+            <p>{decision.summary || decision.reason || decision.target_type || 'Human review is required.'}</p>
+            {decision.reason && decision.reason !== decision.summary ? <p className="subtle">Technical detail: {decision.reason}</p> : null}
             {decision.evidence?.length ? <p className="subtle">{decision.evidence.join(', ')}</p> : null}
             <div className="card-facts">
               {(decision.safe_next_actions || []).map((action) => <span key={action}>{action}</span>)}
             </div>
+            <DecisionActionButtons decision={decision} />
           </div>
         ))}
       </div>
     </main>
   );
+}
+
+function DecisionActionButtons({ decision }) {
+  const actions = decision.safe_next_actions || [];
+  if (!actions.length) return null;
+  return (
+    <div className="decision-actions">
+      {actions.map((action) => (
+        <button key={action} onClick={() => vscode.postMessage({ type: 'openClaudeSend', text: decisionPrompt(decision, action) })}>
+          Ask OpenClaude to {action.replace(/-/g, ' ')}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function decisionPrompt(decision, action) {
+  const base = `Decision ${decision.id || ''} needs ${action}. Target: ${decision.target_label || decision.target_id || decision.target_type || 'campaign'}.`;
+  const reason = decision.reason ? ` Technical detail: ${decision.reason}` : '';
+  if (decision.target_type === 'failure_recovery') {
+    return `${base}${reason} Diagnose the failed campaign execution, explain the likely root cause in researcher-facing terms, then use the SDK to ${action} or propose the safest recovery path. Do not edit files directly.`;
+  }
+  return `${base}${reason} Inspect the campaign workspace and use the SDK to carry out or propose this action.`;
 }
 
 function FeedbackTab({ state }) {

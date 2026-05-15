@@ -630,23 +630,66 @@ class CampaignStore:
         decisions: list[dict[str, Any]] = []
         for row in rows:
             metadata = json.loads(row["metadata_json"] or "{}")
+            target_type = str(row["target_type"])
+            reason = str(metadata.get("reason") or metadata.get("error") or metadata.get("requested_status") or target_type)
             decisions.append(
                 {
                     "id": row["id"],
                     "campaign_id": row["campaign_id"],
-                    "target_type": row["target_type"],
+                    "target_type": target_type,
                     "target_id": row["target_id"],
+                    "target_label": self._decision_target_label(target_type, str(row["target_id"]), metadata),
                     "status": row["status"],
                     "created_at": row["created_at"],
                     "decided_at": row["decided_at"],
                     "actor": row["actor"],
-                    "reason": metadata.get("reason") or metadata.get("error") or metadata.get("requested_status") or row["target_type"],
-                    "safe_next_actions": list(metadata.get("safe_next_actions") or self._safe_actions_for_decision(row["target_type"])),
+                    "title": self._decision_title(target_type, reason),
+                    "reason": reason,
+                    "summary": self._decision_summary(target_type, reason),
+                    "safe_next_actions": list(metadata.get("safe_next_actions") or self._safe_actions_for_decision(target_type)),
                     "evidence": metadata.get("evidence") or metadata.get("missing_required_artifacts") or [],
                     "metadata": metadata,
                 }
             )
         return decisions
+
+    @staticmethod
+    def _decision_title(target_type: str, reason: str) -> str:
+        if target_type == "failure_recovery":
+            if "recursion" in reason.lower() or "GRAPH_RECURSION_LIMIT" in reason:
+                return "Campaign execution needs loop recovery"
+            return "Campaign execution needs recovery"
+        if target_type == "stage_failure":
+            return "Stage needs recovery"
+        if target_type == "stage_completion":
+            return "Stage output needs review"
+        if target_type == "graph_change":
+            return "Graph change needs review"
+        return target_type.replace("_", " ").title()
+
+    @staticmethod
+    def _decision_summary(target_type: str, reason: str) -> str:
+        if target_type == "failure_recovery":
+            if "recursion" in reason.lower() or "GRAPH_RECURSION_LIMIT" in reason:
+                return (
+                    "The campaign execution looped until the runtime hit its recursion limit. "
+                    "Use OpenClaude to diagnose the loop, choose the correct recovery point, "
+                    "and rerun, rewind, or repair through SDK commands."
+                )
+            return "The latest campaign execution failed and needs a recovery choice before continuing."
+        if target_type == "stage_failure":
+            return "A stage failed and needs repair, rewrite, rerun, or abort guidance."
+        if target_type == "stage_completion":
+            return "A stage produced output that needs human review before the graph continues."
+        if target_type == "graph_change":
+            return "A proposed graph change needs approval or revision."
+        return reason
+
+    @staticmethod
+    def _decision_target_label(target_type: str, target_id: str, metadata: dict[str, Any]) -> str:
+        if target_type == "failure_recovery":
+            return "latest failed execution"
+        return str(metadata.get("node_id") or metadata.get("stage_id") or metadata.get("artifact_path") or target_id or "campaign")
 
     @staticmethod
     def _safe_actions_for_decision(target_type: str) -> list[str]:
@@ -760,6 +803,7 @@ class CampaignStore:
     ) -> dict[str, Any]:
         attempts: dict[str, dict[str, Any]] = {}
         current_stage_id = self._current_stage_id(graph)
+        graph_node_ids = {str(node.get("id") or "") for node in graph.get("nodes") or []}
         status = "not_started"
         started_at = None
         updated_at = campaign.get("updated_at")
@@ -800,9 +844,9 @@ class CampaignStore:
                     current_stage_id = str(payload.get("node_id") or current_stage_id or "")
             elif event_type in {"ApprovalRequested", "HumanDecisionRequired"}:
                 status = "human_decision_required"
-                target_id = payload.get("target_id") or payload.get("stage_id")
-                if target_id:
-                    current_stage_id = str(target_id)
+                target_id = str(payload.get("target_id") or payload.get("stage_id") or "")
+                if target_id in graph_node_ids:
+                    current_stage_id = target_id
             elif event_type == "CampaignPaused":
                 status = "paused"
             elif event_type == "CampaignStopped":
@@ -811,7 +855,9 @@ class CampaignStore:
                 status = "ready"
         if pending_decisions:
             status = "human_decision_required"
-            current_stage_id = str(pending_decisions[0].get("target_id") or current_stage_id or "")
+            target_id = str(pending_decisions[0].get("target_id") or "")
+            if target_id in graph_node_ids:
+                current_stage_id = target_id
         return {
             "status": status,
             "started_at": started_at,
