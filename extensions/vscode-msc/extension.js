@@ -515,6 +515,12 @@ async function deleteCampaignForSession(session, message) {
     setActionError(session, 'Stop the active campaign process before deleting this campaign.');
     return;
   }
+  session.state = {
+    ...session.state,
+    loading: true,
+    actionError: null
+  };
+  postState(session);
   const result = await runJson(session.root, [
     'campaigns',
     '--root',

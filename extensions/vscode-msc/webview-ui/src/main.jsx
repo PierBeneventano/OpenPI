@@ -50,6 +50,17 @@ function App() {
     return () => window.removeEventListener('message', listener);
   }, []);
 
+  useEffect(() => {
+    if (!deleteCandidate || !state.loaded) return;
+    const exists = (state.campaigns || []).some((campaign) => {
+      const refs = [campaign.path, campaign.name, campaign.campaign_id, campaign.id, campaign.title].filter(Boolean).map(String);
+      return refs.includes(String(deleteCandidate.ref));
+    });
+    if (state.view === 'home' && !exists && !state.actionError) {
+      setDeleteCandidate(null);
+    }
+  }, [state.generatedAt, state.view, state.loaded, state.actionError, state.campaigns, deleteCandidate]);
+
   if (state.view === 'campaign') {
     return (
       <>
@@ -59,7 +70,7 @@ function App() {
           setTab={setWorkspaceTab}
           requestDelete={setDeleteCandidate}
         />
-        {deleteCandidate ? <DeleteCampaignModal target={deleteCandidate} onClose={() => setDeleteCandidate(null)} /> : null}
+        {deleteCandidate ? <DeleteCampaignModal target={deleteCandidate} state={state} onClose={() => setDeleteCandidate(null)} /> : null}
       </>
     );
   }
@@ -72,7 +83,7 @@ function App() {
         setNewCampaignOpen={setNewCampaignOpen}
         requestDelete={setDeleteCandidate}
       />
-      {deleteCandidate ? <DeleteCampaignModal target={deleteCandidate} onClose={() => setDeleteCandidate(null)} /> : null}
+      {deleteCandidate ? <DeleteCampaignModal target={deleteCandidate} state={state} onClose={() => setDeleteCandidate(null)} /> : null}
     </>
   );
 }
@@ -162,14 +173,30 @@ function deleteTargetForCampaign(campaign) {
   };
 }
 
-function DeleteCampaignModal({ target, onClose }) {
+function DeleteCampaignModal({ target, state, onClose }) {
   const [confirmation, setConfirmation] = useState('');
-  const canDelete = confirmation === 'DELETE' && target?.ref;
+  const [deleting, setDeleting] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
+  const canDelete = confirmation === 'DELETE' && target?.ref && !deleting;
+  useEffect(() => {
+    if (state.actionError) {
+      setDeleting(false);
+    }
+  }, [state.actionError]);
+  useEffect(() => {
+    if (!deleting) return undefined;
+    const timer = window.setTimeout(() => {
+      setTimedOut(true);
+      setDeleting(false);
+    }, 15000);
+    return () => window.clearTimeout(timer);
+  }, [deleting]);
   function submit(event) {
     event.preventDefault();
     if (!canDelete) return;
+    setTimedOut(false);
+    setDeleting(true);
     vscode.postMessage({ type: 'deleteCampaign', campaign: target.ref, confirm: 'DELETE' });
-    onClose();
   }
   return (
     <div className="modal-backdrop">
@@ -179,15 +206,22 @@ function DeleteCampaignModal({ target, onClose }) {
             <h2>Delete Campaign</h2>
             <p className="subtle">{target.label}</p>
           </div>
-          <button type="button" onClick={onClose}>Cancel</button>
+          <button type="button" onClick={onClose} disabled={deleting}>Cancel</button>
         </div>
+        {deleting ? <LoadingNotice text="Deleting campaign files and refreshing the dashboard..." /> : null}
+        {state.actionError ? <div className="notice error">{state.actionError}</div> : null}
+        {timedOut ? (
+          <div className="notice error">
+            No delete response came back from the extension backend. Reload the VS Code window, reopen the dashboard, and try again.
+          </div>
+        ) : null}
         <div className="notice error">
           This removes the campaign record, campaign bundle, results workspace, graph snapshot, and local chat history.
         </div>
         <label>Type DELETE to confirm
-          <input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoFocus />
+          <input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} disabled={deleting} autoFocus />
         </label>
-        <button className="danger" type="submit" disabled={!canDelete}>Delete Campaign</button>
+        <button className="danger" type="submit" disabled={!canDelete}>{deleting ? 'Deleting...' : 'Delete Campaign'}</button>
       </form>
     </div>
   );
@@ -1206,11 +1240,11 @@ function NewCampaignModal({ onClose }) {
   );
 }
 
-function LoadingNotice() {
+function LoadingNotice({ text = 'Loading local campaign state...' }) {
   return (
     <div className="loading-bar" role="status">
       <span className="spinner" />
-      <span>Loading local campaign state...</span>
+      <span>{text}</span>
     </div>
   );
 }
