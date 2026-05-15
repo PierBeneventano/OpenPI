@@ -250,20 +250,32 @@ h3 { font-size: 13px; margin: 18px 0 8px; }
   max-height: calc(100vh - 430px);
   overflow: auto;
   padding: 12px;
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 10px;
 }
 .chat-message {
   border: 1px solid var(--border);
   background: var(--bg);
   padding: 10px;
+  max-width: 88%;
 }
 .chat-message.role-user {
+  border-color: var(--accent);
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+}
+.chat-message.role-assistant {
+  align-self: flex-start;
+}
+.chat-message.role-assistant.streaming {
   border-color: var(--accent);
 }
 .chat-message.role-system {
   color: var(--muted);
+  align-self: center;
+  max-width: 100%;
 }
 .chat-message p {
   white-space: pre-wrap;

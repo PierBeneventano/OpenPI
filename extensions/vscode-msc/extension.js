@@ -1,11 +1,14 @@
 const vscode = require('vscode');
 const childProcess = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
 
 const MAX_LOG_LINES = 400;
 const MAX_CHAT_MESSAGES = 120;
+const MAX_PROMPT_HISTORY_MESSAGES = 14;
+const MAX_PROMPT_HISTORY_CHARS = 1800;
 const RUN_CONFIRMATION = 'RUN LOCAL';
 const STEERING_URL = 'http://127.0.0.1:5002';
 const TEXT_PREVIEW_BYTES = 256 * 1024;
@@ -67,6 +70,8 @@ async function handleMessage(session, message) {
     session.state.campaignRunSummary = defaultRunSummary();
     session.state.selectedGraphNode = null;
     session.state.artifactPreview = null;
+    saveOpenClaudeHistory(session);
+    session.state.openClaude = defaultOpenClaudeState();
     postState(session);
   } else if (message.type === 'createCampaign' || message.type === 'createCampaignDraft') {
     await createCampaignDraftForSession(session, message.draft || {});
@@ -103,6 +108,8 @@ async function handleMessage(session, message) {
     await sendOpenClaudeMessage(session, message);
   } else if (message.type === 'openClaudeRestartModel') {
     await restartOpenClaudeWithModel(session, message);
+  } else if (message.type === 'openClaudeClearHistory') {
+    clearOpenClaudeHistory(session);
   } else if (message.type === 'linkArtifactContext') {
     await linkArtifactContext(session, message);
   } else if (message.type === 'updateContextLink') {
@@ -189,6 +196,9 @@ function defaultOpenClaudeState() {
     actions: [],
     contextPack: null,
     contextLinks: [],
+    campaignRef: null,
+    chatStoragePath: null,
+    historyLoaded: false,
     lastStartedAt: null
   };
 }
@@ -237,6 +247,9 @@ async function doRefresh(session) {
   }
 
   session.state = state;
+  if (state.selectedCampaign) {
+    hydrateOpenClaudeHistory(session, state.selectedCampaign);
+  }
   postState(session);
 }
 
@@ -341,6 +354,7 @@ async function selectCampaign(session, campaignRef) {
     view: 'campaign',
     selectedCampaign: campaignRef
   };
+  hydrateOpenClaudeHistory(session, campaignRef, { replace: true });
   session.state.errors = [...(session.state.errors || []), ...(workspace.errors || [])];
   postState(session);
 }
@@ -1098,13 +1112,119 @@ async function submitFeedback(session, message) {
   postState(session);
 }
 
+function hydrateOpenClaudeHistory(session, campaignRef, options = {}) {
+  const current = session.state.openClaude || defaultOpenClaudeState();
+  const sameCampaign = current.campaignRef === campaignRef;
+  const base = sameCampaign
+    ? current
+    : {
+        ...defaultOpenClaudeState(),
+        model: current.model || defaultOpenClaudeState().model,
+        models: current.models || []
+      };
+  const transcript = (options.replace || !sameCampaign || !current.historyLoaded)
+    ? loadOpenClaudeHistory(session.root, campaignRef)
+    : (current.transcript || []);
+  session.state.openClaude = {
+    ...base,
+    campaignRef,
+    chatStoragePath: openClaudeChatPath(session.root, campaignRef),
+    historyLoaded: true,
+    transcript
+  };
+}
+
+function openClaudeChatPath(root, campaignRef) {
+  return path.join(root, '.msc', 'openclaude_chats', `${safeChatName(campaignRef)}.json`);
+}
+
+function safeChatName(value) {
+  const raw = String(value || 'campaign');
+  const basename = path.basename(raw).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'campaign';
+  const hash = crypto.createHash('sha1').update(raw).digest('hex').slice(0, 10);
+  return `${basename.slice(0, 70)}-${hash}`;
+}
+
+function loadOpenClaudeHistory(root, campaignRef) {
+  const filePath = openClaudeChatPath(root, campaignRef);
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const transcript = Array.isArray(parsed) ? parsed : parsed.transcript;
+    return sanitizeChatMessages(transcript || []).map((item) => ({ ...item, streaming: false }));
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveOpenClaudeHistory(session) {
+  const campaignRef = session.state.selectedCampaign || session.state.openClaude?.campaignRef;
+  if (!campaignRef) {
+    return;
+  }
+  const current = session.state.openClaude || defaultOpenClaudeState();
+  const transcript = sanitizeChatMessages(current.transcript || []);
+  const filePath = current.chatStoragePath || openClaudeChatPath(session.root, campaignRef);
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify({
+      schema: 'msc.openclaude.chat_history.v1',
+      campaign: campaignRef,
+      updated_at: new Date().toISOString(),
+      transcript
+    }, null, 2), 'utf8');
+    session.state.openClaude = {
+      ...current,
+      chatStoragePath: filePath,
+      historyLoaded: true,
+      transcript
+    };
+  } catch (error) {
+    appendOpenClaudeAction(session, {
+      kind: 'history',
+      status: 'failed',
+      text: `Chat history could not be saved: ${error.message || String(error)}`,
+      timestamp: new Date().toISOString()
+    });
+  }
+}
+
+function clearOpenClaudeHistory(session) {
+  if (!session.state.selectedCampaign) {
+    setActionError(session, 'Select a campaign before clearing chat history.');
+    return;
+  }
+  const filePath = openClaudeChatPath(session.root, session.state.selectedCampaign);
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch (_) {}
+  session.state.openClaude = {
+    ...(session.state.openClaude || defaultOpenClaudeState()),
+    campaignRef: session.state.selectedCampaign,
+    chatStoragePath: filePath,
+    historyLoaded: true,
+    transcript: [],
+    error: null
+  };
+  postState(session);
+}
+
 async function startOpenClaudeSession(session, message = {}) {
   if (!session.state.selectedCampaign) {
     setActionError(session, 'Select a campaign before starting OpenClaude.');
     return;
   }
+  hydrateOpenClaudeHistory(session, session.state.selectedCampaign);
   const model = String(message.model || session.state.openClaude?.model || session.state.diagnostics?.openclaude?.model || 'openai/gpt-5-mini').trim();
   const contextPack = await loadOpenClaudeContextPack(session, model);
+  const existingTranscript = session.state.openClaude?.transcript || [];
+  const transcript = existingTranscript.length ? existingTranscript : appendChatMessage(existingTranscript, {
+    role: 'system',
+    text: `OpenClaude is ready for ${session.state.selectedCampaign}. Ask it to inspect, steer, rerun, reroute, or review produced artifacts.`,
+    timestamp: new Date().toISOString()
+  });
   session.state.openClaude = {
     ...defaultOpenClaudeState(),
     ...(session.state.openClaude || {}),
@@ -1114,12 +1234,9 @@ async function startOpenClaudeSession(session, message = {}) {
     contextPack,
     contextLinks: contextPack?.active_context_links || session.state.openClaudeContextLinks || [],
     lastStartedAt: new Date().toISOString(),
-    transcript: appendChatMessage(session.state.openClaude?.transcript || [], {
-      role: 'system',
-      text: `OpenClaude is ready for ${session.state.selectedCampaign}. Ask it to inspect, steer, rerun, reroute, or review produced artifacts.`,
-      timestamp: new Date().toISOString()
-    })
+    transcript
   };
+  saveOpenClaudeHistory(session);
   postState(session);
 }
 
@@ -1133,6 +1250,8 @@ function stopOpenClaudeSession(session) {
     status: 'stopped',
     error: null
   };
+  finalizeStreamingAssistantMessage(session);
+  saveOpenClaudeHistory(session);
   postState(session);
 }
 
@@ -1147,6 +1266,7 @@ async function restartOpenClaudeWithModel(session, message) {
       timestamp: new Date().toISOString()
     })
   };
+  saveOpenClaudeHistory(session);
   await startOpenClaudeSession(session, { model: session.state.openClaude.model });
 }
 
@@ -1165,6 +1285,7 @@ async function sendOpenClaudeMessage(session, message) {
     return;
   }
   const model = String(message.model || session.state.openClaude?.model || 'openai/gpt-5-mini').trim();
+  hydrateOpenClaudeHistory(session, session.state.selectedCampaign);
   const contextPack = await loadOpenClaudeContextPack(session, model);
   session.state.openClaude = {
     ...(session.state.openClaude || defaultOpenClaudeState()),
@@ -1175,6 +1296,7 @@ async function sendOpenClaudeMessage(session, message) {
     contextLinks: contextPack?.active_context_links || [],
     transcript: appendChatMessage(session.state.openClaude?.transcript || [], { role: 'user', text, timestamp: new Date().toISOString() })
   };
+  saveOpenClaudeHistory(session);
   postState(session);
 
   const prompt = buildOpenClaudePrompt(session, text, contextPack);
@@ -1197,6 +1319,7 @@ async function sendOpenClaudeMessage(session, message) {
   const proc = childProcess.spawn(resolveMscBin(session.root), args, { cwd: session.root, env: runtimeEnv(session.root), shell: false });
   session.openClaudeProcess = proc;
   let stdoutBuffer = '';
+  let stderrBuffer = '';
   let assistantText = '';
   proc.stdout.on('data', (chunk) => {
     stdoutBuffer += chunk.toString();
@@ -1215,7 +1338,9 @@ async function sendOpenClaudeMessage(session, message) {
     }
   });
   proc.stderr.on('data', (chunk) => {
-    appendOpenClaudeAction(session, { kind: 'stderr', status: 'running', text: chunk.toString(), timestamp: new Date().toISOString() });
+    const textChunk = chunk.toString();
+    stderrBuffer += textChunk;
+    appendOpenClaudeAction(session, { kind: 'stderr', status: 'running', text: textChunk, timestamp: new Date().toISOString() });
   });
   proc.on('error', (error) => {
     session.state.openClaude = {
@@ -1223,6 +1348,13 @@ async function sendOpenClaudeMessage(session, message) {
       status: 'error',
       error: error.message || String(error)
     };
+    session.state.openClaude.transcript = appendChatMessage(session.state.openClaude?.transcript || [], {
+      role: 'system',
+      text: session.state.openClaude.error,
+      timestamp: new Date().toISOString()
+    });
+    finalizeStreamingAssistantMessage(session);
+    saveOpenClaudeHistory(session);
     postState(session);
   });
   proc.on('exit', async (code, signal) => {
@@ -1231,6 +1363,7 @@ async function sendOpenClaudeMessage(session, message) {
       assistantText = stdoutBuffer.trim();
       updateStreamingAssistantMessage(session, assistantText);
     }
+    finalizeStreamingAssistantMessage(session);
     session.state.openClaude = {
       ...(session.state.openClaude || defaultOpenClaudeState()),
       status: code === 0 ? 'ready' : 'error',
@@ -1239,12 +1372,16 @@ async function sendOpenClaudeMessage(session, message) {
     if (code !== 0 && !assistantText) {
       session.state.openClaude.transcript = appendChatMessage(session.state.openClaude?.transcript || [], {
         role: 'system',
-        text: session.state.openClaude.error || 'OpenClaude exited before returning a response.',
+        text: [
+          session.state.openClaude.error || 'OpenClaude exited before returning a response.',
+          stderrBuffer.trim() ? `stderr:\n${stderrBuffer.trim().slice(0, 1800)}` : ''
+        ].filter(Boolean).join('\n\n'),
         timestamp: new Date().toISOString()
       });
     }
     appendOpenClaudeAction(session, { kind: 'command', status: code === 0 ? 'completed' : 'failed', text: `OpenClaude exited with code ${code == null ? 'null' : code}.`, timestamp: new Date().toISOString() });
     Object.assign(session.state, await loadCampaignWorkspace(session.root, session.state.selectedCampaign));
+    saveOpenClaudeHistory(session);
     postState(session);
   });
 }
@@ -1289,6 +1426,7 @@ async function linkArtifactContext(session, message) {
       timestamp: new Date().toISOString()
     })
   };
+  saveOpenClaudeHistory(session);
   postState(session);
 }
 
@@ -1328,9 +1466,13 @@ async function loadOpenClaudeContextPack(session, model) {
 
 function buildOpenClaudePrompt(session, userText, contextPack) {
   const contextJson = JSON.stringify(compactOpenClaudeContext(contextPack), null, 2);
+  const history = chatHistoryForPrompt(session.state.openClaude?.transcript || [], userText);
   return [
     `Campaign: ${session.state.selectedCampaign}`,
     `Researcher message: ${userText}`,
+    '',
+    'Recent chat history:',
+    history || 'No prior chat history for this campaign.',
     '',
     'Use the MSc SDK/CLI as the campaign authority. You may autonomously inspect and mutate campaign state through public `msc` commands, including feedback, context links, reruns, reroutes, approvals, and campaign continuation. Do not edit product truth directly, delete campaigns/artifacts, edit repo code, scrape SQLite, or bypass budget limits.',
     '',
@@ -1356,6 +1498,43 @@ function compactOpenClaudeContext(contextPack) {
   };
 }
 
+function chatHistoryForPrompt(messages, currentUserText = '') {
+  const clean = sanitizeChatMessages(messages).filter((item) => ['user', 'assistant'].includes(item.role));
+  const current = String(currentUserText || '').trim();
+  const history = current && clean.length && clean[clean.length - 1].role === 'user' && clean[clean.length - 1].text.trim() === current
+    ? clean.slice(0, -1)
+    : clean;
+  return history.slice(-MAX_PROMPT_HISTORY_MESSAGES).map((item) => {
+    const role = item.role === 'assistant' ? 'OpenClaude' : 'Researcher';
+    return `${role}: ${truncateForPrompt(item.text, MAX_PROMPT_HISTORY_CHARS)}`;
+  }).join('\n\n');
+}
+
+function truncateForPrompt(value, maxLength) {
+  const text = String(value || '');
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength - 24)}\n[truncated for prompt]`;
+}
+
+function sanitizeChatMessages(messages) {
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+  return messages
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({
+      id: String(item.id || `${item.role || 'message'}-${item.timestamp || Date.now()}`),
+      role: oneOf(item.role, ['user', 'assistant', 'system'], 'system'),
+      text: String(item.text || '').slice(0, 50000),
+      timestamp: item.timestamp || new Date().toISOString(),
+      streaming: Boolean(item.streaming)
+    }))
+    .filter((item) => item.text.trim())
+    .slice(-MAX_CHAT_MESSAGES);
+}
+
 function appendChatMessage(messages, item) {
   return [...messages, { id: item.id || `${item.role}-${Date.now()}-${Math.random()}`, ...item }].slice(-MAX_CHAT_MESSAGES);
 }
@@ -1375,7 +1554,18 @@ function updateStreamingAssistantMessage(session, text) {
       timestamp: new Date().toISOString()
     });
   }
+  saveOpenClaudeHistory(session);
   postState(session);
+}
+
+function finalizeStreamingAssistantMessage(session) {
+  const messages = session.state.openClaude?.transcript || [];
+  const last = messages[messages.length - 1];
+  if (last && last.role === 'assistant' && last.streaming) {
+    last.streaming = false;
+    last.timestamp = new Date().toISOString();
+    session.state.openClaude.transcript = [...messages];
+  }
 }
 
 function appendOpenClaudeAction(session, action) {
@@ -1601,10 +1791,12 @@ module.exports = {
   artifactAllowedRoots,
   buildRunArgs,
   buildOpenClaudePrompt,
+  chatHistoryForPrompt,
   collectDashboardData,
   compactOpenClaudeContext,
   consumeJsonLines,
   deactivate,
+  openClaudeChatPath,
   textFromOpenClaudeEvent,
   normalizeRunOptions,
   safeResolveArtifactPath,

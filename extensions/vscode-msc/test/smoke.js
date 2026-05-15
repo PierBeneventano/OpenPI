@@ -60,6 +60,7 @@ for (const expected of [
   "message.type === 'openClaudeStart'",
   "message.type === 'openClaudeSend'",
   "message.type === 'openClaudeRestartModel'",
+  "message.type === 'openClaudeClearHistory'",
   "message.type === 'linkArtifactContext'",
   "message.type === 'updateContextLink'",
   "['campaigns', '--root', root, 'workspace'",
@@ -80,6 +81,9 @@ assert(uiSource.includes('AI Helper'));
 assert(uiSource.includes('FloatingOpenClaude'));
 assert(uiSource.includes('Ask OpenClaude to drive the campaign'));
 assert(uiSource.includes('Link to Chat'));
+assert(uiSource.includes('Clear History'));
+assert(uiSource.includes('saved chat message'));
+assert(uiSource.includes('chatEndRef'));
 assert(uiSource.includes('Autonomous Action Log'));
 assert(uiSource.includes('New Campaign'));
 assert(uiSource.includes('Start Campaign'));
@@ -128,6 +132,9 @@ assert(extensionSource.includes('openClaude'));
 assert(extensionSource.includes('stream-json'));
 assert(extensionSource.includes('--verbose'));
 assert(extensionSource.includes('context-pack'));
+assert(extensionSource.includes('.msc'));
+assert(extensionSource.includes('openclaude_chats'));
+assert(extensionSource.includes('chatHistoryForPrompt'));
 assert(!extensionSource.includes('fs.writeFileSync(campaignPath'));
 
 const parsed = extension.consumeJsonLines('{"type":"content_block_delta","delta":{"text":"Hello"}}\n{"type":"tool","name":"Bash"}\npartial');
@@ -143,7 +150,11 @@ assert.strictEqual(
   ''
 );
 const prompt = extension.buildOpenClaudePrompt(
-  { state: { selectedCampaign: 'demo-campaign' } },
+  { state: { selectedCampaign: 'demo-campaign', openClaude: { transcript: [
+    { role: 'user', text: 'Earlier question', timestamp: '2026-05-14T00:00:00Z' },
+    { role: 'assistant', text: 'Earlier answer', timestamp: '2026-05-14T00:00:01Z' },
+    { role: 'user', text: 'Review the matrix.', timestamp: '2026-05-14T00:00:02Z' }
+  ] } } },
   'Review the matrix.',
   {
     schema: 'msc.openclaude.context_pack.v1',
@@ -153,6 +164,10 @@ const prompt = extension.buildOpenClaudePrompt(
 );
 assert(prompt.includes('Review the matrix.'));
 assert(prompt.includes('artifacts/literature_matrix.md'));
+assert(prompt.includes('Earlier question'));
+assert(prompt.includes('Earlier answer'));
+assert(!extension.chatHistoryForPrompt([{ role: 'user', text: 'Current' }], 'Current').includes('Current'));
+assert(extension.openClaudeChatPath('/tmp/project', 'campaign/name').includes('openclaude_chats'));
 
 const args = extension.buildRunArgs({
   task: 'Smoke task',

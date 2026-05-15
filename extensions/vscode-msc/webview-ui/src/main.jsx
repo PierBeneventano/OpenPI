@@ -217,6 +217,7 @@ function FloatingOpenClaude({ state, open, setOpen }) {
         <div className="floating-openclaude-actions">
           <span className={`pill status-${statusClass(openClaude.status || 'idle')}`}>{openClaude.status || 'idle'}</span>
           <button onClick={() => vscode.postMessage({ type: 'openClaudeStart', model: openClaude.model })}>Refresh</button>
+          <button onClick={() => vscode.postMessage({ type: 'openClaudeClearHistory' })}>Clear History</button>
           <button className="danger" onClick={() => vscode.postMessage({ type: 'openClaudeStop' })}>Stop</button>
           <button onClick={() => setOpen(false)}>Hide</button>
         </div>
@@ -252,8 +253,12 @@ function ModelSelector({ openClaude }) {
 
 function OpenClaudeChat({ state }) {
   const [text, setText] = useState('');
+  const chatEndRef = useRef(null);
   const openClaude = state.openClaude || emptyState.openClaude;
   const transcript = openClaude.transcript || [];
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ block: 'end' });
+  }, [transcript.length, transcript[transcript.length - 1]?.text, openClaude.status]);
   const suggestions = [
     'Continue the campaign and tell me what you changed.',
     'Review the latest deliverables and flag weaknesses.',
@@ -272,6 +277,7 @@ function OpenClaudeChat({ state }) {
         <div>
           <p className="eyebrow">Research Chat</p>
           <h2>Ask OpenClaude to drive the campaign</h2>
+          <p className="subtle">{transcript.length ? `${transcript.length} saved chat message${transcript.length === 1 ? '' : 's'}` : 'Campaign chat history will be saved locally.'}</p>
         </div>
         <span className={`pill status-${statusClass(openClaude.status || 'idle')}`}>{openClaude.status || 'idle'}</span>
       </div>
@@ -284,10 +290,10 @@ function OpenClaudeChat({ state }) {
       </div>
       <div className="chat-transcript">
         {transcript.length ? transcript.map((item) => (
-          <article key={item.id || `${item.role}-${item.timestamp}`} className={`chat-message role-${item.role}`}>
+          <article key={item.id || `${item.role}-${item.timestamp}`} className={`chat-message role-${item.role}${item.streaming ? ' streaming' : ''}`}>
             <div className="chat-meta">
               <strong>{item.role === 'assistant' ? 'OpenClaude' : item.role === 'user' ? 'You' : 'System'}</strong>
-              <span>{formatTime(item.timestamp)}</span>
+              <span>{item.streaming ? 'responding...' : formatTime(item.timestamp)}</span>
             </div>
             <p>{item.text}</p>
           </article>
@@ -297,6 +303,16 @@ function OpenClaudeChat({ state }) {
             <p>Ask about the campaign, request revisions, link artifacts for context, continue execution, rerun a stage, or reroute the graph in natural language.</p>
           </div>
         )}
+        {openClaude.status === 'responding' && !transcript.some((item) => item.streaming) ? (
+          <article className="chat-message role-assistant streaming">
+            <div className="chat-meta">
+              <strong>OpenClaude</strong>
+              <span>thinking...</span>
+            </div>
+            <p>Preparing a response...</p>
+          </article>
+        ) : null}
+        <div ref={chatEndRef} />
       </div>
       <form className="chat-composer" onSubmit={(event) => {
         event.preventDefault();
