@@ -148,7 +148,33 @@ function cleanupSession(session) {
 
 function getWorkspaceRoot() {
   const folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
-  return folder ? folder.uri.fsPath : process.cwd();
+  return findProjectRoot(folder ? folder.uri.fsPath : process.cwd());
+}
+
+function findProjectRoot(startPath) {
+  const start = path.resolve(startPath || process.cwd());
+  const candidates = [
+    start,
+    path.join(start, 'PoggioAI_MSc'),
+    path.dirname(start)
+  ];
+  let current = start;
+  for (let index = 0; index < 5; index += 1) {
+    candidates.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  for (const candidate of candidates) {
+    if (isMscProjectRoot(candidate)) {
+      return candidate;
+    }
+  }
+  return start;
+}
+
+function isMscProjectRoot(candidate) {
+  return Boolean(candidate && fs.existsSync(path.join(candidate, 'msc_sdk')) && fs.existsSync(path.join(candidate, 'extensions', 'vscode-msc', 'extension.js')));
 }
 
 function initialState(root) {
@@ -1286,17 +1312,23 @@ async function sendOpenClaudeMessage(session, message) {
   }
   const model = String(message.model || session.state.openClaude?.model || 'openai/gpt-5-mini').trim();
   hydrateOpenClaudeHistory(session, session.state.selectedCampaign);
-  const contextPack = await loadOpenClaudeContextPack(session, model);
   session.state.openClaude = {
     ...(session.state.openClaude || defaultOpenClaudeState()),
     status: 'responding',
     model,
     error: null,
-    contextPack,
-    contextLinks: contextPack?.active_context_links || [],
     transcript: appendChatMessage(session.state.openClaude?.transcript || [], { role: 'user', text, timestamp: new Date().toISOString() })
   };
+  appendOpenClaudeAction(session, { kind: 'chat', status: 'queued', text: 'Message received by extension backend.', timestamp: new Date().toISOString() });
   saveOpenClaudeHistory(session);
+  postState(session);
+
+  const contextPack = await loadOpenClaudeContextPack(session, model);
+  session.state.openClaude = {
+    ...(session.state.openClaude || defaultOpenClaudeState()),
+    contextPack,
+    contextLinks: contextPack?.active_context_links || session.state.openClaudeContextLinks || []
+  };
   postState(session);
 
   const prompt = buildOpenClaudePrompt(session, text, contextPack);
@@ -1796,6 +1828,7 @@ module.exports = {
   compactOpenClaudeContext,
   consumeJsonLines,
   deactivate,
+  findProjectRoot,
   openClaudeChatPath,
   textFromOpenClaudeEvent,
   normalizeRunOptions,

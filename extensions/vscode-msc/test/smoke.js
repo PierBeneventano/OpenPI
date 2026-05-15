@@ -74,6 +74,8 @@ for (const expected of [
 ]) {
   assert(extensionSource.includes(expected), `missing expected protocol or read surface: ${expected}`);
 }
+assert(extensionSource.includes('Message received by extension backend.'));
+assert(extensionSource.includes('findProjectRoot'));
 
 assert(uiSource.includes('Campaign Workspace'));
 assert(uiSource.includes('Research Graph'));
@@ -168,6 +170,8 @@ assert(prompt.includes('Earlier question'));
 assert(prompt.includes('Earlier answer'));
 assert(!extension.chatHistoryForPrompt([{ role: 'user', text: 'Current' }], 'Current').includes('Current'));
 assert(extension.openClaudeChatPath('/tmp/project', 'campaign/name').includes('openclaude_chats'));
+const repoRoot = path.resolve(root, '..', '..');
+assert.strictEqual(extension.findProjectRoot(path.dirname(repoRoot)), repoRoot);
 
 const args = extension.buildRunArgs({
   task: 'Smoke task',
