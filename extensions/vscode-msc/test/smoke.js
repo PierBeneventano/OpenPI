@@ -57,16 +57,28 @@ for (const expected of [
   "message.type === 'interruptRun'",
   "message.type === 'sendInstruction'",
   "message.type === 'submitFeedback'",
+  "message.type === 'openClaudeStart'",
+  "message.type === 'openClaudeSend'",
+  "message.type === 'openClaudeRestartModel'",
+  "message.type === 'linkArtifactContext'",
+  "message.type === 'updateContextLink'",
   "['campaigns', '--root', root, 'workspace'",
   "['project', 'readiness', '--json']",
   "['selftest', 'commands', '--json']",
   "['openclaude', 'readiness', '--json']",
-  "['openclaude', 'env', '--json']"
+  "['openclaude', 'env', '--json']",
+  "['openclaude', 'models', '--json']",
+  "'context',",
+  "'link',"
 ]) {
   assert(extensionSource.includes(expected), `missing expected protocol or read surface: ${expected}`);
 }
 
 assert(uiSource.includes('Campaign Workspace'));
+assert(uiSource.includes('OpenClaude Research Campaign'));
+assert(uiSource.includes('Ask OpenClaude to drive the campaign'));
+assert(uiSource.includes('Link to Chat'));
+assert(uiSource.includes('Autonomous Action Log'));
 assert(uiSource.includes('New Campaign'));
 assert(uiSource.includes('Start Campaign'));
 assert(uiSource.includes('Diagnostics'));
@@ -110,7 +122,26 @@ assert(extensionSource.includes('refreshPromise'));
 assert(extensionSource.includes('campaignRunSummary'));
 assert(extensionSource.includes("'feedback'"));
 assert(extensionSource.includes("'create'"));
+assert(extensionSource.includes('openClaude'));
+assert(extensionSource.includes('stream-json'));
+assert(extensionSource.includes('context-pack'));
 assert(!extensionSource.includes('fs.writeFileSync(campaignPath'));
+
+const parsed = extension.consumeJsonLines('{"type":"content_block_delta","delta":{"text":"Hello"}}\n{"type":"tool","name":"Bash"}\npartial');
+assert.strictEqual(parsed.items.length, 2);
+assert.strictEqual(parsed.remainder, 'partial');
+assert.strictEqual(extension.textFromOpenClaudeEvent(parsed.items[0]), 'Hello');
+const prompt = extension.buildOpenClaudePrompt(
+  { state: { selectedCampaign: 'demo-campaign' } },
+  'Review the matrix.',
+  {
+    schema: 'msc.openclaude.context_pack.v1',
+    campaign: { id: 'demo-campaign' },
+    selected_artifacts: [{ path: 'artifacts/literature_matrix.md' }]
+  }
+);
+assert(prompt.includes('Review the matrix.'));
+assert(prompt.includes('artifacts/literature_matrix.md'));
 
 const args = extension.buildRunArgs({
   task: 'Smoke task',

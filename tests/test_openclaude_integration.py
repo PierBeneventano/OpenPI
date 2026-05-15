@@ -10,7 +10,7 @@ from click.testing import CliRunner
 from consortium.cli.core.env_manager import save_env_file
 from consortium.cli.main import cli
 from msc_sdk.campaign_store import CampaignStore
-from msc_sdk.openclaude import openclaude_env_contract, openclaude_launch_plan
+from msc_sdk.openclaude import openclaude_context_pack, openclaude_env_contract, openclaude_launch_plan
 
 
 def _invoke(runner: CliRunner, args: list[str]):
@@ -59,7 +59,7 @@ def test_openclaude_launch_plan_is_non_executing_and_scoped(tmp_path: Path):
     assert plan["capability_profile"] == "openclaude_v1"
     assert plan["env"]["OPENAI_API_KEY"] == "[REDACTED]"
     assert plan["operation_contract"]["surface"] == "msc_cli_sdk_v1"
-    assert plan["operation_contract"]["confirmation_required_for_mutations"] is True
+    assert plan["operation_contract"]["confirmation_required_for_mutations"] is False
     assert any(
         operation["operation"] == "campaigns.approve"
         for operation in plan["operation_contract"]["operations"]
@@ -117,12 +117,80 @@ def test_openclaude_campaign_harness_exposes_workspace_and_guardrails(tmp_path: 
     assert data["workspace"]["execution"]["status"] == "not_started"
     assert data["readiness"]["openrouter_configured"] is True
     assert data["operation_contract"]["profile"] == "openclaude_v1"
+    assert data["context_pack"]["schema"] == "msc.openclaude.context_pack.v1"
+    assert data["model_options"]["custom_model_allowed"] is True
+    assert "hard_stops" in data["guardrails"]
     assert any(
         operation["operation"] == "campaigns.workspace"
         for operation in data["operation_contract"]["operations"]
     )
     assert "run_status.json" in data["guardrails"]["do_not_use_as_truth"]
     assert "not-a-real-openrouter-key" not in result.output
+
+
+def test_openclaude_context_pack_and_models_cli(tmp_path: Path, monkeypatch):
+    runner = CliRunner()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
+    (repo / "consortium").mkdir()
+    store = CampaignStore(repo)
+    store.create_campaign(
+        title="Context CLI Demo",
+        objective="Expose compact context through CLI.",
+        template="literature_only",
+        budget=1,
+    )
+    monkeypatch.chdir(repo)
+
+    context = _invoke(runner, ["openclaude", "context-pack", "context-cli-demo", "--json"])
+    models = _invoke(runner, ["openclaude", "models", "--json"])
+
+    assert context.exit_code == 0
+    assert json.loads(context.output)["schema"] == "msc.openclaude.context_pack.v1"
+    assert models.exit_code == 0
+    assert json.loads(models.output)["custom_model_allowed"] is True
+
+
+def test_openclaude_context_pack_prefers_linked_deliverables(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    store = CampaignStore(repo)
+    store.create_campaign(
+        title="Context Demo",
+        objective="Use linked artifacts as durable chat context.",
+        template="literature_only",
+        budget=1,
+    )
+    run = store.record_run_started("context-demo", command=["msc", "run"], pid=123)
+    workspace = repo / "results" / "context-demo" / "runs" / run["run_id"] / "literature_review_agent"
+    artifact = workspace / "artifacts" / "literature_matrix.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("# Matrix\n", encoding="utf-8")
+    store.record_artifact(
+        "context-demo",
+        stage_id="literature_review_agent",
+        artifact_path="artifacts/literature_matrix.md",
+        workspace=str(workspace.relative_to(repo)),
+        kind="md",
+        required=True,
+        run_id=run["run_id"],
+    )
+    store.link_context(
+        "context-demo",
+        target_scope="artifact",
+        artifact_path="artifacts/literature_matrix.md",
+        node_id="literature_review_agent",
+        note="I do not trust the comparison criteria yet.",
+    )
+
+    pack = openclaude_context_pack("context-demo", project_root=repo)
+
+    assert pack["schema"] == "msc.openclaude.context_pack.v1"
+    assert pack["active_context_links"][0]["target"]["artifact_path"] == "artifacts/literature_matrix.md"
+    assert pack["recent_feedback"][0]["target"]["scope"] == "artifact"
+    assert pack["selected_artifacts"][0]["path"] == "artifacts/literature_matrix.md"
+    assert "prompt" in pack["context_policy"]["excluded_by_default"]
 
 
 def test_openclaude_skill_preserves_kernel_guardrails():

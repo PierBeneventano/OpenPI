@@ -216,6 +216,40 @@ def test_campaign_workspace_model_uses_campaign_execution_and_deliverables(tmp_p
     assert "HumanFeedbackRecorded" in events
 
 
+def test_campaign_context_links_are_events_and_workspace_memory(tmp_path: Path):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Context Memory Demo",
+        objective="Attach artifact concerns to the campaign.",
+        template="literature_only",
+        budget=1,
+    )
+
+    linked = store.link_context(
+        "context-memory-demo",
+        target_scope="artifact",
+        node_id="literature_review_agent",
+        artifact_path="artifacts/literature_matrix.md",
+        note="The literature comparison criteria look too broad.",
+    )
+    store.update_context_link("context-memory-demo", linked["link_id"], status="resolved", note="Criteria revised.")
+
+    workspace = store.workspace_read_model("context-memory-demo")
+    links = workspace["context"]["links"]
+
+    assert links[0]["id"] == linked["link_id"]
+    assert links[0]["status"] == "resolved"
+    assert links[0]["target"]["scope"] == "artifact"
+    assert links[0]["target"]["artifact_path"] == "artifacts/literature_matrix.md"
+    assert workspace["context"]["active_links"] == []
+    assert workspace["feedback"][0]["type"] == "context_note"
+    assert workspace["feedback"][0]["target"]["scope"] == "artifact"
+
+    event_types = [event["type"] for event in store.events("context-memory-demo")["events"]]
+    assert "ContextLinked" in event_types
+    assert "ContextLinkUpdated" in event_types
+
+
 def test_campaign_event_projector_is_independent_of_store(tmp_path: Path):
     events = [
         {

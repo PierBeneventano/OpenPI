@@ -12,6 +12,11 @@ from .validation import public_operation_contract
 
 OPENCLAUDE_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_OPENCLAUDE_MODEL = "openai/gpt-5-mini"
+OPENCLAUDE_MODEL_ALIASES = {
+    "fast": "openai/gpt-5-mini",
+    "balanced": "anthropic/claude-sonnet-4.5",
+    "deep": "anthropic/claude-opus-4.1",
+}
 
 
 @dataclass(frozen=True)
@@ -104,6 +109,85 @@ def openclaude_launch_plan(
     }
 
 
+def openclaude_models(*, default_model: str = DEFAULT_OPENCLAUDE_MODEL) -> dict[str, Any]:
+    """Return the model choices the extension can show without hard-coding UI state."""
+
+    return {
+        "ok": True,
+        "default_model": default_model,
+        "aliases": [
+            {"id": alias, "model": model}
+            for alias, model in OPENCLAUDE_MODEL_ALIASES.items()
+        ],
+        "custom_model_allowed": True,
+    }
+
+
+def openclaude_context_pack(
+    campaign_ref: str,
+    *,
+    project_root: str | Path,
+    max_artifacts: int = 8,
+    max_feedback: int = 8,
+) -> dict[str, Any]:
+    """Build compact campaign context for one OpenClaude chat turn."""
+
+    root = Path(project_root).resolve()
+    workspace = CampaignClient(root).workspace(campaign_ref)
+    context = workspace.get("context") or {}
+    deliverables = list(workspace.get("deliverables") or [])
+    active_links = list(context.get("active_links") or [])
+    linked_paths = {
+        str(link.get("target", {}).get("artifact_path") or "")
+        for link in active_links
+        if link.get("target", {}).get("artifact_path")
+    }
+    linked_ids = {
+        str(link.get("target", {}).get("artifact_id") or "")
+        for link in active_links
+        if link.get("target", {}).get("artifact_id")
+    }
+
+    selected_artifacts: list[dict[str, Any]] = []
+    for artifact in deliverables:
+        if artifact.get("id") in linked_ids or artifact.get("path") in linked_paths:
+            selected_artifacts.append(artifact)
+    for artifact in deliverables:
+        if len(selected_artifacts) >= max_artifacts:
+            break
+        if artifact not in selected_artifacts:
+            selected_artifacts.append(artifact)
+
+    return {
+        "ok": True,
+        "schema": "msc.openclaude.context_pack.v1",
+        "campaign_ref": campaign_ref,
+        "campaign": workspace.get("campaign"),
+        "execution": workspace.get("execution"),
+        "safe_next_actions": workspace.get("safe_next_actions") or [],
+        "current_stage": _current_stage(workspace),
+        "pending_decisions": workspace.get("pending_decisions") or [],
+        "active_context_links": active_links,
+        "recent_feedback": list(workspace.get("feedback") or [])[:max_feedback],
+        "selected_artifacts": selected_artifacts[:max_artifacts],
+        "context_policy": {
+            "source_of_truth": "campaign workspace read model plus campaign events",
+            "included_artifacts": "produced deliverables/evidence and user-linked artifacts",
+            "excluded_by_default": ["prompt", "log", "system_state", "diagnostic"],
+        },
+    }
+
+
+def _current_stage(workspace: dict[str, Any]) -> dict[str, Any] | None:
+    current_stage_id = (workspace.get("execution") or {}).get("current_stage_id")
+    if not current_stage_id:
+        return None
+    for node in (workspace.get("graph") or {}).get("nodes") or []:
+        if node.get("id") == current_stage_id:
+            return node
+    return None
+
+
 def openclaude_researcher_workflows(campaign_ref: str) -> dict[str, Any]:
     """Return the campaign operations OpenClaude should use as its harness."""
 
@@ -119,7 +203,8 @@ def openclaude_researcher_workflows(campaign_ref: str) -> dict[str, Any]:
             "Open raw files only after the read model points to a produced deliverable or diagnostic.",
         ],
         "feedback_and_steering": [
-            f"msc campaigns feedback {campaign_ref} --text <feedback> --node <stage_id> --json",
+            f"msc campaigns feedback {campaign_ref} --text <feedback> --node <stage_id> --artifact-path <path> --json",
+            f"msc campaigns context link {campaign_ref} --note <note> --artifact-path <path> --json",
             f"msc campaigns rerun-stage {campaign_ref} <stage_id> --reason <reason> --json",
             f"msc campaigns rewrite-stage {campaign_ref} <stage_id> --instruction <instruction> --json",
             f"msc campaigns reroute {campaign_ref} --from <stage_id> --to <stage_id> --reason <reason> --json",
@@ -169,7 +254,10 @@ def openclaude_campaign_harness(
         "guardrails": {
             "source_of_truth": "campaign workspace read model plus campaign events",
             "do_not_use_as_truth": ["run_status.json", "raw process logs", "SQLite tables", "legacy LangGraph internals"],
-            "mutation_rule": "write only through public msc campaign commands and only when researcher intent is explicit",
+            "mutation_rule": "OpenClaude may autonomously use public msc campaign commands after researcher intent; never mutate truth by editing files directly",
+            "hard_stops": ["do not delete campaigns", "do not delete artifacts", "do not edit repo code", "do not increase budget without an explicit budget command"],
             "secret_rule": "never print API keys or token values",
         },
+        "context_pack": openclaude_context_pack(campaign_ref, project_root=root),
+        "model_options": openclaude_models(default_model=model),
     }

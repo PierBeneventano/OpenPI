@@ -14,8 +14,10 @@ from msc_sdk.openclaude import (
     DEFAULT_OPENCLAUDE_MODEL,
     OPENCLAUDE_BASE_URL,
     openclaude_campaign_harness,
+    openclaude_context_pack,
     openclaude_env_contract,
     openclaude_launch_plan,
+    openclaude_models,
     openclaude_readiness,
 )
 
@@ -104,6 +106,33 @@ def openclaude_campaign_harness_cmd(ctx: click.Context, campaign_ref: str, as_js
     campaign = data["workspace"]["campaign"]
     execution = data["workspace"]["execution"]
     click.echo(f"{campaign['id']}: {execution['status']}")
+
+
+@openclaude.command("context-pack")
+@click.argument("campaign_ref")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def openclaude_context_pack_cmd(ctx: click.Context, campaign_ref: str, as_json: bool) -> None:
+    """Return compact campaign context for an OpenClaude chat turn."""
+    data = openclaude_context_pack(campaign_ref, project_root=_project_root())
+    if as_json:
+        _emit_json(data)
+        return
+    campaign = data["campaign"] or {}
+    click.echo(f"{campaign.get('id') or campaign_ref}: {len(data['active_context_links'])} active context links")
+
+
+@openclaude.command("models")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def openclaude_models_cmd(ctx: click.Context, as_json: bool) -> None:
+    """Return model aliases available to the OpenClaude UI."""
+    data = openclaude_models(default_model=ctx.obj["openclaude_model"])
+    if as_json:
+        _emit_json(data)
+        return
+    for alias in data["aliases"]:
+        click.echo(f"{alias['id']}: {alias['model']}")
 
 
 @openclaude.command("launch")

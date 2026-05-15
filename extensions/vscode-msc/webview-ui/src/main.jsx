@@ -28,7 +28,9 @@ const emptyState = {
   artifactPreview: null,
   activeRun: null,
   runLog: [],
-  steering: {}
+  steering: {},
+  openClaude: { status: 'idle', model: 'openai/gpt-5-mini', models: [], transcript: [], actions: [], contextLinks: [] },
+  openClaudeContextLinks: []
 };
 
 function App() {
@@ -139,31 +141,29 @@ function Home({ state, newCampaignOpen, setNewCampaignOpen }) {
 }
 
 function CampaignWorkspace({ state, tab, setTab }) {
-  const [executionOpen, setExecutionOpen] = useState(false);
   const details = state.campaignDetails || {};
   const title = details.name || details.campaign_id || basename(state.selectedCampaign) || 'Campaign';
-  const active = state.activeRun && ['running', 'stopping'].includes(state.activeRun.status);
+  const execution = state.campaignExecution || {};
+  const currentStage = graphNodesFromState(state).find((node) => node.id === execution.current_stage_id);
+  const openClaude = state.openClaude || emptyState.openClaude;
 
   return (
-    <div className="app-shell workspace-shell">
-      <header className="workspace-header">
+    <div className="app-shell workspace-shell chat-workspace">
+      <header className="workspace-header chat-header">
         <div className="workspace-title">
           <button onClick={() => vscode.postMessage({ type: 'backToCampaigns' })}>Back</button>
           <div>
-            <p className="eyebrow">Campaign</p>
+            <p className="eyebrow">OpenClaude Research Campaign</p>
             <h1>{title}</h1>
-            <p className="subtle">{details.path || state.selectedCampaign}</p>
+            <p className="subtle">{details.metadata?.objective || details.path || state.selectedCampaign}</p>
           </div>
         </div>
         <div className="header-actions">
           <span className={`pill status-${statusClass(statusOf(details))}`}>{statusOf(details)}</span>
-          <span className="pill">{formatBudget(details.budget)}</span>
-          <button onClick={() => setTab('feedback')}>Give Feedback</button>
-          {active ? (
-            <button className="danger" onClick={() => vscode.postMessage({ type: 'stopCampaign' })}>Stop Campaign</button>
-          ) : (
-            <button className="primary" onClick={() => setExecutionOpen(true)}>{campaignStarted(state) ? 'Continue Campaign' : 'Start Campaign'}</button>
-          )}
+          <span className="pill">{currentStage?.label || 'No active stage'}</span>
+          <ModelSelector openClaude={openClaude} />
+          <button onClick={() => vscode.postMessage({ type: 'openClaudeStart', model: openClaude.model })}>Refresh Context</button>
+          <button className="danger" onClick={() => vscode.postMessage({ type: 'openClaudeStop' })}>Stop OpenClaude</button>
           <button onClick={() => vscode.postMessage({ type: 'refreshCampaign' })}>Refresh</button>
         </div>
       </header>
@@ -172,22 +172,169 @@ function CampaignWorkspace({ state, tab, setTab }) {
       {state.actionError ? <div className="notice error">{state.actionError}</div> : null}
       <ErrorSummary errors={state.errors || []} />
 
-      <nav className="workspace-tabs">
-        {['graph', 'decisions', 'deliverables', 'feedback', 'diagnostics'].map((name) => (
-          <button key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>
-            {capitalize(name)}
-          </button>
-        ))}
-      </nav>
+      <main className="openclaude-layout">
+        <OpenClaudeChat state={state} />
+        <ContextRail state={state} currentStage={currentStage} />
+      </main>
 
-      <CampaignExecutionPanel state={state} onStart={() => setExecutionOpen(true)} />
-      {tab === 'graph' ? <GraphTab state={state} /> : null}
-      {tab === 'decisions' ? <DecisionsTab state={state} /> : null}
-      {tab === 'deliverables' ? <DeliverablesTab state={state} /> : null}
-      {tab === 'feedback' ? <FeedbackTab state={state} /> : null}
-      {tab === 'diagnostics' ? <DiagnosticsTab state={state} /> : null}
-      {executionOpen ? <StartCampaignModal state={state} onClose={() => setExecutionOpen(false)} /> : null}
+      <section className="inspector-stack">
+        <div className="inspector-tabs">
+          {['graph', 'decisions', 'deliverables', 'feedback', 'diagnostics'].map((name) => (
+            <button key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>
+              {capitalize(name)}
+            </button>
+          ))}
+        </div>
+        <div className="inspector-body">
+          {tab === 'graph' ? <GraphTab state={state} /> : null}
+          {tab === 'decisions' ? <DecisionsTab state={state} /> : null}
+          {tab === 'deliverables' ? <DeliverablesTab state={state} /> : null}
+          {tab === 'feedback' ? <FeedbackTab state={state} /> : null}
+          {tab === 'diagnostics' ? <DiagnosticsTab state={state} /> : null}
+        </div>
+      </section>
     </div>
+  );
+}
+
+function ModelSelector({ openClaude }) {
+  const [custom, setCustom] = useState(openClaude.model || 'openai/gpt-5-mini');
+  useEffect(() => {
+    setCustom(openClaude.model || 'openai/gpt-5-mini');
+  }, [openClaude.model]);
+  const models = openClaude.models || [];
+  function restart(model) {
+    vscode.postMessage({ type: 'openClaudeRestartModel', model });
+  }
+  return (
+    <div className="model-control">
+      <select value={custom} onChange={(event) => {
+        setCustom(event.target.value);
+        restart(event.target.value);
+      }}>
+        <option value={openClaude.model || custom}>{openClaude.model || custom}</option>
+        {models.map((item) => <option key={item.id} value={item.model}>{item.id}: {item.model}</option>)}
+      </select>
+      <input value={custom} onChange={(event) => setCustom(event.target.value)} onBlur={() => restart(custom)} aria-label="Custom OpenClaude model" />
+    </div>
+  );
+}
+
+function OpenClaudeChat({ state }) {
+  const [text, setText] = useState('');
+  const openClaude = state.openClaude || emptyState.openClaude;
+  const transcript = openClaude.transcript || [];
+  const suggestions = [
+    'Continue the campaign and tell me what you changed.',
+    'Review the latest deliverables and flag weaknesses.',
+    'Rerun the current stage using my feedback.',
+    'Compare the linked artifacts and decide what evidence is missing.'
+  ];
+  function send(value = text) {
+    const message = value.trim();
+    if (!message) return;
+    vscode.postMessage({ type: 'openClaudeSend', text: message, model: openClaude.model });
+    setText('');
+  }
+  return (
+    <section className="chat-panel">
+      <div className="chat-status-row">
+        <div>
+          <p className="eyebrow">Research Chat</p>
+          <h2>Ask OpenClaude to drive the campaign</h2>
+        </div>
+        <span className={`pill status-${statusClass(openClaude.status || 'idle')}`}>{openClaude.status || 'idle'}</span>
+      </div>
+      {openClaude.error ? <div className="notice error">{openClaude.error}</div> : null}
+      <ContextChips links={openClaude.contextLinks || state.openClaudeContextLinks || []} />
+      <div className="suggestion-row">
+        {suggestions.map((suggestion) => (
+          <button key={suggestion} onClick={() => send(suggestion)}>{suggestion}</button>
+        ))}
+      </div>
+      <div className="chat-transcript">
+        {transcript.length ? transcript.map((item) => (
+          <article key={item.id || `${item.role}-${item.timestamp}`} className={`chat-message role-${item.role}`}>
+            <div className="chat-meta">
+              <strong>{item.role === 'assistant' ? 'OpenClaude' : item.role === 'user' ? 'You' : 'System'}</strong>
+              <span>{formatTime(item.timestamp)}</span>
+            </div>
+            <p>{item.text}</p>
+          </article>
+        )) : (
+          <div className="empty-panel">
+            <h2>OpenClaude is ready to become the interface</h2>
+            <p>Ask about the campaign, request revisions, link artifacts for context, continue execution, rerun a stage, or reroute the graph in natural language.</p>
+          </div>
+        )}
+      </div>
+      <form className="chat-composer" onSubmit={(event) => {
+        event.preventDefault();
+        send();
+      }}>
+        <textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="Tell OpenClaude what you want to inspect, change, rerun, or improve..." />
+        <button className="primary" type="submit" disabled={!text.trim() || openClaude.status === 'responding'}>
+          Send to OpenClaude
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function ContextChips({ links }) {
+  const active = (links || []).filter((link) => link.status === 'active');
+  if (!active.length) {
+    return <p className="subtle">No linked artifacts yet. Use Link to Chat on a deliverable to give OpenClaude durable context.</p>;
+  }
+  return (
+    <div className="context-chip-row">
+      {active.slice(0, 8).map((link) => (
+        <span key={link.id} className="context-chip">
+          {link.target?.artifact_path || link.target?.artifact_id || link.target?.node_id || link.target?.scope || 'campaign'}
+          <button onClick={() => vscode.postMessage({ type: 'updateContextLink', linkId: link.id, status: 'resolved' })}>Resolve</button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ContextRail({ state, currentStage }) {
+  const openClaude = state.openClaude || emptyState.openClaude;
+  const links = openClaude.contextLinks?.length ? openClaude.contextLinks : state.openClaudeContextLinks || [];
+  const decisions = state.campaignDecisions || [];
+  const deliverables = state.campaignDeliverables || [];
+  const actions = openClaude.actions || [];
+  return (
+    <aside className="context-rail">
+      <section>
+        <p className="eyebrow">Campaign State</p>
+        <h2>{state.campaignExecution?.status || 'not started'}</h2>
+        <dl className="definition-list compact">
+          <dt>Stage</dt><dd>{currentStage?.label || '-'}</dd>
+          <dt>Decisions</dt><dd>{decisions.length}</dd>
+          <dt>Deliverables</dt><dd>{deliverables.length}</dd>
+          <dt>Model</dt><dd>{openClaude.model || '-'}</dd>
+        </dl>
+      </section>
+      <section>
+        <h3>Linked Context</h3>
+        <ContextChips links={links} />
+      </section>
+      <section>
+        <h3>Latest Deliverables</h3>
+        <ArtifactRows artifacts={deliverables.slice(0, 5)} compact />
+      </section>
+      <section>
+        <h3>Autonomous Action Log</h3>
+        {actions.length ? (
+          <div className="action-log">
+            {actions.slice(-12).map((action, index) => <code key={`${action.timestamp}-${index}`}>{action.status}: {action.text}</code>)}
+          </div>
+        ) : (
+          <p className="subtle">OpenClaude actions will appear here as it uses SDK commands and tools.</p>
+        )}
+      </section>
+    </aside>
   );
 }
 
@@ -801,7 +948,7 @@ function DiagnosticsTab({ state }) {
   );
 }
 
-function ArtifactRows({ artifacts }) {
+function ArtifactRows({ artifacts, compact = false }) {
   if (!artifacts.length) {
     return <p className="subtle">No produced deliverables found for the current filters.</p>;
   }
@@ -817,8 +964,11 @@ function ArtifactRows({ artifacts }) {
             <span className="pill">{artifact.required ? 'required' : 'optional'}</span>
             <span className="pill">{artifact.exists ? 'produced' : 'planned'}</span>
             {artifact.audience || artifact.metadata?.audience ? <span className="pill">{artifact.audience || artifact.metadata?.audience}</span> : null}
-            <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'previewArtifact', artifact })}>Preview</button>
-            <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'openArtifact', artifact })}>Open</button>
+            {compact ? null : <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'previewArtifact', artifact })}>Preview</button>}
+            {compact ? null : <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'openArtifact', artifact })}>Open</button>}
+            <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'linkArtifactContext', artifact })}>Link to Chat</button>
+            {compact ? null : <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'openClaudeSend', text: `Review ${artifact.path} and tell me what is strong, weak, and what should change.` })}>Ask About</button>}
+            {compact ? null : <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'linkArtifactContext', artifact, note: `I have a concern about ${artifact.path}. Please inspect it carefully before using it as evidence.` })}>Record Concern</button>}
           </div>
         </div>
       ))}

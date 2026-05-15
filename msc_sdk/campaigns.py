@@ -77,10 +77,19 @@ class CampaignClient:
         *,
         text: str,
         node_id: str | None = None,
+        artifact_id: str | None = None,
+        artifact_path: str | None = None,
+        decision_id: str | None = None,
         run_id: str | None = None,
         feedback_type: str = "feedback",
         actor: str = "user",
     ) -> dict[str, Any]:
+        metadata = {key: value for key, value in {
+            "node_id": node_id,
+            "artifact_id": artifact_id,
+            "artifact_path": artifact_path,
+            "decision_id": decision_id,
+        }.items() if value}
         return self.store.record_instruction(
             campaign_ref,
             text=text,
@@ -88,8 +97,45 @@ class CampaignClient:
             run_id=run_id,
             direction="to_campaign",
             actor=actor,
-            metadata={"node_id": node_id} if node_id else {},
+            metadata=metadata,
         )
+
+    def link_context(
+        self,
+        campaign_ref: str | Path,
+        *,
+        note: str,
+        target_scope: str = "campaign",
+        node_id: str | None = None,
+        artifact_id: str | None = None,
+        artifact_path: str | None = None,
+        decision_id: str | None = None,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        return self.store.link_context(
+            campaign_ref,
+            note=note,
+            target_scope=target_scope,
+            node_id=node_id,
+            artifact_id=artifact_id,
+            artifact_path=artifact_path,
+            decision_id=decision_id,
+            actor=actor,
+        )
+
+    def list_context_links(self, campaign_ref: str | Path) -> dict[str, Any]:
+        return self.store.list_context_links(campaign_ref)
+
+    def update_context_link(
+        self,
+        campaign_ref: str | Path,
+        link_id: str,
+        *,
+        status: str,
+        note: str | None = None,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        return self.store.update_context_link(campaign_ref, link_id, status=status, note=note, actor=actor)
 
     def approve_graph(self, campaign_ref: str | Path, graph_version: int, *, actor: str = "user") -> dict[str, Any]:
         campaign_id = self.store.resolve_ref(campaign_ref)

@@ -558,6 +558,7 @@ class CampaignStore:
         decisions = self._decision_read_models(campaign_id)
         pending_decisions = [decision for decision in decisions if decision["status"] == "pending"]
         feedback = self._feedback_read_models(events)
+        context_links = self._context_link_read_models(events)
         execution = self._campaign_execution_read_model(
             campaign=campaign,
             graph=graph,
@@ -603,6 +604,10 @@ class CampaignStore:
             "decisions": decisions,
             "pending_decisions": pending_decisions,
             "feedback": feedback,
+            "context": {
+                "links": context_links,
+                "active_links": [link for link in context_links if link["status"] == "active"],
+            },
             "deliverables": deliverables,
             "planned_outputs": planned_outputs,
             "diagnostics": {
@@ -670,15 +675,23 @@ class CampaignStore:
                 continue
             seen.add(event_id)
             metadata = dict(payload.get("metadata") or {})
+            scope = str(metadata.get("target_scope") or "campaign")
+            if metadata.get("artifact_id") or metadata.get("artifact_path"):
+                scope = "artifact"
+            elif metadata.get("decision_id"):
+                scope = "decision"
+            elif metadata.get("node_id"):
+                scope = "stage"
             feedback.append(
                 {
                     "id": event_id,
                     "text": str(payload.get("text") or ""),
                     "type": str(payload.get("type") or payload.get("feedback_type") or "feedback"),
                     "target": {
-                        "scope": "stage" if metadata.get("node_id") else "campaign",
+                        "scope": scope,
                         "node_id": metadata.get("node_id"),
                         "artifact_id": metadata.get("artifact_id"),
+                        "artifact_path": metadata.get("artifact_path"),
                         "decision_id": metadata.get("decision_id"),
                     },
                     "execution_id": payload.get("execution_id") or payload.get("run_id"),
@@ -688,6 +701,54 @@ class CampaignStore:
                 }
             )
         return sorted(feedback, key=lambda item: str(item["created_at"]), reverse=True)
+
+    @staticmethod
+    def _context_link_read_models(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        links: dict[str, dict[str, Any]] = {}
+        for event in events:
+            payload = event["payload"]
+            if event["type"] == "ContextLinked":
+                link_id = str(payload.get("link_id") or event["id"])
+                target = dict(payload.get("target") or {})
+                links[link_id] = {
+                    "id": link_id,
+                    "status": str(payload.get("status") or "active"),
+                    "target": {
+                        "scope": str(target.get("scope") or "campaign"),
+                        "node_id": target.get("node_id"),
+                        "artifact_id": target.get("artifact_id"),
+                        "artifact_path": target.get("artifact_path"),
+                        "decision_id": target.get("decision_id"),
+                    },
+                    "note": str(payload.get("note") or ""),
+                    "created_at": event["created_at"],
+                    "updated_at": event["created_at"],
+                    "actor": event["actor"],
+                    "metadata": dict(payload.get("metadata") or {}),
+                }
+            elif event["type"] == "ContextLinkUpdated":
+                link_id = str(payload.get("link_id") or "")
+                if not link_id:
+                    continue
+                current = links.get(link_id)
+                if current is None:
+                    current = {
+                        "id": link_id,
+                        "status": "active",
+                        "target": {"scope": "campaign", "node_id": None, "artifact_id": None, "artifact_path": None, "decision_id": None},
+                        "note": "",
+                        "created_at": event["created_at"],
+                        "actor": event["actor"],
+                        "metadata": {},
+                    }
+                links[link_id] = {
+                    **current,
+                    "status": str(payload.get("status") or current["status"]),
+                    "note": str(payload.get("note") if payload.get("note") is not None else current["note"]),
+                    "updated_at": event["created_at"],
+                    "metadata": {**dict(current.get("metadata") or {}), **dict(payload.get("metadata") or {})},
+                }
+        return sorted(links.values(), key=lambda item: str(item["updated_at"]), reverse=True)
 
     def _campaign_execution_read_model(
         self,
@@ -1215,6 +1276,125 @@ class CampaignStore:
                     },
                 )
         return {"ok": True, "campaign_id": campaign_id, "message_id": message_id, "event": event}
+
+    def link_context(
+        self,
+        campaign_ref: str | Path,
+        *,
+        note: str,
+        target_scope: str = "campaign",
+        node_id: str | None = None,
+        artifact_id: str | None = None,
+        artifact_path: str | None = None,
+        decision_id: str | None = None,
+        actor: str = "user",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Record durable researcher-selected context for OpenClaude sessions."""
+
+        campaign_id = self.resolve_ref(campaign_ref)
+        created_at = now_iso()
+        link_id = stable_id(campaign_id, "context", target_scope, node_id or "", artifact_id or "", artifact_path or "", decision_id or "", note, created_at)
+        target = {
+            "scope": target_scope,
+            "node_id": node_id,
+            "artifact_id": artifact_id,
+            "artifact_path": artifact_path,
+            "decision_id": decision_id,
+        }
+        with self.connect() as conn:
+            event = self._append_event(
+                conn,
+                campaign_id=campaign_id,
+                event_type="ContextLinked",
+                actor=actor,
+                payload={
+                    "link_id": link_id,
+                    "status": "active",
+                    "target": target,
+                    "note": note,
+                    "metadata": metadata or {},
+                },
+            )
+            if note:
+                feedback_metadata = {key: value for key, value in {
+                        "context_link_id": link_id,
+                        "node_id": node_id,
+                        "artifact_id": artifact_id,
+                        "artifact_path": artifact_path,
+                        "decision_id": decision_id,
+                        "target_scope": target_scope,
+                    }.items() if value}
+                message_id = stable_id(campaign_id, "instruction", note, link_id)
+                conn.execute(
+                    """
+                    INSERT INTO steering_messages
+                    (id, campaign_id, run_id, direction, text, type, created_at, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (message_id, campaign_id, None, "to_campaign", note, "context_note", now_iso(), json_dumps(feedback_metadata)),
+                )
+                feedback_event = self._append_event(
+                    conn,
+                    campaign_id=campaign_id,
+                    event_type="InstructionSent",
+                    actor=actor,
+                    payload={
+                        "message_id": message_id,
+                        "run_id": None,
+                        "direction": "to_campaign",
+                        "text": note,
+                        "type": "context_note",
+                        "metadata": feedback_metadata,
+                    },
+                )
+                self._append_event(
+                    conn,
+                    campaign_id=campaign_id,
+                    event_type="HumanFeedbackRecorded",
+                    actor=actor,
+                    payload={
+                        "feedback_id": message_id,
+                        "run_id": None,
+                        "execution_id": None,
+                        "text": note,
+                        "feedback_type": "context_note",
+                        "metadata": feedback_metadata,
+                        "compatibility_event_id": feedback_event["id"],
+                    },
+                )
+        return {"ok": True, "campaign_id": campaign_id, "link_id": link_id, "event": event}
+
+    def update_context_link(
+        self,
+        campaign_ref: str | Path,
+        link_id: str,
+        *,
+        status: str,
+        note: str | None = None,
+        actor: str = "user",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        campaign_id = self.resolve_ref(campaign_ref)
+        with self.connect() as conn:
+            event = self._append_event(
+                conn,
+                campaign_id=campaign_id,
+                event_type="ContextLinkUpdated",
+                actor=actor,
+                payload={
+                    "link_id": link_id,
+                    "status": status,
+                    "note": note,
+                    "metadata": metadata or {},
+                },
+            )
+        return {"ok": True, "campaign_id": campaign_id, "link_id": link_id, "status": status, "event": event}
+
+    def list_context_links(self, campaign_ref: str | Path) -> dict[str, Any]:
+        campaign_id = self.resolve_ref(campaign_ref)
+        links = self._context_link_read_models(self._event_rows(campaign_id))
+        return {"ok": True, "campaign": campaign_id, "links": links, "active_links": [link for link in links if link["status"] == "active"]}
 
     def list_campaigns(self) -> list[dict[str, Any]]:
         with self.connect() as conn:

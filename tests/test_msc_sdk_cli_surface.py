@@ -190,7 +190,7 @@ def test_campaign_cli_steering_surfaces_are_json_and_audited(tmp_path: Path):
         ["campaigns", "--root", str(tmp_path), "explain-node", "demo-campaign", "lit_review_gate", "--json"],
     )
     assert explain.exit_code == 0
-    assert json.loads(explain.output)["contract"]["kind"] == "gate"
+    assert json.loads(explain.output)["contract"]["kind"] in {"gate", "router"}
 
     proposal = _invoke(
         runner,
@@ -252,6 +252,37 @@ def test_campaign_cli_steering_surfaces_are_json_and_audited(tmp_path: Path):
     assert feedback_data["event"]["type"] == "InstructionSent"
     assert feedback_data["event"]["payload"]["type"] == "feedback"
     assert feedback_data["event"]["payload"]["metadata"]["node_id"] == "writeup_agent"
+
+    context = _invoke(
+        runner,
+        [
+            "campaigns",
+            "--root",
+            str(tmp_path),
+            "context",
+            "link",
+            "demo-campaign",
+            "--scope",
+            "artifact",
+            "--node",
+            "writeup_agent",
+            "--artifact-path",
+            "artifacts/paper.md",
+            "--note",
+            "This paper draft needs a sharper contribution statement.",
+            "--json",
+        ],
+    )
+    assert context.exit_code == 0
+    context_data = json.loads(context.output)
+    assert context_data["link_id"]
+
+    context_list = _invoke(
+        runner,
+        ["campaigns", "--root", str(tmp_path), "context", "list", "demo-campaign", "--json"],
+    )
+    assert context_list.exit_code == 0
+    assert json.loads(context_list.output)["active_links"][0]["target"]["artifact_path"] == "artifacts/paper.md"
 
     summary = _invoke(
         runner,

@@ -114,6 +114,9 @@ def campaigns_events(ctx: click.Context, campaign_ref: str, limit: int | None, a
 @click.argument("campaign_ref")
 @click.option("--text", required=True, help="Human feedback to append to the campaign event stream.")
 @click.option("--node", "node_id", default=None, help="Optional graph node this feedback targets.")
+@click.option("--artifact-id", default=None, help="Optional artifact id this feedback targets.")
+@click.option("--artifact-path", default=None, help="Optional artifact path this feedback targets.")
+@click.option("--decision-id", default=None, help="Optional decision id this feedback targets.")
 @click.option("--run-id", default=None, help="Optional run id this feedback targets.")
 @click.option("--type", "feedback_type", default="feedback", show_default=True, help="Feedback category.")
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
@@ -123,6 +126,9 @@ def campaigns_feedback(
     campaign_ref: str,
     text: str,
     node_id: str | None,
+    artifact_id: str | None,
+    artifact_path: str | None,
+    decision_id: str | None,
     run_id: str | None,
     feedback_type: str,
     as_json: bool,
@@ -132,6 +138,9 @@ def campaigns_feedback(
         campaign_ref,
         text=text,
         node_id=node_id,
+        artifact_id=artifact_id,
+        artifact_path=artifact_path,
+        decision_id=decision_id,
         run_id=run_id,
         feedback_type=feedback_type,
     )
@@ -139,6 +148,85 @@ def campaigns_feedback(
         _emit_json(data)
         return
     click.echo(f"{data['campaign_id']}: feedback recorded")
+
+
+@campaigns.group("context")
+def campaigns_context() -> None:
+    """Manage durable campaign context links for agent chat."""
+
+
+@campaigns_context.command("link")
+@click.argument("campaign_ref")
+@click.option("--note", required=True, help="Researcher note or concern to attach.")
+@click.option("--scope", "target_scope", default="campaign", show_default=True, help="Target scope: campaign, stage, artifact, or decision.")
+@click.option("--node", "node_id", default=None, help="Optional graph node target.")
+@click.option("--artifact-id", default=None, help="Optional artifact id target.")
+@click.option("--artifact-path", default=None, help="Optional artifact path target.")
+@click.option("--decision-id", default=None, help="Optional decision id target.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_context_link(
+    ctx: click.Context,
+    campaign_ref: str,
+    note: str,
+    target_scope: str,
+    node_id: str | None,
+    artifact_id: str | None,
+    artifact_path: str | None,
+    decision_id: str | None,
+    as_json: bool,
+) -> None:
+    """Attach durable context to a campaign, stage, artifact, or decision."""
+    data = CampaignClient(ctx.obj["campaign_root"]).link_context(
+        campaign_ref,
+        note=note,
+        target_scope=target_scope,
+        node_id=node_id,
+        artifact_id=artifact_id,
+        artifact_path=artifact_path,
+        decision_id=decision_id,
+    )
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(f"{data['campaign_id']}: context {data['link_id']} linked")
+
+
+@campaigns_context.command("list")
+@click.argument("campaign_ref")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_context_list(ctx: click.Context, campaign_ref: str, as_json: bool) -> None:
+    """List durable context links for a campaign."""
+    data = CampaignClient(ctx.obj["campaign_root"]).list_context_links(campaign_ref)
+    if as_json:
+        _emit_json(data)
+        return
+    for link in data["links"]:
+        click.echo(f"{link['id']} {link['status']} {link['target']['scope']}: {link['note']}")
+
+
+@campaigns_context.command("update")
+@click.argument("campaign_ref")
+@click.argument("link_id")
+@click.option("--status", required=True, type=click.Choice(["active", "resolved", "superseded", "ignored"]), help="New context link status.")
+@click.option("--note", default=None, help="Optional replacement or follow-up note.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_context_update(
+    ctx: click.Context,
+    campaign_ref: str,
+    link_id: str,
+    status: str,
+    note: str | None,
+    as_json: bool,
+) -> None:
+    """Update context link status."""
+    data = CampaignClient(ctx.obj["campaign_root"]).update_context_link(campaign_ref, link_id, status=status, note=note)
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(f"{data['campaign_id']}: context {link_id} {status}")
 
 
 @campaigns.command("approve-graph")

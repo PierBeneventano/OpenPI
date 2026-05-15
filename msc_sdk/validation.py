@@ -43,6 +43,9 @@ PUBLIC_COMMANDS = [
     CommandSpec("campaigns.export", "msc campaigns export <campaign> --json", "CampaignClient.export_bundle(ref)", "write.campaigns", True),
     CommandSpec("campaigns.events", "msc campaigns events <campaign> --json", "CampaignClient.events(ref)", "read.events"),
     CommandSpec("campaigns.feedback", "msc campaigns feedback <campaign> --text <feedback> --json", "CampaignClient.feedback(ref, text=...)", "write.feedback", True),
+    CommandSpec("campaigns.context_link", "msc campaigns context link <campaign> --note <note> --json", "CampaignClient.link_context(...)", "write.feedback", True),
+    CommandSpec("campaigns.context_list", "msc campaigns context list <campaign> --json", "CampaignClient.list_context_links(ref)", "read.campaigns"),
+    CommandSpec("campaigns.context_update", "msc campaigns context update <campaign> <link> --status <status> --json", "CampaignClient.update_context_link(...)", "write.feedback", True),
     CommandSpec("campaigns.approve_graph", "msc campaigns approve-graph <campaign> --graph-version <n> --json", "CampaignClient.approve_graph(ref, n)", "write.campaigns", True),
     CommandSpec("campaigns.explain_node", "msc campaigns explain-node <campaign> <node> --json", "CampaignClient.explain_node(ref, node)", "read.campaigns"),
     CommandSpec("campaigns.propose_graph_change", "msc campaigns propose-graph-change <campaign> --json", "CampaignClient.propose_graph_change(...)", "write.approvals", True),
@@ -64,6 +67,8 @@ PUBLIC_COMMANDS = [
     CommandSpec("openclaude.readiness", "msc openclaude readiness --json", "openclaude_readiness(...)", "read.project"),
     CommandSpec("openclaude.env", "msc openclaude env --json", "openclaude_env_contract(...)", "read.project"),
     CommandSpec("openclaude.campaign_harness", "msc openclaude campaign-harness <campaign> --json", "openclaude_campaign_harness(...)", "read.campaigns"),
+    CommandSpec("openclaude.context_pack", "msc openclaude context-pack <campaign> --json", "openclaude_context_pack(...)", "read.campaigns"),
+    CommandSpec("openclaude.models", "msc openclaude models --json", "openclaude_models()", "read.capabilities"),
     CommandSpec("openclaude.launch_plan", "msc openclaude launch --json", "openclaude_launch_plan(...)", "read.project"),
     CommandSpec("openclaw.readiness", "msc openclaw readiness --json", "openclaw_readiness(...)", "read.project"),
     CommandSpec("openclaw.profiles", "msc openclaw profiles --json", "OPENCLAW_PROFILES", "read.capabilities"),
@@ -82,7 +87,7 @@ AGENT_OPERATION_PROFILES = {
     },
     "openclaude_v1": {
         "mutations_allowed": True,
-        "confirmation_required_for_mutations": True,
+        "confirmation_required_for_mutations": False,
     },
     "openclaw_read_only": {
         "mutations_allowed": False,
