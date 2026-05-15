@@ -93,6 +93,9 @@ assert(uiSource.includes('DeleteCampaignModal'));
 assert(uiSource.includes('deleteTargetForCampaign'));
 assert(uiSource.includes('deleteCampaignResult'));
 assert(uiSource.includes('campaignMatchesAny'));
+assert(uiSource.includes('Start automatically after creation'));
+assert(uiSource.includes('moonshotai/kimi-k2'));
+assert(uiSource.includes('Create and Start Campaign'));
 assert(uiSource.includes('Type DELETE to confirm'));
 assert(!uiSource.includes('window.prompt'));
 assert(uiSource.includes('Start Campaign'));
@@ -144,6 +147,8 @@ assert(extensionSource.includes("'create'"));
 assert(extensionSource.includes('openClaude'));
 assert(extensionSource.includes('stream-json'));
 assert(extensionSource.includes('--verbose'));
+assert(extensionSource.includes('bypassPermissions'));
+assert(extensionSource.includes('Bash,Read,Grep,Glob'));
 assert(extensionSource.includes('context-pack'));
 assert(extensionSource.includes('.msc'));
 assert(extensionSource.includes('openclaude_chats'));
@@ -201,12 +206,15 @@ assert(args.includes('--output-format') && args.includes('markdown'));
 assert(args.includes('--no-counsel'));
 assert(args.includes('--no-math'));
 assert(args.includes('--no-tree-search'));
+assert.strictEqual(args.includes('--model'), false);
 const attachedArgs = extension.buildRunArgs({
   task: 'Attached smoke',
   dryRun: true,
   tier: 'budget',
   outputFormat: 'markdown',
   budget: 20,
+  model: 'moonshotai/kimi-k2',
+  maxRunSeconds: 3600,
   counsel: false,
   math: false,
   treeSearch: false,
@@ -216,16 +224,22 @@ const attachedArgs = extension.buildRunArgs({
 assert(attachedArgs.includes('--campaign-id') && attachedArgs.includes('demo-campaign'));
 assert(attachedArgs.includes('--campaign-root') && attachedArgs.includes(root));
 assert(attachedArgs.includes('--campaign-graph-version') && attachedArgs.includes('1'));
+assert(attachedArgs.includes('--model') && attachedArgs.includes('moonshotai/kimi-k2'));
+assert(attachedArgs.includes('--max-run-seconds') && attachedArgs.includes('3600'));
 const liveSmokeOptions = extension.normalizeRunOptions({
   task: 'Live smoke task',
   dryRun: false,
   tier: 'live-smoke',
   outputFormat: 'markdown',
   budget: 1,
+  model: 'moonshotai/kimi-k2',
+  maxRunSeconds: 3600,
   allowSpend: true,
   confirmation: 'RUN LOCAL'
 });
 assert.strictEqual(liveSmokeOptions.tier, 'live-smoke');
+assert.strictEqual(liveSmokeOptions.model, 'moonshotai/kimi-k2');
+assert.strictEqual(liveSmokeOptions.maxRunSeconds, 3600);
 assert.strictEqual(extension.validateRunOptions(liveSmokeOptions), null);
 assert.strictEqual(
   extension.validateRunOptions({ task: 'Spend', dryRun: false, budget: 20, allowSpend: false, confirmation: '' }),

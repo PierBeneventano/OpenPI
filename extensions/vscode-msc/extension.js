@@ -499,6 +499,22 @@ async function createCampaignDraftForSession(session, draft) {
   const created = result.data && result.data.campaign ? result.data.campaign : result.data;
   await refresh(session);
   await selectCampaign(session, created.campaign_id || created.path || created.name);
+  if (draft.autoStart !== false) {
+    await startCampaignExecution(session, {
+      task: objective,
+      dryRun: draft.dryRun !== false,
+      tier,
+      outputFormat,
+      budget,
+      model: draft.model,
+      maxRunSeconds: draft.maxRunSeconds,
+      counsel: Boolean(draft.counsel),
+      math: Boolean(draft.math),
+      treeSearch: Boolean(draft.treeSearch),
+      allowSpend: Boolean(draft.allowSpend),
+      confirmation: String(draft.confirmation || '').trim()
+    });
+  }
 }
 
 async function deleteCampaignForSession(session, message) {
@@ -1030,7 +1046,7 @@ async function startCampaignExecution(session, message) {
   session.state.actionError = null;
   appendRunLog(session, 'system', '$ ' + command);
 
-  const proc = childProcess.spawn(bin, args, { cwd: session.root, env: runtimeEnv(session.root), shell: false });
+  const proc = childProcess.spawn(bin, args, { cwd: session.root, env: runEnv(session.root, options), shell: false });
   session.activeProcess = proc;
   session.state.activeRun.pid = proc.pid || null;
   postState(session);
@@ -1065,6 +1081,8 @@ function normalizeRunOptions(message) {
     tier: oneOf(message.tier, ['live-smoke', 'budget', 'light', 'medium', 'pro', 'max', 'ultra'], 'budget'),
     outputFormat: oneOf(message.outputFormat, ['markdown', 'latex'], 'markdown'),
     budget: normalizeBudget(message.budget),
+    model: String(message.model || '').trim(),
+    maxRunSeconds: normalizeOptionalPositiveInt(message.maxRunSeconds),
     counsel: Boolean(message.counsel),
     math: Boolean(message.math),
     treeSearch: Boolean(message.treeSearch),
@@ -1115,6 +1133,12 @@ function buildRunArgs(options, root) {
   }
   if (options.dryRun) {
     args.push('--dry-run');
+  }
+  if (options.model) {
+    args.push('--model', options.model);
+  }
+  if (options.maxRunSeconds) {
+    args.push('--max-run-seconds', String(options.maxRunSeconds));
   }
   args.push(options.task);
   return args;
@@ -1426,6 +1450,10 @@ async function sendOpenClaudeMessage(session, message) {
     '--execute',
     '--',
     '-p',
+    '--permission-mode',
+    'bypassPermissions',
+    '--allowedTools',
+    'Bash,Read,Grep,Glob',
     '--verbose',
     '--output-format',
     'stream-json',
@@ -1842,6 +1870,21 @@ function runtimeEnv(root) {
   return { ...process.env, PYTHONPATH: root };
 }
 
+function runEnv(root, options = {}) {
+  const env = runtimeEnv(root);
+  if (options.model) {
+    env.DEEP_RESEARCH_MODEL = openRouterModelForEnv(options.model);
+    env.LITELLM_MODEL_ID = openRouterModelForEnv(options.model);
+  }
+  return env;
+}
+
+function openRouterModelForEnv(model) {
+  const value = String(model || '').trim();
+  if (!value) return '';
+  return value.startsWith('openrouter/') ? value : `openrouter/${value}`;
+}
+
 function resolveMscBin(root) {
   const local = process.platform === 'win32'
     ? path.join(root, '.venv', 'Scripts', 'msc.exe')
@@ -1862,6 +1905,14 @@ function oneOf(value, allowed, fallback) {
 function normalizeBudget(value) {
   const parsed = Number.parseInt(String(value == null ? '20' : value), 10);
   return Number.isFinite(parsed) ? parsed : 20;
+}
+
+function normalizeOptionalPositiveInt(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function renderHtml(context, webview) {

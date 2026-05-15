@@ -1219,10 +1219,19 @@ function NewCampaignModal({ onClose }) {
   const [draft, setDraft] = useState({
     title: '',
     objective: '',
-    budgetCap: 20,
-    tier: 'budget',
+    budgetCap: 3,
+    tier: 'live-smoke',
     outputFormat: 'markdown',
-    template: 'consortium_scaffold'
+    template: 'consortium_scaffold',
+    autoStart: true,
+    dryRun: false,
+    model: 'moonshotai/kimi-k2',
+    maxRunSeconds: 3600,
+    counsel: false,
+    math: false,
+    treeSearch: false,
+    allowSpend: false,
+    confirmation: ''
   });
 
   function update(key, value) {
@@ -1233,6 +1242,9 @@ function NewCampaignModal({ onClose }) {
     event.preventDefault();
     vscode.postMessage({ type: 'createCampaign', draft });
   }
+
+  const realRun = draft.autoStart && !draft.dryRun;
+  const blocked = realRun && (!draft.allowSpend || draft.confirmation !== 'RUN LOCAL');
 
   return (
     <div className="modal-backdrop">
@@ -1260,7 +1272,34 @@ function NewCampaignModal({ onClose }) {
             <option value="blank">blank</option>
           </select></label>
         </div>
-        <button className="primary" type="submit">Create Draft</button>
+        <section className="spend-gate">
+          <label className="check-line"><input type="checkbox" checked={draft.autoStart} onChange={(event) => update('autoStart', event.target.checked)} /> Start automatically after creation</label>
+          {draft.autoStart ? (
+            <>
+              <div className="form-grid">
+                <label>Run mode<select value={draft.dryRun ? 'dry' : 'real'} onChange={(event) => update('dryRun', event.target.value === 'dry')}>
+                  <option value="real">Real local execution</option>
+                  <option value="dry">Dry validation</option>
+                </select></label>
+                <label>Model<input value={draft.model} onChange={(event) => update('model', event.target.value)} /></label>
+                <label>Max seconds<input type="number" min="1" value={draft.maxRunSeconds} onChange={(event) => update('maxRunSeconds', event.target.value)} /></label>
+              </div>
+              <div className="toggle-row">
+                <label><input type="checkbox" checked={draft.counsel} onChange={(event) => update('counsel', event.target.checked)} /> Persona counsel</label>
+                <label><input type="checkbox" checked={draft.math} onChange={(event) => update('math', event.target.checked)} /> Math agents</label>
+                <label><input type="checkbox" checked={draft.treeSearch} onChange={(event) => update('treeSearch', event.target.checked)} /> Tree search</label>
+              </div>
+              {realRun ? (
+                <>
+                  <label className="check-line"><input type="checkbox" checked={draft.allowSpend} onChange={(event) => update('allowSpend', event.target.checked)} /> Allow OpenRouter spend for this campaign execution</label>
+                  <label>Confirmation<input value={draft.confirmation} onChange={(event) => update('confirmation', event.target.value)} placeholder="RUN LOCAL" /></label>
+                </>
+              ) : null}
+            </>
+          ) : null}
+        </section>
+        {blocked ? <div className="notice error">Real local execution requires allow spend plus confirmation text RUN LOCAL.</div> : null}
+        <button className="primary" type="submit" disabled={blocked}>{draft.autoStart ? 'Create and Start Campaign' : 'Create Draft'}</button>
       </form>
     </div>
   );

@@ -124,6 +124,10 @@ def test_openclaude_campaign_harness_exposes_workspace_and_guardrails(tmp_path: 
         operation["operation"] == "campaigns.workspace"
         for operation in data["operation_contract"]["operations"]
     )
+    execution_guidance = "\n".join(data["researcher_workflows"]["execution"])
+    assert "msc campaigns start" in execution_guidance
+    assert "Do not use it" in execution_guidance
+    assert "msc run --campaign-id harness-demo" in execution_guidance
     assert "run_status.json" in data["guardrails"]["do_not_use_as_truth"]
     assert "not-a-real-openrouter-key" not in result.output
 

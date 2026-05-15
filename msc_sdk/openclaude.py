@@ -216,7 +216,14 @@ def openclaude_researcher_workflows(campaign_ref: str) -> dict[str, Any]:
         ],
         "execution": [
             "OpenClaude should not launch local execution unless the researcher explicitly asks.",
-            "Prefer the VS Code cockpit for start/stop controls until kernel-native execution is complete.",
+            "There is no `msc campaigns start` command. Do not use it.",
+            (
+                f"To start or continue execution, use `msc run --campaign-id {campaign_ref} "
+                "--campaign-root <project_root> --campaign-graph-version 1 --model <model> "
+                "--tier <tier> --budget <usd> --output-format markdown --mode local "
+                "--no-counsel --no-math --no-tree-search <campaign objective>`."
+            ),
+            "Use the campaign objective from the workspace read model as the run task unless the researcher provides a replacement.",
             "When execution is active, treat raw process logs as diagnostics, not product truth.",
         ],
     }
