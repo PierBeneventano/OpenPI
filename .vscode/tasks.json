@@ -1,0 +1,33 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build MSc Dashboard Extension",
+      "type": "shell",
+      "command": "npm run build --prefix extensions/vscode-msc",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "CONSORTIUM_PROJECT_ROOT": "${workspaceFolder}",
+          "MSC_CAMPAIGN_ROOT": "${workspaceFolder}"
+        }
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test MSc Dashboard Extension",
+      "type": "shell",
+      "command": "npm run test --prefix extensions/vscode-msc",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "CONSORTIUM_PROJECT_ROOT": "${workspaceFolder}",
+          "MSC_CAMPAIGN_ROOT": "${workspaceFolder}"
+        }
+      },
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}

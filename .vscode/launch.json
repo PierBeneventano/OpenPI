@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run MSc Dashboard Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--disable-extensions",
+        "--extensionDevelopmentPath=${workspaceFolder}/extensions/vscode-msc",
+        "${workspaceFolder}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "CONSORTIUM_PROJECT_ROOT": "${workspaceFolder}",
+        "MSC_CAMPAIGN_ROOT": "${workspaceFolder}"
+      },
+      "sourceMaps": false,
+      "outFiles": []
+    }
+  ]
+}
