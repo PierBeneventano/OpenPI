@@ -632,10 +632,13 @@ async function previewArtifact(session, artifact) {
   }
 
   const buffer = fs.readFileSync(resolved);
+  const content = buffer.slice(0, TEXT_PREVIEW_BYTES).toString('utf8');
+  const kind = previewKind(ext);
   return {
     ...base,
-    kind: previewKind(ext),
-    content: formatTextPreview(buffer.slice(0, TEXT_PREVIEW_BYTES).toString('utf8'), ext),
+    kind,
+    html: renderArtifactHtml(content, ext),
+    content: formatTextPreview(content, ext),
     truncated: buffer.length > TEXT_PREVIEW_BYTES
   };
 }
@@ -882,6 +885,266 @@ function formatTextPreview(content, ext) {
     }
   }
   return content;
+}
+
+function renderArtifactHtml(content, ext) {
+  if (ext === '.md' || ext === '.markdown') {
+    return renderMarkdownHtml(content);
+  }
+  if (ext === '.tex') {
+    return renderLatexHtml(content);
+  }
+  return null;
+}
+
+function renderMarkdownHtml(content) {
+  const lines = String(content || '').replace(/\r\n/g, '\n').split('\n');
+  const html = [];
+  let paragraph = [];
+  let listType = null;
+  let inCode = false;
+  let codeLines = [];
+  let tableLines = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    html.push(`<p>${renderMarkdownInline(paragraph.join(' '))}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!listType) return;
+    html.push(`</${listType}>`);
+    listType = null;
+  };
+  const flushCode = () => {
+    html.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+    codeLines = [];
+  };
+  const flushTable = () => {
+    if (!tableLines.length) return;
+    html.push(renderMarkdownTable(tableLines));
+    tableLines = [];
+  };
+  const flushBlocks = () => {
+    flushParagraph();
+    flushList();
+    flushTable();
+  };
+
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      if (inCode) {
+        flushCode();
+        inCode = false;
+      } else {
+        flushBlocks();
+        inCode = true;
+        codeLines = [];
+      }
+      continue;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushBlocks();
+      continue;
+    }
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      flushParagraph();
+      flushList();
+      tableLines.push(line);
+      continue;
+    }
+    flushTable();
+
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = Math.min(6, heading[1].length);
+      html.push(`<h${level}>${renderMarkdownInline(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    const ordered = /^\s*\d+\.\s+(.+)$/.exec(line);
+    const unordered = /^\s*[-*+]\s+(.+)$/.exec(line);
+    if (ordered || unordered) {
+      flushParagraph();
+      const nextListType = ordered ? 'ol' : 'ul';
+      if (listType && listType !== nextListType) {
+        flushList();
+      }
+      if (!listType) {
+        listType = nextListType;
+        html.push(`<${listType}>`);
+      }
+      html.push(`<li>${renderMarkdownInline((ordered || unordered)[1])}</li>`);
+      continue;
+    }
+
+    const quote = /^\s*>\s?(.+)$/.exec(line);
+    if (quote) {
+      flushParagraph();
+      flushList();
+      html.push(`<blockquote>${renderMarkdownInline(quote[1])}</blockquote>`);
+      continue;
+    }
+
+    paragraph.push(line.trim());
+  }
+
+  if (inCode) {
+    flushCode();
+  }
+  flushBlocks();
+  return html.join('\n');
+}
+
+function renderMarkdownTable(lines) {
+  const rows = lines
+    .map((line) => line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim()))
+    .filter((row) => row.length > 1);
+  if (!rows.length) return '';
+  const hasSeparator = rows.length > 1 && rows[1].every((cell) => /^:?-{3,}:?$/.test(cell));
+  const header = rows[0];
+  const body = hasSeparator ? rows.slice(2) : rows.slice(1);
+  const headHtml = `<thead><tr>${header.map((cell) => `<th>${renderMarkdownInline(cell)}</th>`).join('')}</tr></thead>`;
+  const bodyHtml = body.length
+    ? `<tbody>${body.map((row) => `<tr>${row.map((cell) => `<td>${renderMarkdownInline(cell)}</td>`).join('')}</tr>`).join('')}</tbody>`
+    : '';
+  return `<table>${headHtml}${bodyHtml}</table>`;
+}
+
+function renderMarkdownInline(text) {
+  let value = escapeHtml(text);
+  value = value.replace(/`([^`]+)`/g, '<code>$1</code>');
+  value = value.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  value = value.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  value = value.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+    const safeHref = sanitizeHref(href);
+    return safeHref ? `<a href="${safeHref}">${label}</a>` : label;
+  });
+  return value;
+}
+
+function renderLatexHtml(content) {
+  let source = String(content || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/%.*$/gm, '')
+    .replace(/\\begin\{abstract\}/g, '\n\\section*{Abstract}\n')
+    .replace(/\\end\{abstract\}/g, '\n')
+    .replace(/\\begin\{itemize\}/g, '\n__BEGIN_UL__\n')
+    .replace(/\\end\{itemize\}/g, '\n__END_UL__\n')
+    .replace(/\\begin\{enumerate\}/g, '\n__BEGIN_OL__\n')
+    .replace(/\\end\{enumerate\}/g, '\n__END_OL__\n')
+    .replace(/\\item\s+/g, '\n__ITEM__ ')
+    .replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => `\n__MATH__ ${math.trim()}\n`)
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => `\n__MATH__ ${math.trim()}\n`);
+
+  const lines = source.split('\n');
+  const html = [];
+  let paragraph = [];
+  let listType = null;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    html.push(`<p>${renderLatexInline(paragraph.join(' '))}</p>`);
+    paragraph = [];
+  };
+  const closeList = () => {
+    if (!listType) return;
+    html.push(`</${listType}>`);
+    listType = null;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushParagraph();
+      continue;
+    }
+    if (line === '__BEGIN_UL__' || line === '__BEGIN_OL__') {
+      flushParagraph();
+      closeList();
+      listType = line === '__BEGIN_UL__' ? 'ul' : 'ol';
+      html.push(`<${listType}>`);
+      continue;
+    }
+    if (line === '__END_UL__' || line === '__END_OL__') {
+      flushParagraph();
+      closeList();
+      continue;
+    }
+    if (line.startsWith('__ITEM__')) {
+      flushParagraph();
+      if (!listType) {
+        listType = 'ul';
+        html.push('<ul>');
+      }
+      html.push(`<li>${renderLatexInline(line.replace('__ITEM__', '').trim())}</li>`);
+      continue;
+    }
+    if (line.startsWith('__MATH__')) {
+      flushParagraph();
+      closeList();
+      html.push(`<div class="math-block">${escapeHtml(line.replace('__MATH__', '').trim())}</div>`);
+      continue;
+    }
+    const title = /^\\title\{(.+)\}$/.exec(line);
+    const section = /^\\section\*?\{(.+)\}$/.exec(line);
+    const subsection = /^\\subsection\*?\{(.+)\}$/.exec(line);
+    const subsubsection = /^\\subsubsection\*?\{(.+)\}$/.exec(line);
+    if (title || section || subsection || subsubsection) {
+      flushParagraph();
+      closeList();
+      const tag = title ? 'h1' : section ? 'h2' : subsection ? 'h3' : 'h4';
+      html.push(`<${tag}>${renderLatexInline((title || section || subsection || subsubsection)[1])}</${tag}>`);
+      continue;
+    }
+    if (/^\\(documentclass|usepackage|begin\{document\}|end\{document\}|maketitle|bibliography|bibliographystyle)/.test(line)) {
+      continue;
+    }
+    paragraph.push(line);
+  }
+  flushParagraph();
+  closeList();
+  return html.join('\n');
+}
+
+function renderLatexInline(text) {
+  let value = escapeHtml(text)
+    .replace(/\\textbf\{([^{}]+)\}/g, '<strong>$1</strong>')
+    .replace(/\\emph\{([^{}]+)\}/g, '<em>$1</em>')
+    .replace(/\\textit\{([^{}]+)\}/g, '<em>$1</em>')
+    .replace(/\\texttt\{([^{}]+)\}/g, '<code>$1</code>')
+    .replace(/\\cite\{([^{}]+)\}/g, '<span class="citation">[$1]</span>')
+    .replace(/\\ref\{([^{}]+)\}/g, '<span class="citation">$1</span>')
+    .replace(/\$([^$]+)\$/g, '<span class="math-inline">$1</span>');
+  value = value.replace(/\\[a-zA-Z]+\*?(?:\[[^\]]*\])?/g, '');
+  return value.replace(/[{}]/g, '');
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sanitizeHref(value) {
+  const href = String(value || '').trim();
+  if (/^(https?:|mailto:)/i.test(href)) {
+    return escapeHtml(href);
+  }
+  if (/^[./#]/.test(href)) {
+    return escapeHtml(href);
+  }
+  return '';
 }
 
 function defaultRunSummary() {
@@ -1966,6 +2229,7 @@ module.exports = {
   deactivate,
   findProjectRoot,
   openClaudeChatPath,
+  renderArtifactHtml,
   textFromOpenClaudeEvent,
   normalizeRunOptions,
   safeResolveArtifactPath,

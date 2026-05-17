@@ -657,6 +657,68 @@ marker path {
   max-height: 420px;
   white-space: pre-wrap;
 }
+.rendered-preview {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 18px;
+  max-height: 560px;
+  overflow: auto;
+  line-height: 1.55;
+}
+.rendered-preview h1,
+.rendered-preview h2,
+.rendered-preview h3,
+.rendered-preview h4 {
+  margin: 18px 0 8px;
+  color: var(--fg);
+}
+.rendered-preview h1:first-child,
+.rendered-preview h2:first-child,
+.rendered-preview h3:first-child {
+  margin-top: 0;
+}
+.rendered-preview p,
+.rendered-preview ul,
+.rendered-preview ol,
+.rendered-preview blockquote,
+.rendered-preview table,
+.rendered-preview pre {
+  margin: 0 0 12px;
+}
+.rendered-preview ul,
+.rendered-preview ol {
+  padding-left: 22px;
+}
+.rendered-preview blockquote {
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+  padding-left: 12px;
+}
+.rendered-preview code,
+.rendered-preview .math-inline,
+.rendered-preview .math-block,
+.rendered-preview .citation {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 1px 4px;
+}
+.rendered-preview .math-block {
+  display: block;
+  padding: 10px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+.rendered-preview table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.rendered-preview th,
+.rendered-preview td {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
 .preview-panel img, .preview-panel iframe {
   width: 100%;
   min-height: 420px;

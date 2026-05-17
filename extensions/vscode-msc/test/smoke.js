@@ -298,6 +298,14 @@ try {
     ),
     runtimeFile
   );
+  const renderedMarkdown = extension.renderArtifactHtml('# Finding\n\n- **Strong** evidence\n\n| Metric | Value |\n| --- | --- |\n| Cost | Low |\n', '.md');
+  assert(renderedMarkdown.includes('<h1>Finding</h1>'));
+  assert(renderedMarkdown.includes('<strong>Strong</strong>'));
+  assert(renderedMarkdown.includes('<table>'));
+  const renderedLatex = extension.renderArtifactHtml('\\section{Result}\nThis is \\textbf{important} and $x^2$.\n\\begin{itemize}\n\\item First\n\\end{itemize}', '.tex');
+  assert(renderedLatex.includes('<h2>Result</h2>'));
+  assert(renderedLatex.includes('<strong>important</strong>'));
+  assert(renderedLatex.includes('class="math-inline"'));
   fs.rmSync(parentRoot, { recursive: true, force: true });
   const outside = path.join(os.tmpdir(), 'msc-extension-outside.txt');
   fs.writeFileSync(outside, 'outside', 'utf8');

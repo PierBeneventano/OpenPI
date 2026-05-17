@@ -1177,7 +1177,8 @@ function PreviewPanel({ preview }) {
       </div>
       {preview.kind === 'image' ? <img src={preview.uri} alt={preview.title} /> : null}
       {preview.kind === 'pdf' ? <iframe title={preview.title} src={preview.uri} /> : null}
-      {preview.content ? <pre>{preview.content}</pre> : null}
+      {preview.html ? <div className={`rendered-preview rendered-${preview.kind}`} dangerouslySetInnerHTML={{ __html: preview.html }} /> : null}
+      {!preview.html && preview.content ? <pre>{preview.content}</pre> : null}
       {preview.message ? <p className="subtle">{preview.message}</p> : null}
       {preview.truncated ? <p className="subtle">Preview truncated.</p> : null}
     </aside>
