@@ -481,5 +481,13 @@ Examples:
              "process is killed with SIGALRM. Also enables a progress "
              "heartbeat file (.progress_heartbeat) in the workspace.",
     )
+    parser.add_argument(
+        "--recursion-limit",
+        type=int,
+        default=None,
+        help="Maximum LangGraph transition budget for the pipeline. "
+             "By default this is derived from the number of stages and "
+             "configured research loops, avoiding LangGraph's small default.",
+    )
 
     return parser.parse_args()

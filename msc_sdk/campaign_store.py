@@ -674,7 +674,7 @@ class CampaignStore:
     def _decision_title(target_type: str, reason: str) -> str:
         if target_type == "failure_recovery":
             if "recursion" in reason.lower() or "GRAPH_RECURSION_LIMIT" in reason:
-                return "Campaign execution needs loop recovery"
+                return "Campaign execution reached graph transition limit"
             return "Campaign execution needs recovery"
         if target_type == "stage_failure":
             return "Stage needs recovery"
@@ -689,9 +689,10 @@ class CampaignStore:
         if target_type == "failure_recovery":
             if "recursion" in reason.lower() or "GRAPH_RECURSION_LIMIT" in reason:
                 return (
-                    "The campaign execution looped until the runtime hit its recursion limit. "
-                    "Use OpenClaude to diagnose the loop, choose the correct recovery point, "
-                    "and rerun, rewind, or repair through SDK commands."
+                    "The campaign used more graph transitions than the runtime allowed. "
+                    "This may be a real loop, or a full research pass with feedback cycles "
+                    "running under too small a transition budget. Use OpenClaude to inspect "
+                    "the stage history, then rerun, rewind, or repair through SDK commands."
                 )
             return "The latest campaign execution failed and needs a recovery choice before continuing."
         if target_type == "stage_failure":

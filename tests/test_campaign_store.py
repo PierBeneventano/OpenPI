@@ -300,8 +300,8 @@ def test_failure_recovery_decision_is_researcher_readable(tmp_path: Path):
     assert workspace["execution"]["current_stage_id"] != run["run_id"]
     assert decision["target_type"] == "failure_recovery"
     assert decision["target_label"] == "latest failed execution"
-    assert decision["title"] == "Campaign execution needs loop recovery"
-    assert "looped until the runtime hit its recursion limit" in decision["summary"]
+    assert decision["title"] == "Campaign execution reached graph transition limit"
+    assert "used more graph transitions than the runtime allowed" in decision["summary"]
     assert decision["reason"] == "Recursion limit of 25 reached without hitting a stop condition."
 
 

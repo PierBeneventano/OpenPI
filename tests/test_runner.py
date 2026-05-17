@@ -221,6 +221,32 @@ class TestWriteExperimentMetadata:
         assert meta["log_files"]["stdout"] == "/tmp/stdout.log"
 
 
+class TestLangGraphRecursionLimit:
+    def test_derives_limit_from_pipeline_size(self):
+        from consortium.runner import _resolve_langgraph_recursion_limit
+
+        class FakeArgs:
+            recursion_limit = None
+            followup_max_iterations = 1
+            max_rebuttal_iterations = 0
+            max_validation_retries = 1
+
+        limit = _resolve_langgraph_recursion_limit(FakeArgs(), [f"stage_{idx}" for idx in range(34)])
+
+        assert limit >= 136
+
+    def test_explicit_limit_wins(self):
+        from consortium.runner import _resolve_langgraph_recursion_limit
+
+        class FakeArgs:
+            recursion_limit = 42
+            followup_max_iterations = 99
+            max_rebuttal_iterations = 99
+            max_validation_retries = 99
+
+        assert _resolve_langgraph_recursion_limit(FakeArgs(), ["a", "b"]) == 42
+
+
 class TestWriteRunSummary:
     def test_writes_summary_json(self, tmp_path):
         from consortium.runner import _write_run_summary

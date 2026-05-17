@@ -195,6 +195,25 @@ _CONTINUATION_TASK = (
     "and deliver better research outputs."
 )
 
+
+def _resolve_langgraph_recursion_limit(args, pipeline_stages: list[str]) -> int:
+    explicit = getattr(args, "recursion_limit", None)
+    if explicit is not None:
+        return max(1, int(explicit))
+
+    stage_count = max(1, len(pipeline_stages))
+    followup_cycles = max(0, int(getattr(args, "followup_max_iterations", 0) or 0))
+    rebuttal_cycles = max(0, int(getattr(args, "max_rebuttal_iterations", 0) or 0))
+    validation_retries = max(0, int(getattr(args, "max_validation_retries", 0) or 0))
+    research_passes = 1 + followup_cycles + rebuttal_cycles
+
+    # LangGraph's library default is 25, but this pipeline has more than 25
+    # legitimate stage transitions even before feedback loops. Size the budget
+    # from the declared graph shape so a normal full run is not misclassified
+    # as a recursion failure.
+    stage_budget = stage_count * max(4, research_passes + validation_retries + 2)
+    return max(100, stage_budget)
+
 _STAGE_ALIASES = {
     "literature": "literature_review_agent",
     "litreview": "literature_review_agent",
@@ -1342,11 +1361,16 @@ def main():
             thread_id = f"{results_base_dir}::stage_resume::{canonical_stage}::{timestamp}"
         else:
             thread_id = results_base_dir
-        run_config = {"configurable": {"thread_id": thread_id}}
+        recursion_limit = _resolve_langgraph_recursion_limit(args, pipeline_stages)
+        run_config = {
+            "configurable": {"thread_id": thread_id},
+            "recursion_limit": recursion_limit,
+        }
 
         logger.info("=" * 50)
         logger.info("Running LangGraph research pipeline...")
         logger.info("Task: %s", task)
+        logger.info("LangGraph recursion limit: %s", recursion_limit)
         logger.info("=" * 50)
 
         # --- Progress heartbeat watchdog (Tier 1.1) ---
