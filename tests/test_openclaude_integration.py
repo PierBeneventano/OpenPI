@@ -125,6 +125,9 @@ def test_openclaude_campaign_harness_exposes_workspace_and_guardrails(tmp_path: 
         for operation in data["operation_contract"]["operations"]
     )
     execution_guidance = "\n".join(data["researcher_workflows"]["execution"])
+    steering_guidance = "\n".join(data["researcher_workflows"]["feedback_and_steering"])
+    assert "msc campaigns rewind harness-demo" in steering_guidance
+    assert "missing SDK capability" in steering_guidance
     assert "msc campaigns start" in execution_guidance
     assert "Do not use it" in execution_guidance
     assert "msc run --campaign-id harness-demo" in execution_guidance

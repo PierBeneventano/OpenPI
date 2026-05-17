@@ -268,6 +268,31 @@ def test_campaign_cli_steering_surfaces_are_json_and_audited(tmp_path: Path):
     assert feedback_data["event"]["payload"]["type"] == "feedback"
     assert feedback_data["event"]["payload"]["metadata"]["node_id"] == "writeup_agent"
 
+    rewind = _invoke(
+        runner,
+        [
+            "campaigns",
+            "--root",
+            str(tmp_path),
+            "rewind",
+            "demo-campaign",
+            "writeup_agent",
+            "--reason",
+            "Return to the draft stage after reviewer feedback.",
+            "--decision-id",
+            "decision-1",
+            "--run-id",
+            "run-1",
+            "--json",
+        ],
+    )
+    assert rewind.exit_code == 0
+    rewind_data = json.loads(rewind.output)
+    assert rewind_data["approval"]["status"] == "pending"
+    assert rewind_data["approval"]["metadata"]["change_type"] == "rewind_to_stage"
+    assert rewind_data["rewind_event"]["type"] == "CampaignRewindRequested"
+    assert rewind_data["rewind_event"]["payload"]["decision_id"] == "decision-1"
+
     context = _invoke(
         runner,
         [

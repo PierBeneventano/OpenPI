@@ -524,6 +524,49 @@ class CampaignStore:
             actor=actor,
         )
 
+    def rewind(
+        self,
+        campaign_ref: str | Path,
+        node_id: str,
+        *,
+        reason: str = "",
+        decision_id: str | None = None,
+        run_id: str | None = None,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        instruction = reason or f"Rewind campaign execution to stage {node_id}."
+        proposal = self.propose_graph_change(
+            campaign_ref,
+            change_type="rewind_to_stage",
+            instruction=instruction,
+            node_id=node_id,
+            actor=actor,
+        )
+        campaign_id = proposal["campaign_id"]
+        with self.connect() as conn:
+            event = self._append_event(
+                conn,
+                campaign_id=campaign_id,
+                event_type="CampaignRewindRequested",
+                actor=actor,
+                payload={
+                    "node_id": node_id,
+                    "reason": instruction,
+                    "decision_id": decision_id,
+                    "run_id": run_id,
+                    "approval_id": proposal["approval"]["id"],
+                    "proposal_event_id": proposal["proposal"]["id"],
+                },
+            )
+            conn.execute("UPDATE campaigns SET status=?, updated_at=? WHERE id=?", ("human_decision_required", now_iso(), campaign_id))
+        return {
+            **proposal,
+            "node_id": node_id,
+            "decision_id": decision_id,
+            "run_id": run_id,
+            "rewind_event": event,
+        }
+
     def summarize_artifacts(self, campaign_ref: str | Path) -> dict[str, Any]:
         campaign_id = self.resolve_ref(campaign_ref)
         stages = self.artifacts(campaign_id)["stages"]

@@ -107,6 +107,12 @@ Propose rerunning a stage:
 msc campaigns rerun-stage <campaign> <stage-id> --reason "<reason>" --json
 ```
 
+Propose rewinding campaign execution to a stage:
+
+```bash
+msc campaigns rewind <campaign> <stage-id> --reason "<reason>" --decision-id <decision-id> --run-id <run-id> --json
+```
+
 Propose rewriting a stage instruction:
 
 ```bash
@@ -159,6 +165,26 @@ Use the campaign objective from `msc campaigns workspace <campaign> --json`
 unless the researcher provides a replacement task. If the researcher asks for a
 cheap smoke run with Kimi K2, use `moonshotai/kimi-k2`, `live-smoke`, and the
 researcher's budget cap.
+
+## SDK Discovery And Limitation Reporting
+
+Before claiming a capability does not exist, make a best-effort SDK discovery
+pass:
+
+```bash
+msc selftest commands --json
+msc capabilities --profile openclaude_v1 current --json
+msc openclaude campaign-harness <campaign> --json
+```
+
+If the SDK lacks the exact command that would make the researcher's request
+clean, do the best supported typed action instead and say both things clearly:
+
+- what you successfully did through the current SDK,
+- what SDK command or read model would have made the task better.
+
+Do not use missing SDK surface as a reason to edit campaign truth files,
+SQLite, status JSON, generated artifacts, or repository code directly.
 
 ## Mutation Rules
 

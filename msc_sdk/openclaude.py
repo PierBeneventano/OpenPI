@@ -206,8 +206,11 @@ def openclaude_researcher_workflows(campaign_ref: str) -> dict[str, Any]:
             f"msc campaigns feedback {campaign_ref} --text <feedback> --node <stage_id> --artifact-path <path> --json",
             f"msc campaigns context link {campaign_ref} --note <note> --artifact-path <path> --json",
             f"msc campaigns rerun-stage {campaign_ref} <stage_id> --reason <reason> --json",
+            f"msc campaigns rewind {campaign_ref} <stage_id> --reason <reason> --decision-id <decision_id> --run-id <run_id> --json",
             f"msc campaigns rewrite-stage {campaign_ref} <stage_id> --instruction <instruction> --json",
             f"msc campaigns reroute {campaign_ref} --from <stage_id> --to <stage_id> --reason <reason> --json",
+            "Use `msc selftest commands --json` and the operation contract to discover the current SDK surface before declaring that an operation is unavailable.",
+            "If the SDK lacks a command that would make the requested task cleaner, perform the best supported action and explicitly report the missing SDK capability as a recommended improvement.",
         ],
         "decisions": [
             "Use pending_decisions from the workspace read model.",

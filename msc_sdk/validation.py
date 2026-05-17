@@ -59,6 +59,7 @@ PUBLIC_COMMANDS = [
     CommandSpec("campaigns.reroute", "msc campaigns reroute <campaign> --from <node> --to <node> --json", "CampaignClient.reroute(...)", "write.approvals", True),
     CommandSpec("campaigns.rewrite_stage", "msc campaigns rewrite-stage <campaign> <node> --instruction <text> --json", "CampaignClient.rewrite_stage(...)", "write.approvals", True),
     CommandSpec("campaigns.rerun_stage", "msc campaigns rerun-stage <campaign> <node> --json", "CampaignClient.rerun_stage(...)", "write.approvals", True),
+    CommandSpec("campaigns.rewind", "msc campaigns rewind <campaign> <node> --reason <reason> --json", "CampaignClient.rewind(...)", "write.approvals", True),
     CommandSpec("campaigns.summarize_artifacts", "msc campaigns summarize-artifacts <campaign> --json", "CampaignClient.summarize_artifacts(ref)", "read.artifacts"),
     CommandSpec("capabilities.current", "msc capabilities current --json", "CapabilityClient.current()", "read.capabilities"),
     CommandSpec("capabilities.explain", "msc capabilities explain <capability> --json", "CapabilityClient.explain(capability)", "read.capabilities"),

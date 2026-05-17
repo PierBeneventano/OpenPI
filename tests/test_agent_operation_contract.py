@@ -24,6 +24,7 @@ def test_public_operation_contract_openclaude_allows_autonomous_campaign_mutatio
     assert contract["confirmation_required_for_mutations"] is False
     assert any(operation["operation"] == "campaigns.approve" for operation in contract["operations"])
     assert any(operation["operation"] == "campaigns.context_link" for operation in contract["operations"])
+    assert any(operation["operation"] == "campaigns.rewind" for operation in contract["operations"])
     assert "SQLite" in contract["storage_boundary"]
 
 

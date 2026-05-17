@@ -188,6 +188,25 @@ class CampaignClient:
     def rerun_stage(self, campaign_ref: str | Path, node_id: str, *, reason: str = "", actor: str = "user") -> dict[str, Any]:
         return self.store.rerun_stage(campaign_ref, node_id, reason=reason, actor=actor)
 
+    def rewind(
+        self,
+        campaign_ref: str | Path,
+        node_id: str,
+        *,
+        reason: str = "",
+        decision_id: str | None = None,
+        run_id: str | None = None,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        return self.store.rewind(
+            campaign_ref,
+            node_id,
+            reason=reason,
+            decision_id=decision_id,
+            run_id=run_id,
+            actor=actor,
+        )
+
     def summarize_artifacts(self, campaign_ref: str | Path) -> dict[str, Any]:
         return self.store.summarize_artifacts(campaign_ref)
 

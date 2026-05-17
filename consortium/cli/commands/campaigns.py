@@ -518,6 +518,37 @@ def campaigns_rerun_stage(
     click.echo(f"{data['campaign_id']}: rerun proposal pending approval")
 
 
+@campaigns.command("rewind")
+@click.argument("campaign_ref")
+@click.argument("node_id")
+@click.option("--reason", default="", help="Optional rewind reason.")
+@click.option("--decision-id", default=None, help="Pending decision id that motivated the rewind.")
+@click.option("--run-id", default=None, help="Failed or superseded run id to recover from.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_rewind(
+    ctx: click.Context,
+    campaign_ref: str,
+    node_id: str,
+    reason: str,
+    decision_id: str | None,
+    run_id: str | None,
+    as_json: bool,
+) -> None:
+    """Propose rewinding campaign execution to a stage."""
+    data = CampaignClient(ctx.obj["campaign_root"]).rewind(
+        campaign_ref,
+        node_id,
+        reason=reason,
+        decision_id=decision_id,
+        run_id=run_id,
+    )
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(f"{data['campaign_id']}: rewind proposal pending approval")
+
+
 @campaigns.command("summarize-artifacts")
 @click.argument("campaign_ref")
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
