@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -652,6 +653,7 @@ class CampaignStore:
             "pending_decisions": workspace["pending_decisions"],
             "safe_next_actions": workspace["safe_next_actions"],
             "live_milestone": workspace["execution"].get("live_milestone"),
+            "process_liveness": workspace["execution"].get("process_liveness"),
             "diagnosis": "human_decision_required" if workspace["pending_decisions"] else status,
         }
 
@@ -784,6 +786,7 @@ class CampaignStore:
             pending_decisions=pending_decisions,
         )
         live_milestone = self._live_milestone_read_model(campaign_id=campaign_id, execution=execution)
+        process_liveness = self._process_liveness_read_model(execution)
         if live_milestone.get("waiting"):
             milestone_decision = self._live_milestone_decision(campaign_id, live_milestone, execution)
             decisions = [milestone_decision, *decisions]
@@ -791,7 +794,11 @@ class CampaignStore:
             execution["status"] = "human_decision_required"
             execution["pending_decision_count"] = len(pending_decisions)
             execution["current_stage_id"] = milestone_decision["target_id"]
+        elif execution.get("status") == "running" and process_liveness.get("status") == "stale":
+            execution["status"] = "failed"
+            execution["failure_reason"] = process_liveness.get("reason")
         execution["live_milestone"] = live_milestone
+        execution["process_liveness"] = process_liveness
         deliverables = [
             artifact for artifact in flat_artifacts
             if artifact["exists"] and artifact.get("audience") in {"deliverable", "evidence"}
@@ -846,12 +853,34 @@ class CampaignStore:
                 "events": events,
                 "legacy_attempts": execution["attempts"],
                 "live_milestone": live_milestone,
+                "process_liveness": process_liveness,
             },
             "provenance": {
                 "source": EVENT_PROJECTION_SOURCE,
                 "reader": "msc_sdk.campaign_store.CampaignStore.workspace_read_model",
             },
         }
+
+    @staticmethod
+    def _process_liveness_read_model(execution: dict[str, Any]) -> dict[str, Any]:
+        latest = execution.get("latest_attempt") or {}
+        status = latest.get("status")
+        pid = latest.get("pid")
+        if status != "running" or not pid:
+            return {"status": "not_applicable", "pid": pid}
+        try:
+            os.kill(int(pid), 0)
+        except ProcessLookupError:
+            return {
+                "status": "stale",
+                "pid": pid,
+                "reason": "runner process is not alive and no exit event was recorded",
+            }
+        except PermissionError:
+            return {"status": "unknown", "pid": pid, "reason": "process exists but cannot be inspected"}
+        except (TypeError, ValueError):
+            return {"status": "unknown", "pid": pid, "reason": "invalid pid"}
+        return {"status": "alive", "pid": pid}
 
     def _live_milestone_read_model(self, *, campaign_id: str, execution: dict[str, Any]) -> dict[str, Any]:
         latest = execution.get("latest_attempt") or {}

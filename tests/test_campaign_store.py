@@ -657,6 +657,79 @@ def test_materialize_control_gate_creates_required_json_artifact(tmp_path: Path,
     assert completion["status"] == "completed"
 
 
+def test_materializer_skips_existing_required_artifacts(tmp_path: Path, monkeypatch):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Skip Existing Demo",
+        objective="Do not overwrite native node artifacts.",
+        template="target_research",
+        budget=1,
+    )
+    run = store.record_run_started("skip-existing-demo", command=["msc", "run"], pid=459)
+    monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
+    monkeypatch.setenv("MSC_CAMPAIGN_ID", "skip-existing-demo")
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+
+    ctx = StageRunContext.from_env("persona_council")
+    assert ctx is not None
+    ctx.write_required("artifacts/persona_debate.md", "# Native Debate")
+    ctx.write_required("artifacts/research_proposal.md", "# Native Proposal")
+
+    materialize_stage_outputs(
+        "persona_council",
+        {"task": "Keep native content."},
+        {"agent_outputs": {"persona_council": "adapter fallback should not overwrite"}},
+    )
+
+    root = tmp_path / "results" / "skip-existing-demo" / "runs" / run["run_id"] / "persona_council"
+    assert (root / "artifacts" / "persona_debate.md").read_text() == "# Native Debate"
+    assert (root / "artifacts" / "research_proposal.md").read_text() == "# Native Proposal"
+
+
+def test_experiment_track_materializer_writes_legacy_summary_for_adapter(tmp_path: Path, monkeypatch):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Experiment Summary Demo",
+        objective="Bridge SDK experiment artifacts back to legacy track merge.",
+        template="target_research",
+        budget=1,
+    )
+    run = store.record_run_started("experiment-summary-demo", command=["msc", "run"], pid=460)
+    legacy_workspace = tmp_path / "results" / "legacy-run"
+    monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
+    monkeypatch.setenv("MSC_CAMPAIGN_ID", "experiment-summary-demo")
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+    monkeypatch.setenv("RESULTS_BASE_DIR", str(legacy_workspace))
+
+    materialize_stage_outputs(
+        "experiment_track",
+        {"task": "Compare spectral norm growth."},
+        {"agent_outputs": {"experiment_track": "Empirical track completed."}},
+    )
+
+    summary = json.loads((legacy_workspace / "paper_workspace" / "experiment_track_summary.json").read_text())
+    assert summary["passed"] == ["G1"]
+    assert (legacy_workspace / "paper_workspace" / "experiment_report.tex").exists()
+
+
+def test_workspace_marks_missing_running_process_as_failed(tmp_path: Path):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Stale Process Demo",
+        objective="Expose stale process diagnostics.",
+        template="target_research",
+        budget=1,
+    )
+    store.record_run_started("stale-process-demo", command=["msc", "run"], pid=99999999)
+
+    workspace = store.workspace_read_model("stale-process-demo")
+
+    assert workspace["execution"]["status"] == "failed"
+    assert workspace["execution"]["process_liveness"]["status"] == "stale"
+    diagnosis = store.diagnose_execution("stale-process-demo")
+    assert diagnosis["process_liveness"]["status"] == "stale"
+
+
 def test_stage_completion_is_derived_from_required_artifacts(tmp_path: Path, monkeypatch):
     store = CampaignStore(tmp_path)
     store.create_campaign(
