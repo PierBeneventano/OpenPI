@@ -709,7 +709,36 @@ def test_experiment_track_materializer_writes_legacy_summary_for_adapter(tmp_pat
 
     summary = json.loads((legacy_workspace / "paper_workspace" / "experiment_track_summary.json").read_text())
     assert summary["passed"] == ["G1"]
+    assert summary["metrics"]["without_batch_norm"][-1] > summary["metrics"]["with_batch_norm"][-1]
     assert (legacy_workspace / "paper_workspace" / "experiment_report.tex").exists()
+
+
+def test_experimentation_materializer_writes_concrete_toy_results(tmp_path: Path, monkeypatch):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Experiment Results Demo",
+        objective="Materialize concrete toy experiment results.",
+        template="target_research",
+        budget=1,
+    )
+    run = store.record_run_started("experiment-results-demo", command=["msc", "run"], pid=461)
+    legacy_workspace = tmp_path / "results" / "legacy-run"
+    monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
+    monkeypatch.setenv("MSC_CAMPAIGN_ID", "experiment-results-demo")
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+    monkeypatch.setenv("RESULTS_BASE_DIR", str(legacy_workspace))
+
+    materialize_stage_outputs(
+        "experimentation_agent",
+        {"task": "Compare spectral norm growth."},
+        {"agent_outputs": {"experimentation_agent": "Pseudo-code from legacy model."}},
+    )
+
+    root = tmp_path / "results" / "experiment-results-demo" / "runs" / run["run_id"] / "experimentation_agent"
+    results_md = (root / "artifacts" / "experiment_results.md").read_text()
+    legacy_results = json.loads((legacy_workspace / "paper_workspace" / "experiment_results.json").read_text())
+    assert "Without BN" in results_md
+    assert legacy_results["without_batch_norm"][-1] > legacy_results["with_batch_norm"][-1]
 
 
 def test_workspace_marks_missing_running_process_as_failed(tmp_path: Path):
