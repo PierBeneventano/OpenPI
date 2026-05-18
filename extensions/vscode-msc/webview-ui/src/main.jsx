@@ -261,6 +261,17 @@ function CampaignWorkspace({ state, tab, setTab, requestDelete }) {
   const currentStage = graphNodesFromState(state).find((node) => node.id === execution.current_stage_id);
   const openClaude = state.openClaude || emptyState.openClaude;
   const inspectorTab = tab === 'graph' ? 'decisions' : tab;
+  const previewArtifact = useCallback((artifact, options = {}) => {
+    if (options.openDeliverables) {
+      setTab('deliverables');
+    }
+    vscode.postMessage({ type: 'previewArtifact', artifact });
+    if (options.scrollToPreview) {
+      window.setTimeout(() => {
+        document.getElementById('deliverables-preview')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 80);
+    }
+  }, [setTab]);
 
   return (
     <div className="app-shell workspace-shell graph-workspace">
@@ -287,7 +298,10 @@ function CampaignWorkspace({ state, tab, setTab, requestDelete }) {
       <ErrorSummary errors={state.errors || []} />
 
       <main className="graph-primary-layout">
-        <GraphTab state={state} />
+        <GraphTab
+          state={state}
+          onPreviewArtifact={(artifact) => previewArtifact(artifact, { openDeliverables: true, scrollToPreview: true })}
+        />
         <ContextRail state={state} currentStage={currentStage} />
       </main>
 
@@ -301,7 +315,7 @@ function CampaignWorkspace({ state, tab, setTab, requestDelete }) {
         </div>
         <div className="inspector-body">
           {inspectorTab === 'decisions' ? <DecisionsTab state={state} /> : null}
-          {inspectorTab === 'deliverables' ? <DeliverablesTab state={state} /> : null}
+          {inspectorTab === 'deliverables' ? <DeliverablesTab state={state} onPreviewArtifact={(artifact) => previewArtifact(artifact, { scrollToPreview: true })} /> : null}
           {inspectorTab === 'feedback' ? <FeedbackTab state={state} /> : null}
           {inspectorTab === 'diagnostics' ? <DiagnosticsTab state={state} /> : null}
         </div>
@@ -634,7 +648,7 @@ function StartCampaignModal({ state, onClose }) {
   );
 }
 
-function GraphTab({ state }) {
+function GraphTab({ state, onPreviewArtifact }) {
   const graphNodes = graphNodesFromState(state);
   const graphEdges = graphEdgesFromState(state, graphNodes);
   const selectedNodeId = state.selectedGraphNode || graphNodes[0]?.id || '';
@@ -668,7 +682,7 @@ function GraphTab({ state }) {
           <dt>Failure</dt><dd>{selectedNode?.fail_reason || '-'}</dd>
         </dl>
         <h3>Stage Outputs</h3>
-        <ArtifactRows artifacts={stageArtifacts} />
+        <ArtifactRows artifacts={stageArtifacts} onPreview={onPreviewArtifact} />
         <h3>Logs</h3>
         <LogList logs={selectedNode?.logs || []} />
       </aside>
@@ -1026,7 +1040,7 @@ function LowLevelSteering({ steering }) {
   );
 }
 
-function DeliverablesTab({ state }) {
+function DeliverablesTab({ state, onPreviewArtifact }) {
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [stageFilter, setStageFilter] = useState('all');
@@ -1055,7 +1069,7 @@ function DeliverablesTab({ state }) {
 
   return (
     <main className="split-layout artifact-layout">
-      <section className="panel">
+      <section className="panel artifact-library-panel">
         <div className="filters">
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search deliverables" />
           <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
@@ -1082,7 +1096,7 @@ function DeliverablesTab({ state }) {
             <option value="system_state">System state</option>
           </select>
         </div>
-        <ArtifactRows artifacts={filtered} />
+        <ArtifactRows artifacts={filtered} onPreview={onPreviewArtifact} />
       </section>
       <PreviewPanel preview={state.artifactPreview} />
     </main>
@@ -1134,7 +1148,7 @@ function DiagnosticsTab({ state }) {
   );
 }
 
-function ArtifactRows({ artifacts, compact = false }) {
+function ArtifactRows({ artifacts, compact = false, onPreview }) {
   if (!artifacts.length) {
     return <p className="subtle">No produced deliverables found for the current filters.</p>;
   }
@@ -1150,7 +1164,7 @@ function ArtifactRows({ artifacts, compact = false }) {
             <span className="pill">{artifact.required ? 'required' : 'optional'}</span>
             <span className="pill">{artifact.exists ? 'produced' : 'planned'}</span>
             {artifact.audience || artifact.metadata?.audience ? <span className="pill">{artifact.audience || artifact.metadata?.audience}</span> : null}
-            {compact ? null : <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'previewArtifact', artifact })}>Preview</button>}
+            {compact ? null : <button disabled={!artifact.exists} onClick={() => onPreview ? onPreview(artifact) : vscode.postMessage({ type: 'previewArtifact', artifact })}>Preview</button>}
             {compact ? null : <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'openArtifact', artifact })}>Open</button>}
             <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'linkArtifactContext', artifact })}>Link to Chat</button>
             {compact ? null : <button disabled={!artifact.exists} onClick={() => vscode.postMessage({ type: 'openClaudeSend', text: `Review ${artifact.path} and tell me what is strong, weak, and what should change.` })}>Ask About</button>}
@@ -1164,10 +1178,10 @@ function ArtifactRows({ artifacts, compact = false }) {
 
 function PreviewPanel({ preview }) {
   if (!preview) {
-    return <aside className="preview-panel"><h2>Preview</h2><p className="subtle">Select an artifact to preview it here.</p></aside>;
+    return <aside id="deliverables-preview" className="preview-panel"><h2>Preview</h2><p className="subtle">Select an artifact to preview it here.</p></aside>;
   }
   return (
-    <aside className="preview-panel">
+    <aside id="deliverables-preview" className="preview-panel">
       <div className="preview-head">
         <div>
           <h2>{preview.title}</h2>
@@ -1175,10 +1189,12 @@ function PreviewPanel({ preview }) {
         </div>
         <button onClick={() => vscode.postMessage({ type: 'openArtifact', artifact: preview })}>Open in VS Code</button>
       </div>
-      {preview.kind === 'image' ? <img src={preview.uri} alt={preview.title} /> : null}
-      {preview.kind === 'pdf' ? <iframe title={preview.title} src={preview.uri} /> : null}
-      {preview.html ? <div className={`rendered-preview rendered-${preview.kind}`} dangerouslySetInnerHTML={{ __html: preview.html }} /> : null}
-      {!preview.html && preview.content ? <pre>{preview.content}</pre> : null}
+      <div className="preview-body">
+        {preview.kind === 'image' ? <img src={preview.uri} alt={preview.title} /> : null}
+        {preview.kind === 'pdf' ? <iframe title={preview.title} src={preview.uri} /> : null}
+        {preview.html ? <div className={`rendered-preview rendered-${preview.kind}`} dangerouslySetInnerHTML={{ __html: preview.html }} /> : null}
+        {!preview.html && preview.content ? <pre>{preview.content}</pre> : null}
+      </div>
       {preview.message ? <p className="subtle">{preview.message}</p> : null}
       {preview.truncated ? <p className="subtle">Preview truncated.</p> : null}
     </aside>
