@@ -98,13 +98,19 @@ def test_contract_graph_projects_control_nodes_loops_and_artifacts():
     edge_kinds = {edge["kind"] for edge in graph["edges"]}
 
     assert graph["metadata"]["source"] == "kernel_graph_projection"
+    assert graph["metadata"]["sdkGraphAuthority"] == "feedback_graph"
+    assert graph["metadata"]["topLevelNodeCount"] == 29
     assert graph["modes"] == ["pipeline", "control", "runtime"]
     assert "lit_review_gate" in node_ids
     assert "track_decomposition_gate" in node_ids
     assert "theory_track" in node_ids
     assert "experiment_track" in node_ids
+    assert "followup_lit_review" in node_ids
     assert "validation_gate" in node_ids
     assert "iterate_entry" not in node_ids
+    assert graph["metadata"]["subgraphs"]
+    assert graph["metadata"]["routers"]
+    assert graph["metadata"]["featureFlags"]
     assert "loop" in edge_kinds
     assert "fanout" in edge_kinds
     assert "fanin" in edge_kinds
@@ -129,13 +135,18 @@ def test_historical_contracts_compile_to_kernel_graph_spec():
     }
 
     assert graph.entry_stage_id == "persona_council"
+    assert len(graph.stages) == 29
     assert "lit_review_gate" in stages
     assert "track_decomposition_gate" in stages
     assert "theory_track" in stages
     assert "experiment_track" in stages
+    assert "followup_lit_review" in stages
     assert "validation_gate" in stages
     assert "iterate_entry" not in stages
     assert {"loop", "branch", "join"} <= route_kinds
+    assert stages["duality_gate"].routes[1].target == "followup_lit_review"
+    assert stages["duality_gate"].routes[1].max_visits == 2
+    assert stages["duality_gate"].routes[1].metadata["routeLabel"] == "failed"
     assert stages["writeup_agent"].adapter_id == "historical.writeup_agent"
     assert "artifacts/final_paper.md" in [
         artifact.path for artifact in stages["writeup_agent"].outputs

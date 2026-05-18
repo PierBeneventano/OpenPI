@@ -92,7 +92,7 @@ assert(uiSource.includes('deleteTargetForCampaign'));
 assert(uiSource.includes('deleteCampaignResult'));
 assert(uiSource.includes('campaignMatchesAny'));
 assert(uiSource.includes('Start automatically after creation'));
-assert(uiSource.includes('moonshotai/kimi-k2'));
+assert(uiSource.includes('tier default'));
 assert(uiSource.includes('Create and Start Campaign'));
 assert(uiSource.includes('Dry validation (no spend)'));
 assert(uiSource.includes('dryRun: true'));
@@ -135,8 +135,10 @@ assert(uiSource.includes('id="deliverables-preview"'));
 assert(uiSource.includes('Purpose'));
 assert(uiSource.includes('Validators'));
 assert(uiSource.includes('Preview'));
+assert(uiSource.includes('target research'));
 assert(uiSource.includes('consortium scaffold'));
-assert(uiSource.includes('live-smoke'));
+assert(uiSource.includes('standard'));
+assert(uiSource.includes('serious'));
 assert(uiSource.includes('consortium_budget'));
 assert(uiSource.includes('Bundle exports'));
 assert(!uiSource.includes('YAML exports'));
@@ -209,7 +211,7 @@ assert(mscCommand.prefixArgs.includes('--no-banner'));
 const args = extension.buildRunArgs({
   task: 'Smoke task',
   dryRun: true,
-  tier: 'budget',
+  tier: 'lean',
   outputFormat: 'markdown',
   budget: 20,
   counsel: false,
@@ -218,7 +220,7 @@ const args = extension.buildRunArgs({
 });
 assert.strictEqual(args[0], 'run');
 assert(args.includes('--dry-run'));
-assert(args.includes('--tier') && args.includes('budget'));
+assert(args.includes('--tier') && args.includes('lean'));
 assert(args.includes('--output-format') && args.includes('markdown'));
 assert(args.includes('--no-counsel'));
 assert(args.includes('--no-math'));
@@ -227,10 +229,10 @@ assert.strictEqual(args.includes('--model'), false);
 const attachedArgs = extension.buildRunArgs({
   task: 'Attached smoke',
   dryRun: true,
-  tier: 'budget',
+  tier: 'lean',
   outputFormat: 'markdown',
   budget: 20,
-  model: 'moonshotai/kimi-k2',
+  model: 'gpt-5-mini',
   maxRunSeconds: 3600,
   counsel: false,
   math: false,
@@ -241,23 +243,23 @@ const attachedArgs = extension.buildRunArgs({
 assert(attachedArgs.includes('--campaign-id') && attachedArgs.includes('demo-campaign'));
 assert(attachedArgs.includes('--campaign-root') && attachedArgs.includes(root));
 assert(attachedArgs.includes('--campaign-graph-version') && attachedArgs.includes('1'));
-assert(attachedArgs.includes('--model') && attachedArgs.includes('moonshotai/kimi-k2'));
+assert(attachedArgs.includes('--model') && attachedArgs.includes('gpt-5-mini'));
 assert(attachedArgs.includes('--max-run-seconds') && attachedArgs.includes('3600'));
-const liveSmokeOptions = extension.normalizeRunOptions({
-  task: 'Live smoke task',
+const scaffoldOptions = extension.normalizeRunOptions({
+  task: 'Scaffold task',
   dryRun: false,
-  tier: 'live-smoke',
+  tier: 'scaffold',
   outputFormat: 'markdown',
   budget: 1,
-  model: 'moonshotai/kimi-k2',
+  model: 'gpt-5-mini',
   maxRunSeconds: 3600,
   allowSpend: true,
   confirmation: 'RUN LOCAL'
 });
-assert.strictEqual(liveSmokeOptions.tier, 'live-smoke');
-assert.strictEqual(liveSmokeOptions.model, 'moonshotai/kimi-k2');
-assert.strictEqual(liveSmokeOptions.maxRunSeconds, 3600);
-assert.strictEqual(extension.validateRunOptions(liveSmokeOptions), null);
+assert.strictEqual(scaffoldOptions.tier, 'scaffold');
+assert.strictEqual(scaffoldOptions.model, 'gpt-5-mini');
+assert.strictEqual(scaffoldOptions.maxRunSeconds, 3600);
+assert.strictEqual(extension.validateRunOptions(scaffoldOptions), null);
 assert.strictEqual(
   extension.validateRunOptions({ task: 'Spend', dryRun: false, budget: 20, allowSpend: false, confirmation: '' }),
   'Real local execution requires allow spend plus confirmation text RUN LOCAL.'

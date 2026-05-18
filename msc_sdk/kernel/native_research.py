@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from ..research_tiers import TARGET_WORKFLOW_STAGE_IDS
+
 from .engine import ResearchKernel
 from .models import (
     GraphSpec,
@@ -26,59 +28,15 @@ KERNEL_NATIVE_STAGE_IDS = (
     "research_plan_writeup_agent",
 )
 
-KERNEL_NATIVE_SCAFFOLD_STAGE_IDS = (
-    "persona_council",
-    "literature_review_agent",
-    "lit_review_gate",
-    "brainstorm_agent",
-    "brainstorm_artifact_gate",
-    "formalize_goals_entry",
-    "formalize_goals_agent",
-    "research_plan_writeup_agent",
-    "track_decomposition_gate",
-    "milestone_goals",
-    "theory_track",
-    "math_literature_agent",
-    "math_proposer_agent",
-    "goal_tag_validation_gate",
-    "math_prover_agent",
-    "math_rigorous_verifier_agent",
-    "human_review_gate",
-    "math_empirical_verifier_agent",
-    "proof_transcription_agent",
-    "theory_track_repair_gate",
-    "experiment_track",
-    "experiment_literature_agent",
-    "experiment_design_agent",
-    "experimentation_agent",
-    "experiment_verification_agent",
-    "experiment_transcription_agent",
-    "track_merge",
-    "verify_completion",
-    "formalize_results_agent",
-    "duality_check",
-    "duality_gate",
-    "followup_lit_review",
-    "resource_preparation_agent",
-    "paper_contract_builder",
-    "writeup_agent",
-    "writeup_artifact_gate",
-    "proofreading_entry",
-    "proofreading_agent",
-    "proofread_gate",
-    "reviewer_agent",
-    "review_gate",
-    "milestone_review",
-    "validation_gate",
-)
+KERNEL_NATIVE_SCAFFOLD_STAGE_IDS = TARGET_WORKFLOW_STAGE_IDS
 
 ROUTE_CONDITIONS_BY_STAGE = {
     "lit_review_gate": ("feasible",),
     "brainstorm_artifact_gate": ("valid",),
     "milestone_goals": ("math_enabled_and_theory_questions", "empirical_questions_or_default"),
-    "theory_track": ("expanded_control_view",),
+    "theory_track": ("track_complete_or_skipped",),
     "theory_track_repair_gate": ("theory_complete",),
-    "experiment_track": ("expanded_control_view",),
+    "experiment_track": ("track_complete_or_skipped",),
     "verify_completion": ("complete",),
     "duality_gate": ("pass",),
     "writeup_artifact_gate": ("valid",),
@@ -130,6 +88,17 @@ def register_declared_noop_tools(registry: ToolRegistry, graph: GraphSpec) -> No
 
 
 def _persona_council(context: RuntimeContext) -> None:
+    context.run_council(
+        prompt=context.run.objective,
+        member_outputs={
+            "claude-opus-4-6": "Practical compass accepts the direction.",
+            "gpt-5.4": "Rigor and novelty lens accepts with measurable goals.",
+            "gemini-3.1-pro-preview": "Narrative lens accepts the framing.",
+        },
+        verdict="accept",
+        passed=True,
+        metadata={"adapter": "kernel_native"},
+    )
     _write_if_declared(
         context,
         "artifacts/persona_debate.md",
@@ -217,6 +186,14 @@ def _research_plan(context: RuntimeContext) -> None:
 
 def _generic_stage(stage_id: str):
     def run(context: RuntimeContext) -> dict[str, list[str]] | None:
+        if context.stage.council_policy.kind in {"model_council", "duality_check"}:
+            context.run_council(
+                prompt=f"Evaluate {context.stage.title}.",
+                member_outputs=_council_member_outputs(context.stage.council_policy.kind),
+                verdict="pass",
+                passed=True,
+                metadata={"adapter": "kernel_native"},
+            )
         for artifact in context.stage.outputs:
             context.write_artifact(artifact, _artifact_content(stage_id, artifact.path, artifact.kind))
         conditions = ROUTE_CONDITIONS_BY_STAGE.get(stage_id)
@@ -225,6 +202,21 @@ def _generic_stage(stage_id: str):
         return None
 
     return run
+
+
+def _council_member_outputs(kind: str) -> dict[str, str]:
+    if kind == "duality_check":
+        return {
+            "claude-opus-4-6": "Practical meaning and technical defensibility both pass.",
+        }
+    if kind == "model_council":
+        return {
+            "claude-opus-4-6": "Strong specialist result.",
+            "gpt-5.4": "Independent critique agrees.",
+        }
+    if kind == "deterministic_gate":
+        return {}
+    return {}
 
 
 def _artifact_content(stage_id: str, path: str, kind: str) -> object:

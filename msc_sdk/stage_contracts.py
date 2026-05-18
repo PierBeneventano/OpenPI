@@ -15,12 +15,19 @@ from typing import Any, Iterable
 from .kernel import (
     ArtifactSpec,
     BudgetPolicy as KernelBudgetPolicy,
+    CouncilPolicy,
     FailurePolicy,
     GraphSpec,
     InputSpec,
     RouteSpec,
     StageSpec,
 )
+from .feedback_graph import (
+    state_field_contracts_for_stage,
+    subgraph_for_stage,
+    target_research_graph_template,
+)
+from .research_tiers import TARGET_RESEARCH_TEMPLATE, TARGET_WORKFLOW_STAGE_IDS, template_metadata
 
 
 CONTRACT_GRAPH_VERSION = 1
@@ -95,6 +102,7 @@ class StageContract:
     optional_artifacts: tuple[ArtifactContract, ...] = ()
     validators: tuple[str, ...] = ()
     tool_families: tuple[str, ...] = ()
+    council_policy: str = "none"
     budget_policy: BudgetPolicy = field(default_factory=BudgetPolicy)
     human_pause_policy: tuple[str, ...] = ()
     failure_policy: str = "stop_and_await_human_feedback"
@@ -130,7 +138,7 @@ def get_stage_contract(node_id: str) -> StageContract:
 
 
 def template_names() -> set[str]:
-    return {"consortium_scaffold", "consortium_budget", "literature_only", "experiment_design", "blank"}
+    return {TARGET_RESEARCH_TEMPLATE, "consortium_scaffold", "consortium_budget", "literature_only", "experiment_design", "blank"}
 
 
 def template_node_ids(template: str) -> list[str]:
@@ -158,14 +166,12 @@ def template_node_ids(template: str) -> list[str]:
             "experiment_literature_agent",
             "experiment_design_agent",
         ]
-    # Scaffold and budget project the full historical engine, including control
-    # nodes and the theory/math track, before any fresh run begins. Revision
-    # mode nodes remain registered but are only projected into revision-specific
-    # graphs later.
+    if template == TARGET_RESEARCH_TEMPLATE:
+        return [node_id for node_id in TARGET_WORKFLOW_STAGE_IDS if node_id in contracts_by_id()]
+    # Scaffold and budget now project the target workflow shape, while keeping
+    # their old names as compatibility aliases for existing commands/tests.
     return [
-        contract.id
-        for contract in historical_stage_contracts()
-        if contract.metadata.get("graph_scope", "runtime") == "runtime"
+        node_id for node_id in TARGET_WORKFLOW_STAGE_IDS if node_id in contracts_by_id()
     ]
 
 
@@ -217,6 +223,7 @@ def project_kernel_graph(
 ) -> dict[str, Any]:
     """Project a kernel graph spec into the product graph JSON shape."""
 
+    graph_template = target_research_graph_template()
     nodes = [
         _stage_node(stage, campaign_id=campaign_id, template=template, tier=tier, order=order)
         for order, stage in enumerate(graph.stages, start=1)
@@ -249,7 +256,10 @@ def project_kernel_graph(
             "kernelGraphId": graph.id,
             "template": template,
             "includesControlNodes": True,
+            "sdkGraphAuthority": "feedback_graph",
+            "topLevelNodeCount": len(graph_template.main_stage_ids),
             "graphEdits": "proposal_only",
+            **template_metadata(template, tier),
         },
     }
 
@@ -294,12 +304,33 @@ def _stage_spec_from_contract(
         "legacy_runtime_mapping": dict(contract.legacy_runtime_mapping),
         "human_pause_policy": list(contract.human_pause_policy),
         "failure_policy": contract.failure_policy,
+        "council_policy": _council_policy_for_contract(contract),
         "budget_policy": contract.budget_policy.to_dict(tier="kernel", budget_share_usd=budget_share),
         "required_artifact_contracts": [artifact.to_dict() for artifact in contract.required_artifacts],
         "optional_artifact_contracts": [artifact.to_dict() for artifact in contract.optional_artifacts],
     }
+    field_contracts = state_field_contracts_for_stage(contract.id)
+    if field_contracts:
+        metadata["state_field_contracts"] = [field.to_dict() for field in field_contracts]
+        metadata["state_reads"] = [
+            field.field for field in field_contracts if field.direction in {"read", "read_write"}
+        ]
+        metadata["state_writes"] = [
+            field.field for field in field_contracts if field.direction in {"write", "read_write"}
+        ]
+    router = target_research_graph_template().router_map().get(contract.id)
+    if router is not None:
+        metadata["router_spec"] = router.to_dict()
+    subgraph = subgraph_for_stage(contract.id)
+    if subgraph is not None:
+        metadata["subgraph_spec"] = subgraph.to_dict()
+        metadata["subgraph_id"] = subgraph.id
+        if contract.id == subgraph.id:
+            metadata["subgraph_collapsed_by_default"] = True
+    if contract.legacy_runtime_mapping:
+        metadata["adapter"] = "legacy_langgraph"
     routes = tuple(
-        _route_spec(route)
+        _route_spec(route, source_stage_id=contract.id)
         for route in contract.allowed_routes
         if route.target in included_stage_ids
     )
@@ -327,13 +358,17 @@ def _stage_spec_from_contract(
         ),
         validator_ids=tuple(contract.validators),
         tool_ids=tuple(contract.tool_families),
+        council_policy=CouncilPolicy(kind=_council_policy_for_contract(contract)),
         adapter_id=f"historical.{contract.id}",
         budget=KernelBudgetPolicy(max_usd=budget_share, spend_allowed=contract.budget_policy.spend),
         failure=FailurePolicy(mode="stop_for_human"),
         routes=routes,
         pause_before=any(policy.startswith("before_") for policy in contract.human_pause_policy),
         pause_after=any(policy.startswith("after_") for policy in contract.human_pause_policy),
-        metadata=metadata,
+        metadata={
+            **metadata,
+            **({"requires_duality_pass": True, "duality_required": True} if _requires_duality_pass(contract.id) else {}),
+        },
     )
 
 
@@ -348,18 +383,65 @@ def _artifact_spec(artifact: ArtifactContract, *, required: bool) -> ArtifactSpe
         path=artifact.path,
         kind=artifact.kind,
         required=required,
-        role="deliverable" if required else "diagnostic",
+        role="deliverable" if required else "evidence",
         description=artifact.description,
     )
 
 
-def _route_spec(route: RouteContract) -> RouteSpec:
+def _council_policy_for_contract(contract: StageContract) -> str:
+    if contract.council_policy != "none":
+        return contract.council_policy
+    if contract.id == "persona_council":
+        return "persona_council"
+    if contract.id == "duality_check":
+        return "duality_check"
+    if contract.kind in {"gate", "router", "control", "approval", "validator"}:
+        return "deterministic_gate"
+    if "counsel" in contract.tool_families or "ensemble_review_optional" in contract.tool_families:
+        return "model_council"
+    return "none"
+
+
+def _requires_duality_pass(stage_id: str) -> bool:
+    return stage_id in {
+        "resource_preparation_agent",
+        "paper_contract_builder",
+        "writeup_agent",
+        "writeup_artifact_gate",
+        "proofreading_entry",
+        "proofreading_agent",
+        "proofread_gate",
+        "reviewer_agent",
+        "review_gate",
+        "milestone_review",
+        "validation_gate",
+    }
+
+
+def _route_spec(route: RouteContract, *, source_stage_id: str) -> RouteSpec:
+    route_metadata: dict[str, Any] = {"legacy_kind": route.kind}
+    router = target_research_graph_template().router_map().get(source_stage_id)
+    if router is not None:
+        branch = _router_branch_for_route(router, route)
+        if branch is not None:
+            route_metadata["routerId"] = router.id
+            route_metadata["routeLabel"] = branch.label
+            route_metadata["terminal"] = branch.terminal
+            if branch.expression:
+                route_metadata["expression"] = branch.expression
+            if branch.feature_flag:
+                route_metadata["featureFlag"] = branch.feature_flag
+            if branch.retry:
+                route_metadata["retry"] = branch.retry.to_dict()
+            if branch.metadata:
+                route_metadata["branchMetadata"] = dict(branch.metadata)
     return RouteSpec(
         target=route.target,
         condition=route.condition,
         kind=_route_kind(route.kind),
+        max_visits=_max_visits_for_route(source_stage_id, route),
         description=route.description,
-        metadata={"legacy_kind": route.kind},
+        metadata=route_metadata,
     )
 
 
@@ -390,6 +472,29 @@ def _route_kind(kind: str) -> str:
     }.get(kind, "next")
 
 
+def _router_branch_for_route(router: Any, route: RouteContract) -> Any | None:
+    for branch in router.branches:
+        if branch.target == route.target and branch.label == route.condition:
+            return branch
+    for branch in router.branches:
+        if branch.target == route.target:
+            return branch
+    for branch in router.branches:
+        if branch.label == route.condition:
+            return branch
+    return None
+
+
+def _max_visits_for_route(source_stage_id: str, route: RouteContract) -> int | None:
+    router = target_research_graph_template().router_map().get(source_stage_id)
+    if router is None:
+        return None
+    branch = _router_branch_for_route(router, route)
+    if branch is None or branch.retry is None:
+        return None
+    return branch.retry.max_attempts
+
+
 def _stage_node(
     stage: StageSpec,
     *,
@@ -409,8 +514,20 @@ def _stage_node(
             "toolFamilies": list(stage.tool_ids),
             "humanPausePolicy": list(metadata.get("human_pause_policy") or []),
             "failurePolicy": metadata.get("failure_policy") or stage.failure.mode,
+            "councilPolicy": stage.council_policy.to_dict(),
+            "tierPolicy": template_metadata(template, tier)["tierPolicy"],
+            "modelPolicy": template_metadata(template, tier)["modelPolicy"],
+            "dualityRequired": bool(metadata.get("duality_required") or stage.id == "duality_check"),
+            "requiresDualityPass": bool(metadata.get("requires_duality_pass")),
             "allowedRoutes": [_route_edge(stage.id, route) for route in stage.routes],
             "legacyRuntimeMapping": dict(metadata.get("legacy_runtime_mapping") or {}),
+            "adapter": metadata.get("adapter") or "legacy_langgraph",
+            "routerSpec": metadata.get("router_spec"),
+            "subgraphSpec": metadata.get("subgraph_spec"),
+            "subgraphId": metadata.get("subgraph_id"),
+            "stateReads": list(metadata.get("state_reads") or []),
+            "stateWrites": list(metadata.get("state_writes") or []),
+            "stateFieldContracts": list(metadata.get("state_field_contracts") or []),
             "requiredArtifactContracts": [
                 _artifact_contract_dict(artifact) for artifact in stage.outputs if artifact.required
             ],

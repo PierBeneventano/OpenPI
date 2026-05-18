@@ -38,9 +38,9 @@ def campaigns_list(ctx: click.Context, as_json: bool) -> None:
 @campaigns.command("create")
 @click.option("--title", required=True, help="Campaign title.")
 @click.option("--objective", required=True, help="Research objective.")
-@click.option("--template", default="consortium_scaffold", show_default=True, help="Campaign template.")
+@click.option("--template", default="target_research", show_default=True, help="Campaign template.")
 @click.option("--budget", type=float, default=1.0, show_default=True, help="Campaign budget cap in USD.")
-@click.option("--tier", default="budget", show_default=True, help="Default model tier.")
+@click.option("--tier", default="standard", show_default=True, help="Default model tier.")
 @click.option("--output-format", default="markdown", show_default=True, help="Default output format.")
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
 @click.pass_context
@@ -563,3 +563,109 @@ def campaigns_summarize_artifacts(ctx: click.Context, campaign_ref: str, as_json
         f"{data['campaign']}: {data['existing']}/{data['total']} artifacts existing, "
         f"{data['missing_required']} required missing"
     )
+
+
+@campaigns.command("inspect-budget")
+@click.argument("campaign_ref")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_inspect_budget(ctx: click.Context, campaign_ref: str, as_json: bool) -> None:
+    """Inspect campaign budget and tier posture."""
+    data = CampaignClient(ctx.obj["campaign_root"]).inspect_budget(campaign_ref)
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(f"{data['campaign']}: tier={data.get('tier')} cap=${data.get('budget_cap_usd')}")
+
+
+@campaigns.command("diagnose-execution")
+@click.argument("campaign_ref")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_diagnose_execution(ctx: click.Context, campaign_ref: str, as_json: bool) -> None:
+    """Read-only liveness/failure diagnosis for OpenClaude."""
+    data = CampaignClient(ctx.obj["campaign_root"]).diagnose_execution(campaign_ref)
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(f"{data['campaign']}: {data['diagnosis']}")
+
+
+@campaigns.command("request-evidence")
+@click.argument("campaign_ref")
+@click.option("--question", required=True, help="Evidence question to record.")
+@click.option("--node", "node_id", default=None, help="Optional graph node target.")
+@click.option("--artifact-path", default=None, help="Optional artifact path target.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_request_evidence(
+    ctx: click.Context,
+    campaign_ref: str,
+    question: str,
+    node_id: str | None,
+    artifact_path: str | None,
+    as_json: bool,
+) -> None:
+    """Record a request for missing or clearer evidence."""
+    data = CampaignClient(ctx.obj["campaign_root"]).request_evidence(
+        campaign_ref,
+        question=question,
+        node_id=node_id,
+        artifact_path=artifact_path,
+    )
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(f"{data['campaign_id']}: evidence requested")
+
+
+@campaigns.command("propose-repair")
+@click.argument("campaign_ref")
+@click.option("--node", "node_id", default=None, help="Optional stage/node to repair.")
+@click.option("--reason", default="", help="Repair reason.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_propose_repair(
+    ctx: click.Context,
+    campaign_ref: str,
+    node_id: str | None,
+    reason: str,
+    as_json: bool,
+) -> None:
+    """Create a bounded repair proposal for human approval."""
+    data = CampaignClient(ctx.obj["campaign_root"]).propose_repair(campaign_ref, node_id=node_id, reason=reason)
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(f"{data['campaign_id']}: repair proposal pending approval")
+
+
+@campaigns.command("change-tier-model")
+@click.argument("campaign_ref")
+@click.option("--tier", default=None, help="Target tier.")
+@click.option("--model", default=None, help="Target model override.")
+@click.option("--node", "node_id", default=None, help="Optional stage/node override target.")
+@click.option("--reason", default="", help="Reason for the policy change.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_change_tier_model(
+    ctx: click.Context,
+    campaign_ref: str,
+    tier: str | None,
+    model: str | None,
+    node_id: str | None,
+    reason: str,
+    as_json: bool,
+) -> None:
+    """Propose a model or tier policy change."""
+    data = CampaignClient(ctx.obj["campaign_root"]).change_tier_model(
+        campaign_ref,
+        tier=tier,
+        model=model,
+        node_id=node_id,
+        reason=reason,
+    )
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(f"{data['campaign_id']}: model/tier proposal pending approval")

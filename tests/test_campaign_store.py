@@ -305,6 +305,75 @@ def test_failure_recovery_decision_is_researcher_readable(tmp_path: Path):
     assert decision["reason"] == "Recursion limit of 25 reached without hitting a stop condition."
 
 
+def test_dry_run_passed_is_not_projected_as_execution_failure(tmp_path: Path):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Dry Run Demo",
+        objective="Validate autostart dry-run projection.",
+        template="target_research",
+        budget=1,
+    )
+    run = store.record_run_started("dry-run-demo", command=["msc", "run", "--dry-run"], pid=43)
+    result = store.record_run_exited("dry-run-demo", run["run_id"], exit_code=0, status="dry_run_passed")
+
+    workspace = store.workspace_read_model("dry-run-demo")
+    events = [event["type"] for event in store.events("dry-run-demo")["events"]]
+
+    assert result["approval"] is None
+    assert "CampaignExecutionCompleted" in events
+    assert "CampaignExecutionFailed" not in events
+    assert workspace["campaign"]["status"] == "approved"
+    assert workspace["execution"]["status"] == "dry_run_passed"
+    assert workspace["pending_decisions"] == []
+    assert workspace["safe_next_actions"] == ["review-deliverables", "record-feedback", "rerun-stage"]
+
+
+def test_legacy_spurious_dry_run_failure_recovery_is_hidden(tmp_path: Path):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Legacy Dry Run Bug Demo",
+        objective="Ignore old dry-run success events that were mislabeled as failures.",
+        template="target_research",
+        budget=1,
+    )
+    run = store.record_run_started("legacy-dry-run-bug-demo", command=["msc", "run", "--dry-run"], pid=44)
+    run_id = run["run_id"]
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE runs SET status=?, exited_at=?, exit_code=? WHERE id=?",
+            ("dry_run_passed", "2026-05-18T00:00:00Z", 0, run_id),
+        )
+        store._append_event(
+            conn,
+            campaign_id="legacy-dry-run-bug-demo",
+            event_type="RunExited",
+            actor="runner",
+            payload={"run_id": run_id, "status": "dry_run_passed", "exit_code": 0},
+        )
+        store._append_event(
+            conn,
+            campaign_id="legacy-dry-run-bug-demo",
+            event_type="CampaignExecutionFailed",
+            actor="runner",
+            payload={"execution_id": run_id, "run_id": run_id, "status": "dry_run_passed", "exit_code": 0},
+        )
+        store._create_approval(
+            conn,
+            campaign_id="legacy-dry-run-bug-demo",
+            target_type="failure_recovery",
+            target_id=run_id,
+            actor="runner",
+            metadata={"run_id": run_id, "exit_code": 0, "reason": None},
+        )
+
+    workspace = store.workspace_read_model("legacy-dry-run-bug-demo")
+
+    assert workspace["campaign"]["status"] == "approved"
+    assert workspace["execution"]["status"] == "dry_run_passed"
+    assert workspace["pending_decisions"] == []
+    assert workspace["safe_next_actions"] == ["review-deliverables", "record-feedback", "rerun-stage"]
+
+
 def test_campaign_event_projector_is_independent_of_store(tmp_path: Path):
     events = [
         {

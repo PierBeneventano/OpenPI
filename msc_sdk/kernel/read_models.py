@@ -10,7 +10,12 @@ from typing import Any, Iterable
 from .models import EventRecord
 
 
-TERMINAL_RUN_EVENTS = {"RunCompleted", "RunFailed"}
+TERMINAL_RUN_EVENTS = {
+    "RunCompleted",
+    "RunFailed",
+    "CampaignExecutionCompleted",
+    "CampaignExecutionFailed",
+}
 TERMINAL_STAGE_EVENTS = {"StageCompleted", "HumanDecisionRequired"}
 
 
@@ -68,6 +73,8 @@ class KernelRunReadModel:
     budget_spent_usd: float = 0.0
     stages: dict[str, KernelStageReadModel] = field(default_factory=dict)
     completed_stage_ids: list[str] = field(default_factory=list)
+    councils: list[dict[str, Any]] = field(default_factory=list)
+    duality_status: dict[str, Any] = field(default_factory=dict)
 
     def stage_list(self) -> list[KernelStageReadModel]:
         return list(self.stages.values())
@@ -82,6 +89,8 @@ class KernelRunReadModel:
             "workspace": self.workspace,
             "budget_spent_usd": self.budget_spent_usd,
             "completed_stage_ids": list(self.completed_stage_ids),
+            "councils": list(self.councils),
+            "duality_status": dict(self.duality_status),
             "stages": [stage.to_dict() for stage in self.stage_list()],
         }
 
@@ -107,17 +116,19 @@ def project_run(events: Iterable[EventRecord]) -> KernelRunReadModel:
         event_type = str(event.type)
         stage_id = str(payload.get("stage_id") or "")
 
-        if event_type == "RunStarted":
+        if event_type in {"RunStarted", "CampaignExecutionStarted"}:
             model.status = "running"
             model.objective = str(payload.get("objective") or "")
             model.graph_id = str(payload.get("graph_id") or "")
             model.workspace = str(payload.get("workspace") or "")
-        elif event_type == "RunCompleted":
+        elif event_type in {"RunResumed", "CampaignExecutionResumed"}:
+            model.status = "running"
+        elif event_type in {"RunCompleted", "CampaignExecutionCompleted"}:
             model.status = "completed"
             model.completed_stage_ids = [
                 str(stage) for stage in payload.get("completed_stage_ids") or []
             ]
-        elif event_type == "RunFailed":
+        elif event_type in {"RunFailed", "CampaignExecutionFailed"}:
             model.status = "human_decision_required"
         elif event_type == "StageStarted" and stage_id:
             stage = _stage(model, stage_id)
@@ -154,6 +165,24 @@ def project_run(events: Iterable[EventRecord]) -> KernelRunReadModel:
             stage = _stage(model, stage_id)
             stage.pending_decision_id = str(payload.get("decision_id") or stage.pending_decision_id or "") or None
             stage.decision_status = str(payload.get("status") or "")
+        elif event_type in {"CouncilStarted", "CouncilVerdictRecorded", "CouncilSynthesisRecorded"}:
+            model.councils.append({"type": event_type, "created_at": event.created_at, **payload})
+        elif event_type == "DualityCheckStarted":
+            model.duality_status = {
+                **model.duality_status,
+                "status": "running",
+                "stage_id": stage_id or payload.get("stage_id"),
+                "started_at": event.created_at,
+            }
+        elif event_type == "DualityCheckCompleted":
+            model.duality_status = {
+                **model.duality_status,
+                "status": "passed" if payload.get("passed") else "failed",
+                "stage_id": stage_id or payload.get("stage_id"),
+                "completed_at": event.created_at,
+                "verdict": payload.get("verdict"),
+                "metadata": dict(payload.get("metadata") or {}),
+            }
         elif event_type == "StageCompleted" and stage_id:
             stage = _stage(model, stage_id)
             stage.status = "completed"

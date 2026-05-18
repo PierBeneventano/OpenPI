@@ -464,9 +464,13 @@ async function createCampaignDraftForSession(session, draft) {
     return;
   }
   const budget = normalizeBudget(draft.budgetCap);
-  const tier = oneOf(draft.tier, ['live-smoke', 'budget', 'light', 'medium', 'pro', 'max', 'ultra'], 'budget');
+  const tier = oneOf(draft.tier, ['scaffold', 'lean', 'standard', 'serious', 'ultra'], 'standard');
   const outputFormat = oneOf(draft.outputFormat, ['markdown', 'latex'], 'markdown');
-  const template = oneOf(draft.template, ['consortium_scaffold', 'consortium_budget', 'literature_only', 'experiment_design', 'blank'], 'consortium_scaffold');
+  const template = oneOf(
+    draft.template,
+    ['target_research', 'consortium_scaffold', 'consortium_budget', 'literature_only', 'experiment_design', 'blank'],
+    'target_research',
+  );
   const result = await runJson(session.root, [
     'campaigns',
     '--root',
@@ -1330,6 +1334,9 @@ async function startCampaignExecution(session, message) {
       signal: signal || null
     };
     appendRunLog(session, 'system', `Process exited with code ${code == null ? 'null' : code}${signal ? ` (${signal})` : ''}.`);
+    if (code !== 0) {
+      session.state.actionError = `Campaign execution command failed with code ${code == null ? 'null' : code}${signal ? ` (${signal})` : ''}. Check the process log for details.`;
+    }
     await refresh(session);
   });
   return true;
@@ -1339,7 +1346,7 @@ function normalizeRunOptions(message) {
   return {
     task: String(message.task || '').trim(),
     dryRun: message.dryRun !== false,
-    tier: oneOf(message.tier, ['live-smoke', 'budget', 'light', 'medium', 'pro', 'max', 'ultra'], 'budget'),
+    tier: oneOf(message.tier, ['scaffold', 'lean', 'standard', 'serious', 'ultra'], 'standard'),
     outputFormat: oneOf(message.outputFormat, ['markdown', 'latex'], 'markdown'),
     budget: normalizeBudget(message.budget),
     model: String(message.model || '').trim(),

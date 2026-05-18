@@ -94,14 +94,15 @@ Required fix:
 Bridge the runner to the campaign event store:
 
 ```text
-RunStarted
+CampaignExecutionStarted
 GraphNodeStatusChanged
 ArtifactIndexed
 ValidationPassed
 ValidationFailed
 ApprovalRequested
 InstructionSent
-RunExited
+CampaignExecutionCompleted
+CampaignExecutionFailed
 ```
 
 ## 5. Human-In-The-Loop Pauses Are Not First-Class
@@ -284,7 +285,7 @@ Symptoms:
 
 ```text
 tests cover pieces of CLI/UI/store
-no full local campaign run event bridge test
+no full local campaign execution event bridge test
 no graph contract validation suite
 no OpenClaude steering command contract tests
 ```
@@ -298,7 +299,7 @@ Required fix:
 Add contract tests for stage definitions, graph IR, event emission, artifact
 indexing, approval pauses, and OpenClaude-safe CLI operations.
 
-## 13. Runs Are Not Isolated As First-Class Views
+## 13. Execution Attempts Are Not Isolated As Internal Views
 
 Symptoms:
 
@@ -317,9 +318,12 @@ can make failed or partial runs look healthier than they are.
 
 Required fix:
 
-Make runs first-class product objects in the cockpit. The campaign graph should
-support a selected run overlay, a latest-run default, and a separate campaign
-history/timeline view. Runtime status must be scoped by `run_id`.
+Keep runs/execution attempts as internal metadata, but make their projections
+explicit enough that the cockpit can distinguish current execution, latest
+execution, and all-time campaign history. The campaign remains the
+researcher-facing research attempt. Runtime status must be scoped internally by
+`run_id` or equivalent process/session metadata before it is projected onto the
+campaign graph.
 
 ## 14. Human Decision Required Has No Product Control Surface
 
@@ -328,7 +332,7 @@ Symptoms:
 ```text
 the runner can mark a campaign or stage as human_decision_required
 the VS Code UI does not expose approve/reject/resume/reroute/rewrite controls
-there is no ergonomic way for OpenClaude or the researcher to move the run forward
+there is no ergonomic way for OpenClaude or the researcher to move the campaign forward
 failure recovery remains an internal implementation concept rather than a user decision
 ```
 
@@ -402,8 +406,9 @@ gravity is not the historical LangGraph workflow. It is the typed runtime
 kernel:
 
 ```text
-RunSpec -> GraphSpec -> StageSpec -> RuntimeContext -> ArtifactRecord
-        -> ValidationResult -> EventRecord -> ReadModel
+CampaignGoal -> ResearchGraphTemplate -> GraphSpec -> StageSpec
+        -> RuntimeContext -> ArtifactRecord -> ValidationResult
+        -> EventRecord -> ReadModel
 ```
 
 New implementation work should target `msc_sdk/kernel/` first and treat the
@@ -423,7 +428,7 @@ budget/model/tool policy = RuntimeContext-enforced
 artifact truth = schema validation + claim/evidence links
 stage preconditions = InputSpec resolution
 stage implementation = adapter registry binding
-product state = CampaignReadModel projection from KernelRunReadModel
+product state = CampaignReadModel projection from campaign execution read models
 campaign graph/artifact views = projection from campaign events
 ```
 
@@ -447,6 +452,7 @@ full scaffold happy path -> kernel-native adapters
 StageContract graph builders -> retired
 ```
 
-The LangGraph implementation should now be treated as proof/reference material.
-It may inform adapters, but it should not own product graph state, completion
+The LangGraph implementation and the raw researcher feedback snapshot should
+now be treated as source material for the scientific workflow. LangGraph may
+inform adapters, but it should not own product graph state, completion
 semantics, or researcher-facing runtime state.

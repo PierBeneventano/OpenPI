@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import click
 
-from consortium.cli.core.env_manager import build_runtime_env, get_runtime_env_sources
+from consortium.cli.core.env_manager import build_runtime_env, get_runtime_env_sources, load_env_vars
 from consortium.cli.core.paths import find_project_root
 from msc_sdk.openclaude import (
     DEFAULT_OPENCLAUDE_MODEL,
@@ -181,6 +182,7 @@ def openclaude_launch_cmd(
     env = build_runtime_env(
         config_dir_override=ctx.obj.get("config_dir"),
         repo_root=project_root,
+        base_env=_openclaude_base_env(ctx),
     )
     env["CLAUDE_CODE_USE_OPENAI"] = "1"
     env["OPENAI_API_KEY"] = env["OPENROUTER_API_KEY"]
@@ -196,13 +198,16 @@ def _project_root() -> Path:
 
 def _readiness(ctx: click.Context):
     project_root = _project_root()
+    base_env = _openclaude_base_env(ctx)
     env = build_runtime_env(
         config_dir_override=ctx.obj.get("config_dir"),
         repo_root=project_root,
+        base_env=base_env,
     )
     sources = get_runtime_env_sources(
         config_dir_override=ctx.obj.get("config_dir"),
         repo_root=project_root,
+        base_env=base_env,
     )
     return openclaude_readiness(
         project_root=project_root,
@@ -210,3 +215,11 @@ def _readiness(ctx: click.Context):
         openrouter_source=sources.get("OPENROUTER_API_KEY"),
         model=ctx.obj["openclaude_model"],
     )
+
+
+def _openclaude_base_env(ctx: click.Context) -> dict[str, str]:
+    base_env = dict(os.environ)
+    config_dir = ctx.obj.get("config_dir")
+    if config_dir and load_env_vars(config_dir).get("OPENROUTER_API_KEY"):
+        base_env.pop("OPENROUTER_API_KEY", None)
+    return base_env

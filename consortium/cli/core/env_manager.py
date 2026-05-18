@@ -216,8 +216,10 @@ def _merge_runtime_env(
                 env[key] = value
                 sources[key] = "repo-env"
 
-    for key, value in load_env_vars(config_dir_override).items():
-        if key in protected:
+    config_dir_values = load_env_vars(config_dir_override)
+    explicit_config_dir = config_dir_override is not None
+    for key, value in config_dir_values.items():
+        if key in protected and not explicit_config_dir:
             continue
         env[key] = value
         sources[key] = "config-dir"
@@ -235,9 +237,11 @@ def build_runtime_env(
     """Merge shell, config-dir, and repo-local env layers.
 
     Precedence:
-    1. Existing process environment
-    2. ~/.msc/.env
-    3. repo-root .env (only when explicitly allowed or running from repo root)
+    1. Explicit --config-dir values
+    2. Existing process environment
+    3. Default ~/.msc/.env values for missing keys
+    4. repo-root .env values for missing keys when explicitly allowed or
+       running from repo root
     """
     env, _ = _merge_runtime_env(
         config_dir_override=config_dir_override,

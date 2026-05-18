@@ -196,6 +196,8 @@ def campaign_model_from_kernel_run(kernel_run: KernelRunReadModel) -> CampaignRe
             "objective": kernel_run.objective,
             "graph_id": kernel_run.graph_id,
             "completed_stage_ids": list(kernel_run.completed_stage_ids),
+            "councils": list(kernel_run.councils),
+            "duality_status": dict(kernel_run.duality_status),
         },
         provenance={"source": "kernel_events"},
     )

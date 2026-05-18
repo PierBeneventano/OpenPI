@@ -560,7 +560,7 @@ function StartCampaignModal({ state, onClose }) {
   const [run, setRun] = useState({
     task: details.objective || details.description || '',
     dryRun: true,
-    tier: 'live-smoke',
+    tier: 'standard',
     outputFormat: 'markdown',
     budget: 1,
     counsel: false,
@@ -611,12 +611,10 @@ function StartCampaignModal({ state, onClose }) {
         <label>Campaign goal<textarea value={run.task} onChange={(event) => update('task', event.target.value)} required /></label>
         <div className="form-grid">
           <label>Execution profile<select value={run.tier} onChange={(event) => update('tier', event.target.value)}>
-            <option value="live-smoke">Live smoke</option>
-            <option value="budget">Budget</option>
-            <option value="light">Light</option>
-            <option value="medium">Medium</option>
-            <option value="pro">Pro</option>
-            <option value="max">Max</option>
+            <option value="scaffold">Scaffold</option>
+            <option value="lean">Lean</option>
+            <option value="standard">Standard</option>
+            <option value="serious">Serious</option>
             <option value="ultra">Ultra</option>
           </select></label>
           <label>Budget cap<input type="number" min="1" value={run.budget} onChange={(event) => update('budget', event.target.value)} /></label>
@@ -675,9 +673,17 @@ function GraphTab({ state, onPreviewArtifact }) {
           <dt>Purpose</dt><dd>{selectedNode?.purpose || '-'}</dd>
           <dt>Workspace</dt><dd>{selectedNode?.workspace || '-'}</dd>
           <dt>Budget</dt><dd>{formatBudget(selectedNode?.budget)}</dd>
+          <dt>Council</dt><dd>{formatCouncil(selectedNode?.councilPolicy)}</dd>
+          <dt>Tier</dt><dd>{selectedNode?.tierPolicy?.id || selectedNode?.tierPolicy?.label || '-'}</dd>
+          <dt>Duality</dt><dd>{selectedNode?.requiresDualityPass ? 'required before this stage' : selectedNode?.dualityRequired ? 'gate' : '-'}</dd>
           <dt>Tools</dt><dd>{(selectedNode?.tools || []).join(', ') || '-'}</dd>
           <dt>Validators</dt><dd>{(selectedNode?.validators || []).join(', ') || '-'}</dd>
           <dt>Pause</dt><dd>{(selectedNode?.pausePolicy || []).join(', ') || '-'}</dd>
+          <dt>Router</dt><dd>{formatRouter(selectedNode?.routerSpec)}</dd>
+          <dt>Retry Caps</dt><dd>{formatRetryCaps(selectedNode?.routerSpec)}</dd>
+          <dt>Subgraph</dt><dd>{formatSubgraph(selectedNode)}</dd>
+          <dt>State Reads</dt><dd>{(selectedNode?.stateReads || []).join(', ') || '-'}</dd>
+          <dt>State Writes</dt><dd>{(selectedNode?.stateWrites || []).join(', ') || '-'}</dd>
           <dt>Routes</dt><dd>{formatRoutes(selectedNode?.routes)}</dd>
           <dt>Failure</dt><dd>{selectedNode?.fail_reason || '-'}</dd>
         </dl>
@@ -1244,12 +1250,12 @@ function NewCampaignModal({ onClose }) {
     title: '',
     objective: '',
     budgetCap: 3,
-    tier: 'live-smoke',
+    tier: 'standard',
     outputFormat: 'markdown',
-    template: 'consortium_scaffold',
+    template: 'target_research',
     autoStart: true,
     dryRun: true,
-    model: 'moonshotai/kimi-k2',
+    model: '',
     maxRunSeconds: 3600,
     counsel: false,
     math: false,
@@ -1282,14 +1288,15 @@ function NewCampaignModal({ onClose }) {
         <div className="form-grid">
           <label>Budget cap<input type="number" min="1" value={draft.budgetCap} onChange={(event) => update('budgetCap', event.target.value)} /></label>
           <label>Tier<select value={draft.tier} onChange={(event) => update('tier', event.target.value)}>
-            {['live-smoke', 'budget', 'light', 'medium', 'pro', 'max', 'ultra'].map((tier) => <option key={tier} value={tier}>{tier}</option>)}
+            {['scaffold', 'lean', 'standard', 'serious', 'ultra'].map((tier) => <option key={tier} value={tier}>{tier}</option>)}
           </select></label>
           <label>Output<select value={draft.outputFormat} onChange={(event) => update('outputFormat', event.target.value)}>
             <option value="markdown">markdown</option>
             <option value="latex">latex</option>
           </select></label>
           <label>Template<select value={draft.template} onChange={(event) => update('template', event.target.value)}>
-            <option value="consortium_scaffold">consortium scaffold</option>
+            <option value="target_research">target research</option>
+            <option value="consortium_scaffold">consortium scaffold (legacy alias)</option>
             <option value="consortium_budget">consortium budget</option>
             <option value="literature_only">literature only</option>
             <option value="experiment_design">experiment design</option>
@@ -1305,7 +1312,7 @@ function NewCampaignModal({ onClose }) {
                   <option value="dry">Dry validation (no spend)</option>
                   <option value="real">Real local execution</option>
                 </select></label>
-                <label>Model<input value={draft.model} onChange={(event) => update('model', event.target.value)} /></label>
+                <label>Model<input value={draft.model} onChange={(event) => update('model', event.target.value)} placeholder="tier default" /></label>
                 <label>Max seconds<input type="number" min="1" value={draft.maxRunSeconds} onChange={(event) => update('maxRunSeconds', event.target.value)} /></label>
               </div>
               <div className="toggle-row">
@@ -1408,6 +1415,16 @@ function graphNodesFromState(state) {
       validators: node.metadata?.validators || [],
       pausePolicy: node.metadata?.humanPausePolicy || [],
       routes: node.metadata?.allowedRoutes || [],
+      councilPolicy: node.metadata?.councilPolicy || {},
+      tierPolicy: node.metadata?.tierPolicy || {},
+      modelPolicy: node.metadata?.modelPolicy || {},
+      dualityRequired: Boolean(node.metadata?.dualityRequired),
+      requiresDualityPass: Boolean(node.metadata?.requiresDualityPass),
+      routerSpec: node.metadata?.routerSpec || null,
+      subgraphSpec: node.metadata?.subgraphSpec || null,
+      subgraphId: node.metadata?.subgraphId || '',
+      stateReads: node.metadata?.stateReads || [],
+      stateWrites: node.metadata?.stateWrites || [],
       order: Number(node.metadata?.order || 0),
       status: node.status || 'unknown',
       workspace: node.workspace,
@@ -1672,7 +1689,40 @@ function formatBudget(budget) {
 
 function formatRoutes(routes) {
   if (!Array.isArray(routes) || !routes.length) return '-';
-  return routes.map((route) => `${route.target || '?'} (${route.kind || 'route'})`).join(', ');
+  return routes.map((route) => {
+    const label = route.metadata?.routeLabel || route.metadata?.condition || route.condition || 'always';
+    return `${label} -> ${route.target || '?'} (${route.kind || 'route'})`;
+  }).join(', ');
+}
+
+function formatRouter(router) {
+  if (!router || !Array.isArray(router.branches) || !router.branches.length) return '-';
+  return router.branches.map((branch) => {
+    const target = branch.terminal ? 'END' : (branch.target || '?');
+    return `${branch.label} -> ${target}`;
+  }).join(', ');
+}
+
+function formatRetryCaps(router) {
+  if (!router || !Array.isArray(router.branches)) return '-';
+  const caps = router.branches
+    .filter((branch) => branch.retry && branch.retry.max_attempts != null)
+    .map((branch) => `${branch.label}: ${branch.retry.max_attempts} via ${branch.retry.counter || 'counter'}`);
+  return caps.length ? caps.join(', ') : '-';
+}
+
+function formatSubgraph(node) {
+  if (!node) return '-';
+  if (!node.subgraphSpec) return node.subgraphId || '-';
+  const stages = Array.isArray(node.subgraphSpec.stageIds) ? node.subgraphSpec.stageIds.length : 0;
+  const label = node.subgraphSpec.metadata?.label || node.subgraphSpec.id || node.subgraphId;
+  return `${label}${stages ? ` (${stages} internal nodes)` : ''}`;
+}
+
+function formatCouncil(policy) {
+  if (!policy || !policy.kind || policy.kind === 'none') return '-';
+  const modelCount = Array.isArray(policy.model_ids) ? policy.model_ids.length : 0;
+  return `${String(policy.kind).replace(/_/g, ' ')}${modelCount ? ` (${modelCount} models)` : ''}`;
 }
 
 function basename(value) {

@@ -8,10 +8,32 @@ edited whenever the target changes.
 ## One Sentence
 
 The product is a local research campaign cockpit where a researcher defines one
-research goal, the SDK instantiates the proven LangGraph-derived research
-pipeline for that goal, and the researcher iteratively steers the campaign
-through structured human decision points until the campaign produces acceptable
+research goal, the SDK instantiates a council-and-gate research workflow for
+that goal, and OpenClaude helps the researcher steer the campaign through
+structured human decision points until the campaign produces acceptable
 research deliverables.
+
+## Researcher Feedback Snapshot
+
+[feedback.md](feedback.md) is a raw snapshot of the originating researcher's
+current target-engine intent. It should stay unedited as a dated reference
+point. It is not a code map and should not be treated as proof that the current
+runtime behaves exactly as described.
+
+The feedback is nevertheless important because it clarifies the scientific
+shape the product should preserve:
+
+- research direction is challenged by persona councils,
+- specialist stages can use model councils for high-stakes work,
+- scientific claims must pass explicit gates before paper generation,
+- duality checking is a required back-end gate before writeup,
+- revision should be possible from prior artifacts and researcher feedback,
+- the system should be steerable by an AI assistant working with the
+  researcher.
+
+The product architecture remains the SDK/event/read-model architecture in this
+document. The feedback describes desired research behavior that the SDK should
+make explicit, inspectable, and controllable.
 
 ## Core Product Promise
 
@@ -72,13 +94,16 @@ researcher to separately understand "campaign objective" versus "run task."
 The graph is the planned research workflow for the campaign goal. It should be
 visible when the campaign opens, before execution starts.
 
-The base graph template should be distilled from the current legacy LangGraph
-research pipeline because that pipeline is the proof that the method can
-produce strong papers when a human stays sufficiently involved.
+The base graph template should be distilled from the proven research method and
+the researcher's feedback snapshot. The old LangGraph implementation is useful
+source material, but its exact node count and internal topology are not the
+north-star product contract.
 
 The graph should include:
 
 - agent stages,
+- persona council stages,
+- optional model council execution modes,
 - gates,
 - joins,
 - loops,
@@ -89,13 +114,74 @@ The graph should include:
 
 The SDK should productize this graph as structured specs. That means the old
 LangGraph should not remain an opaque runtime authority, but the research
-method inside it should absolutely be preserved: its stage ordering, prompts,
-control logic, reroutes, and human-review dynamics are source material for the
-standard campaign template.
+method inside it should absolutely be preserved where it matches the desired
+scientific workflow: research framing, literature grounding, hypothesis and
+goal formalization, theory/experiment execution, evidence synthesis, duality
+checking, paper generation, critique, and revision.
 
 The graph should remain connected to execution: when a stage runs, blocks,
 reroutes, or is rerun with feedback, the graph node state should change through
 events.
+
+## Scientific Workflow Concepts
+
+The product should expose the core scientific mechanisms as understandable
+concepts, not hide them as backend trivia.
+
+**Persona councils** challenge the research direction from distinct lenses such
+as practical relevance, rigor/novelty, narrative strength, and empirical
+grounding. Their verdicts, objections, and synthesized proposal should be
+visible as first-class stage outputs.
+
+**Model councils** are a high-stakes execution posture for selected stages:
+multiple frontier models attempt the same specialist task, critique each other,
+and synthesize a consensus. In the UX, model councils should feel like a
+quality/spend mode on a stage rather than a separate subsystem the researcher
+must operate manually.
+
+**Duality check** is a required scientific gate before paper/writeup
+generation. It should verify that formalized results are both practically
+meaningful and technically/empirically defensible. Failing this gate should
+create a human decision with clear recovery routes rather than silently
+producing a paper.
+
+**Revision from prior artifacts** is a normal campaign continuation pattern.
+A researcher should be able to provide a prior paper, feedback, constraints, or
+new evidence and then rewind, reroute, or continue the campaign from the
+appropriate point.
+
+## Model And Tier Posture
+
+Model choices are product-visible because they affect quality, cost, and trust.
+The target defaults can differ from current code, but changes to these defaults
+should be intentional and documented.
+
+Target model roles:
+
+| Role | Target default |
+|---|---|
+| Practical persona | `claude-opus-4-6` |
+| Rigor/novelty persona | `gpt-5.4` |
+| Narrative persona | `gemini-3.1-pro-preview` |
+| Empirical-grounding persona | `claude-opus-4-6` |
+| Persona synthesis | `claude-opus-4-6` |
+| Duality check | `claude-opus-4-6` |
+| Model council members | `claude-opus-4-6`, `gpt-5.4`, `gemini-3.1-pro-preview`, `claude-sonnet-4-6` |
+| Model council synthesis | `claude-opus-4-6` |
+
+Target tier language:
+
+| Tier | Product meaning |
+|---|---|
+| `scaffold` | Zero-spend graph/artifact planning and UI validation. |
+| `lean` | Single-model execution for exploratory or low-cost campaigns. |
+| `standard` | Persona council plus single-model specialist stages. |
+| `serious` | Persona council, duality check, and model councils on selected high-stakes stages. |
+| `ultra` | Adds empirical-grounding persona and broad model-council use across critical stages. |
+
+The SDK should expose tier policy cleanly enough that OpenClaude can explain
+the quality/cost tradeoff, request approval for upgrades, and apply stage-level
+overrides without mutating hidden config files.
 
 ## Stage
 
@@ -148,8 +234,9 @@ the SDK boundary. They should not write status files as product truth.
 
 ## Events
 
-Events are the product source of truth. The UI, CLI, OpenClaude, OpenClaw, and
-tests should reconstruct campaign state from events and specs.
+Events are the product source of truth. The UI, CLI, OpenClaude, optional
+OpenClaw wrappers, and tests should reconstruct campaign state from events and
+specs.
 
 Important event families:
 
@@ -165,9 +252,13 @@ Important event families:
 - `InstructionSent`
 - `ApprovalRequested`
 - `ApprovalDecided`
+- `CouncilStarted`
+- `CouncilVerdictRecorded`
+- `DualityCheckCompleted`
 - `RouteSelected`
 - `StageRerunRequested`
-- `CampaignExecutionPaused`
+- `CampaignExecutionResumed`
+- `CampaignExecutionCheckpointed`
 - `CampaignExecutionCompleted`
 - `CampaignExecutionFailed`
 
@@ -235,6 +326,12 @@ quality and direction.
 The system should pause when continuing would be unsafe, ambiguous, expensive,
 or scientifically questionable.
 
+Bounded mechanical retries may be automatic when they are cheap,
+non-directional, and do not change the scientific meaning of the campaign.
+Scientific direction changes, failed gates, expensive work, budget increases,
+repair, reroute, and rewind decisions should pause for the researcher, with
+OpenClaude helping interpret the evidence and propose safe actions.
+
 A pause should explain:
 
 - what happened,
@@ -283,8 +380,8 @@ progresses and intervene at clear decision points.
 
 ## OpenClaude And OpenClaw
 
-OpenClaude should become a natural-language steering layer over the SDK. It
-should not bypass the SDK.
+OpenClaude is the primary local AI coworker for the product. It should become a
+natural-language steering layer over the SDK and should not bypass the SDK.
 
 OpenClaude should translate user intent into typed operations:
 
@@ -297,8 +394,12 @@ OpenClaude should translate user intent into typed operations:
 - inspect budget,
 - ask for missing evidence.
 
-OpenClaw should become a repair/execution assistant over the same event and
-operation model. It should not create another state authority.
+Capabilities that were historically described as OpenClaw supervision should be
+available through OpenClaude and the SDK: liveness explanation, failure
+classification, repair proposals, budget posture, task rewrites, reruns,
+reroutes, and artifact summaries. OpenClaw may remain a thin optional wrapper a
+researcher can place on top of the local product for convenience. It should not
+be core product architecture and must not create another state authority.
 
 ## What Must Not Happen
 
@@ -306,11 +407,14 @@ operation model. It should not create another state authority.
 - Do not treat arbitrary files as artifacts.
 - Do not use generated scaffold files as deliverables.
 - Do not discard the proven LangGraph research method.
+- Do not treat the exact old LangGraph node roster as the north-star product
+  contract.
 - Do not keep LangGraph as an opaque product architecture.
 - Do not let UI state, status JSON, and campaign events disagree without a
   clear source of truth.
 - Do not hide human decisions inside logs or prompts.
-- Do not let OpenClaude or OpenClaw mutate state outside typed SDK operations.
+- Do not let OpenClaude or optional OpenClaw wrappers mutate state outside typed
+  SDK operations.
 - Do not expose "runs" as a separate researcher-facing concept when the
   campaign itself is the research attempt.
 
@@ -323,6 +427,8 @@ Known deviations:
 - Some legacy execution code still exists as reference/proof material, but the
   target is to distill its successful research method into SDK-native graph and
   stage definitions.
+- The researcher's feedback snapshot describes the desired scientific workflow
+  more directly than the current legacy node roster does.
 - Some old result folders contain scaffold prompt files from earlier product
   behavior.
 - Some adapters are still thin wrappers rather than fully kernel-native stages.

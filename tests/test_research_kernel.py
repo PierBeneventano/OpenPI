@@ -67,13 +67,13 @@ def test_kernel_completes_only_when_required_artifacts_and_validators_pass(tmp_p
     assert outcomes[0].validation[0].validator_id == "required_artifacts_exist"
     assert all(result.passed for result in outcomes[0].validation)
     assert [event.type for event in events.events] == [
-        "RunStarted",
+        "CampaignExecutionStarted",
         "StageStarted",
         "ArtifactWritten",
         "ArtifactIndexed",
         "ValidationPassed",
         "StageCompleted",
-        "RunCompleted",
+        "CampaignExecutionCompleted",
     ]
 
 
@@ -98,7 +98,7 @@ def test_kernel_turns_missing_artifact_into_human_decision(tmp_path: Path):
         details={"missing": ["artifacts/research_plan.md"]},
     )
     assert "HumanDecisionRequired" in [event.type for event in events.events]
-    assert events.events[-1].type == "RunFailed"
+    assert events.events[-1].type == "CampaignExecutionFailed"
 
 
 def test_kernel_can_bind_stage_handlers_from_adapter_registry(tmp_path: Path):
@@ -863,6 +863,8 @@ def test_kernel_native_scaffold_workflow_runs_without_langgraph(tmp_path: Path):
     model = project_run(events.events)
 
     assert model.status == "completed"
+    assert "followup_lit_review" in KERNEL_NATIVE_SCAFFOLD_STAGE_IDS
+    assert "followup_lit_review" not in model.completed_stage_ids
     assert set(model.completed_stage_ids) == set(KERNEL_NATIVE_SCAFFOLD_STAGE_IDS) - {"followup_lit_review"}
     assert model.completed_stage_ids[-1] == "validation_gate"
     assert (tmp_path / "run_1" / "writeup_agent" / "artifacts" / "final_paper.md").exists()
@@ -990,8 +992,8 @@ def test_kernel_checkpoints_and_resumes_after_pause_before_approval(tmp_path: Pa
     assert first[0].status == "human_decision_required"
     assert calls["count"] == 1
     assert resumed[0].status == "completed"
-    assert any(event.type == "RunCheckpointed" for event in events.events)
-    assert any(event.type == "RunResumed" for event in events.events)
+    assert any(event.type == "CampaignExecutionCheckpointed" for event in events.events)
+    assert any(event.type == "CampaignExecutionResumed" for event in events.events)
     assert model.status == "completed"
 
 

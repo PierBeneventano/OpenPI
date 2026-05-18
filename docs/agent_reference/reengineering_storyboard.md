@@ -1,7 +1,8 @@
 # Reengineering Storyboard
 
 This storyboard describes how to move from the proof-of-concept codebase to the
-V1 product while preserving the full historical research engine.
+V1 product while preserving the successful research behavior and the
+researcher's current target-engine intent.
 
 The work should be done in passes. Each pass should leave the codebase in a
 working state with tests and documentation that explain the new boundary.
@@ -26,7 +27,7 @@ Done when:
 
 ```text
 V1 user and outcomes are explicit
-full historical engine preservation is explicit
+historical research behavior and researcher-intent preservation are explicit
 OpenClaude steering requirement is explicit
 failure points are named
 next implementation passes are ordered
@@ -67,18 +68,21 @@ legacy_runtime_mapping
 Done when:
 
 ```text
-all full historical engine stages have contracts
+all target workflow stages have contracts
+legacy reference stages are mapped where they still inform behavior
 control nodes have contracts
 contracts validate
 VS Code graph can show purpose/inputs/outputs/tools/validators
 runtime behavior is unchanged
 ```
 
-## Pass 2: Graph IR Mirrors The Historical Engine
+## Pass 2: Graph IR Mirrors The Research Workflow
 
 Goal:
 
-Make the product graph an honest representation of the full engine.
+Make the product graph an honest representation of the desired scientific
+workflow, using the historical engine and [feedback.md](feedback.md) as source
+material.
 
 Add graph views:
 
@@ -91,10 +95,10 @@ runtime graph
 Done when:
 
 ```text
-graph includes control nodes
+graph includes council stages, control nodes, duality gate, and revision routes
 loops and fan-out/fan-in are represented
 graph nodes point to stage contracts
-campaign scaffold graph matches full historical engine shape
+campaign graph matches the target scientific workflow
 graph editing can target graph nodes by stable IDs
 ```
 
@@ -107,23 +111,24 @@ Connect real execution to local campaign state.
 Emit:
 
 ```text
-RunStarted
+CampaignExecutionStarted
 GraphNodeStatusChanged
 ArtifactIndexed
 ValidationPassed
 ValidationFailed
 ApprovalRequested
 InstructionSent
-RunExited
+CampaignExecutionCompleted
+CampaignExecutionFailed
 ```
 
 Done when:
 
 ```text
-starting a campaign run creates a run record
+starting campaign execution creates campaign execution events
 active stage status updates in .msc/campaigns.db
 generated artifacts appear in campaign artifacts
-run exit updates runtime graph
+campaign execution exit updates runtime graph
 legacy run_status.json remains compatibility output
 ```
 
@@ -250,23 +255,25 @@ steer tab reflects OpenClaude and low-level run state
 settings show readiness, model, budget, DB path
 ```
 
-## Pass 8: Full Engine Local Integration Test
+## Pass 8: Full Workflow Local Integration Test
 
 Goal:
 
-Prove that the full historical engine can run through the product architecture.
+Prove that the full target research workflow can run through the product
+architecture.
 
 Test path:
 
 ```text
 create campaign
 approve graph
-start full engine locally
+start campaign execution locally
 pause at critical stage
 steer through SDK/CLI
 resume
 index artifacts
 fail a controlled stage and await feedback
+pass the required duality gate before writeup
 produce paper-like artifacts
 ```
 
@@ -310,5 +317,5 @@ docs/agent_reference
 manual acceptance checklist
 ```
 
-No pass should depend on OpenClaude bypassing the SDK/CLI. No pass should remove
-the ability to run the full historical engine.
+No pass should depend on OpenClaude bypassing the SDK/CLI. No pass should
+weaken the ability to run the full target research workflow locally.

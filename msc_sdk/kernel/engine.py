@@ -89,9 +89,11 @@ class ResearchKernel:
         run.workspace.mkdir(parents=True, exist_ok=True)
         if checkpoint is None:
             self.event_bus.emit(
-                "RunStarted",
+                "CampaignExecutionStarted",
                 run=run,
                 payload={
+                    "execution_id": run.id,
+                    "run_id": run.id,
                     "objective": run.objective,
                     "graph_id": run.graph.id,
                     "workspace": str(run.workspace),
@@ -99,9 +101,11 @@ class ResearchKernel:
             )
         else:
             self.event_bus.emit(
-                "RunResumed",
+                "CampaignExecutionResumed",
                 run=run,
                 payload={
+                    "execution_id": run.id,
+                    "run_id": run.id,
                     "checkpoint_id": checkpoint.id,
                     "blocked_stage_id": checkpoint.blocked_stage_id,
                     "reason": checkpoint.reason,
@@ -123,9 +127,11 @@ class ResearchKernel:
         while queue:
             if len(outcomes) >= self.max_stage_executions:
                 self.event_bus.emit(
-                    "RunFailed",
+                    "CampaignExecutionFailed",
                     run=run,
                     payload={
+                        "execution_id": run.id,
+                        "run_id": run.id,
                         "reason": "max_stage_executions_exceeded",
                         "max_stage_executions": self.max_stage_executions,
                     },
@@ -178,9 +184,56 @@ class ResearchKernel:
                     visit_counts=visit_counts,
                 )
                 self.event_bus.emit(
-                    "RunFailed",
+                    "CampaignExecutionFailed",
                     run=run,
-                    payload={"stage_id": stage.id, "status": "human_decision_required"},
+                    payload={
+                        "execution_id": run.id,
+                        "run_id": run.id,
+                        "stage_id": stage.id,
+                        "status": "human_decision_required",
+                    },
+                )
+                return outcomes
+            if self._blocked_by_duality(run=run, stage=stage, completed=completed):
+                self._request_decision(
+                    run=run,
+                    stage_id=stage.id,
+                    reason="duality_gate_required_before_writeup",
+                    safe_next_actions=[
+                        "rerun-duality-check",
+                        "rewind-to-formalized-results",
+                        "reroute-to-literature",
+                        "abort",
+                    ],
+                    metadata={
+                        "evidence": ["duality_check"],
+                        "failed_lenses": ["practical_meaning", "technical_defensibility"],
+                    },
+                )
+                outcomes.append(
+                    StageOutcome(
+                        stage_id=stage.id,
+                        status="human_decision_required",
+                    )
+                )
+                self._checkpoint(
+                    run=run,
+                    blocked_stage_id=stage.id,
+                    reason="duality_gate_required_before_writeup",
+                    queue=[stage.id, *queue],
+                    completed_stage_ids=completed_order,
+                    available_artifacts=available_artifacts,
+                    visit_counts=visit_counts,
+                )
+                self.event_bus.emit(
+                    "CampaignExecutionFailed",
+                    run=run,
+                    payload={
+                        "execution_id": run.id,
+                        "run_id": run.id,
+                        "stage_id": stage.id,
+                        "status": "human_decision_required",
+                    },
                 )
                 return outcomes
             visit_counts[stage_id] = visit_counts.get(stage_id, 0) + 1
@@ -232,9 +285,14 @@ class ResearchKernel:
                     visit_counts=visit_counts,
                 )
                 self.event_bus.emit(
-                    "RunFailed",
+                    "CampaignExecutionFailed",
                     run=run,
-                    payload={"stage_id": stage_id, "status": outcome.status},
+                    payload={
+                        "execution_id": run.id,
+                        "run_id": run.id,
+                        "stage_id": stage_id,
+                        "status": outcome.status,
+                    },
                 )
                 return outcomes
             completed.add(stage_id)
@@ -261,9 +319,14 @@ class ResearchKernel:
                     visit_counts=visit_counts,
                 )
                 self.event_bus.emit(
-                    "RunFailed",
+                    "CampaignExecutionFailed",
                     run=run,
-                    payload={"stage_id": stage_id, "status": "human_decision_required"},
+                    payload={
+                        "execution_id": run.id,
+                        "run_id": run.id,
+                        "stage_id": stage_id,
+                        "status": "human_decision_required",
+                    },
                 )
                 outcomes[-1] = StageOutcome(
                     stage_id=outcome.stage_id,
@@ -287,9 +350,14 @@ class ResearchKernel:
                 )
 
         self.event_bus.emit(
-            "RunCompleted",
+            "CampaignExecutionCompleted",
             run=run,
-            payload={"completed_stage_ids": completed_order},
+            payload={
+                "execution_id": run.id,
+                "run_id": run.id,
+                "status": "completed",
+                "completed_stage_ids": completed_order,
+            },
         )
         return outcomes
 
@@ -795,6 +863,14 @@ class ResearchKernel:
             },
         )
 
+    @staticmethod
+    def _blocked_by_duality(*, run: RunSpec, stage: StageSpec, completed: set[str]) -> bool:
+        if not stage.metadata.get("requires_duality_pass"):
+            return False
+        if not stage.metadata.get("duality_required", True):
+            return False
+        return "duality_check" in run.graph.stage_map() and "duality_check" not in completed
+
     def decide(self, decision_id: str, *, approved: bool, actor: str = "user") -> dict[str, Any]:
         decision = self.decision_queue.decide(decision_id, approved=approved, actor=actor)
         try:
@@ -869,7 +945,7 @@ class ResearchKernel:
             visit_counts=visit_counts,
         )
         self.event_bus.emit(
-            "RunCheckpointed",
+            "CampaignExecutionCheckpointed",
             run=run,
             payload=checkpoint.to_dict(),
         )

@@ -410,6 +410,16 @@ TIERS: dict[str, Preset] = {
 
 TIER_ORDER = ("live-smoke", "budget", "light", "medium", "pro", "max", "ultra")
 
+PRODUCT_TIER_ALIASES = {
+    "scaffold": "live-smoke",
+    "lean": "budget",
+    "standard": "medium",
+    "serious": "pro",
+    "ultra": "ultra",
+}
+
+TIER_CHOICES = tuple(dict.fromkeys((*PRODUCT_TIER_ALIASES, *TIER_ORDER)))
+
 # ── Backward compatibility ─────────────────────────────────────────────
 
 _PRESET_TO_TIER = {
@@ -437,8 +447,10 @@ def list_presets() -> list[Preset]:
 
 def resolve_tier_name(name: str) -> str:
     """Resolve a preset or tier name to a canonical tier name."""
+    if name in PRODUCT_TIER_ALIASES:
+        return PRODUCT_TIER_ALIASES[name]
     if name in TIERS:
         return name
     if name in _PRESET_TO_TIER:
         return _PRESET_TO_TIER[name]
-    raise ValueError(f"Unknown tier/preset: {name}. Choose from: {', '.join(TIER_ORDER)}")
+    raise ValueError(f"Unknown tier/preset: {name}. Choose from: {', '.join(TIER_CHOICES)}")

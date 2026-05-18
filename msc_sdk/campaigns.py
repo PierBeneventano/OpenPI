@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .campaign_store import CampaignStore
+from .research_tiers import TARGET_RESEARCH_TEMPLATE
 from .read_models import ArtifactReadModel, BudgetReadModel, CampaignReadModel, LogReadModel, StageReadModel
 
 
@@ -45,9 +46,9 @@ class CampaignClient:
         *,
         title: str,
         objective: str,
-        template: str = "consortium_scaffold",
+        template: str = TARGET_RESEARCH_TEMPLATE,
         budget: float = 1.0,
-        tier: str = "budget",
+        tier: str = "standard",
         output_format: str = "markdown",
         actor: str = "user",
     ) -> dict[str, Any]:
@@ -209,6 +210,58 @@ class CampaignClient:
 
     def summarize_artifacts(self, campaign_ref: str | Path) -> dict[str, Any]:
         return self.store.summarize_artifacts(campaign_ref)
+
+    def request_evidence(
+        self,
+        campaign_ref: str | Path,
+        *,
+        question: str,
+        node_id: str | None = None,
+        artifact_path: str | None = None,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        return self.store.request_evidence(
+            campaign_ref,
+            question=question,
+            node_id=node_id,
+            artifact_path=artifact_path,
+            actor=actor,
+        )
+
+    def inspect_budget(self, campaign_ref: str | Path) -> dict[str, Any]:
+        return self.store.inspect_budget(campaign_ref)
+
+    def diagnose_execution(self, campaign_ref: str | Path) -> dict[str, Any]:
+        return self.store.diagnose_execution(campaign_ref)
+
+    def propose_repair(
+        self,
+        campaign_ref: str | Path,
+        *,
+        node_id: str | None = None,
+        reason: str = "",
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        return self.store.propose_repair(campaign_ref, node_id=node_id, reason=reason, actor=actor)
+
+    def change_tier_model(
+        self,
+        campaign_ref: str | Path,
+        *,
+        tier: str | None = None,
+        model: str | None = None,
+        node_id: str | None = None,
+        reason: str = "",
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        return self.store.change_tier_model(
+            campaign_ref,
+            tier=tier,
+            model=model,
+            node_id=node_id,
+            reason=reason,
+            actor=actor,
+        )
 
 def campaign_model_from_dict(data: dict[str, Any]) -> CampaignReadModel:
     return CampaignReadModel(

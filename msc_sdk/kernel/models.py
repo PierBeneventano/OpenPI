@@ -13,10 +13,16 @@ from typing import Any, Callable, Iterable, Literal, Protocol
 ArtifactRole = Literal["deliverable", "evidence", "diagnostic", "log", "prompt", "system_state"]
 EvidenceRelationship = Literal["supports", "refutes", "qualifies", "derives_from"]
 StageKind = Literal["agent", "tool", "validator", "router", "approval", "control"]
+CouncilKind = Literal["none", "persona_council", "model_council", "duality_check", "deterministic_gate"]
 EventType = Literal[
     "RunStarted",
     "RunResumed",
     "RunCheckpointed",
+    "CampaignExecutionStarted",
+    "CampaignExecutionResumed",
+    "CampaignExecutionCheckpointed",
+    "CampaignExecutionCompleted",
+    "CampaignExecutionFailed",
     "StageInputResolved",
     "StageInputMissing",
     "StageStarted",
@@ -27,6 +33,12 @@ EventType = Literal[
     "BudgetExceeded",
     "ModelInvoked",
     "ModelDenied",
+    "CouncilStarted",
+    "CouncilMemberCompleted",
+    "CouncilVerdictRecorded",
+    "CouncilSynthesisRecorded",
+    "DualityCheckStarted",
+    "DualityCheckCompleted",
     "ToolInvoked",
     "ToolDenied",
     "SchemaValidationPassed",
@@ -149,6 +161,19 @@ class ModelPolicy:
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
     structured_output_required: bool = False
+
+
+@dataclass(frozen=True)
+class CouncilPolicy:
+    kind: CouncilKind = "none"
+    model_ids: tuple[str, ...] = ()
+    synthesis_model_id: str | None = None
+    tier: str | None = None
+    required: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 class ModelRegistry:
@@ -519,6 +544,163 @@ class RouteSpec:
 
 
 @dataclass(frozen=True)
+class RetryPolicy:
+    """Bounded retry semantics for a graph route or router branch."""
+
+    max_attempts: int | None = None
+    counter: str | None = None
+    description: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RouteCondition:
+    """A named branch of a router, including terminal/loop/retry semantics."""
+
+    label: str
+    target: str | None = None
+    expression: str | None = None
+    description: str = ""
+    retry: RetryPolicy | None = None
+    terminal: bool = False
+    feature_flag: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["retry"] = self.retry.to_dict() if self.retry else None
+        return data
+
+
+@dataclass(frozen=True)
+class RouterSpec:
+    """Router-level shape truth independent of a particular runtime adapter."""
+
+    id: str
+    source_stage_id: str
+    branches: tuple[RouteCondition, ...] = ()
+    source_reference: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "sourceStageId": self.source_stage_id,
+            "branches": [branch.to_dict() for branch in self.branches],
+            "sourceReference": self.source_reference,
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True)
+class StateFieldContract:
+    """Read/write contract for scientific state flowing through graph nodes."""
+
+    field: str
+    direction: Literal["read", "write", "read_write"]
+    stage_id: str | None = None
+    schema: str | None = None
+    description: str = ""
+    merge: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class FeatureFlagRoute:
+    """Feature-flagged route override or optional graph segment."""
+
+    flag: str
+    enabled_target: str | None = None
+    disabled_target: str | None = None
+    description: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "flag": self.flag,
+            "enabledTarget": self.enabled_target,
+            "disabledTarget": self.disabled_target,
+            "description": self.description,
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True)
+class SubgraphSpec:
+    """Nested graph branch represented without flattening away track meaning."""
+
+    id: str
+    entry_stage_id: str
+    stage_ids: tuple[str, ...]
+    exit_stage_id: str | None = None
+    routes: tuple[RouteSpec, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "entryStageId": self.entry_stage_id,
+            "stageIds": list(self.stage_ids),
+            "exitStageId": self.exit_stage_id,
+            "routes": [asdict(route) for route in self.routes],
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True)
+class GraphTemplateSpec:
+    """SDK-owned product graph template, richer than a flat execution graph."""
+
+    id: str
+    main_stage_ids: tuple[str, ...]
+    entry_stage_id: str
+    subgraphs: tuple[SubgraphSpec, ...] = ()
+    routers: tuple[RouterSpec, ...] = ()
+    iterate_stage_ids: tuple[str, ...] = ()
+    feature_flags: tuple[FeatureFlagRoute, ...] = ()
+    state_fields: tuple[StateFieldContract, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def all_stage_ids(
+        self,
+        *,
+        include_subgraphs: bool = True,
+        include_iterate: bool = True,
+    ) -> tuple[str, ...]:
+        ordered: list[str] = list(self.main_stage_ids)
+        if include_iterate:
+            ordered.extend(stage_id for stage_id in self.iterate_stage_ids if stage_id not in ordered)
+        if include_subgraphs:
+            for subgraph in self.subgraphs:
+                ordered.extend(stage_id for stage_id in subgraph.stage_ids if stage_id not in ordered)
+        return tuple(ordered)
+
+    def router_map(self) -> dict[str, RouterSpec]:
+        return {router.source_stage_id: router for router in self.routers}
+
+    def state_fields_for_stage(self, stage_id: str) -> tuple[StateFieldContract, ...]:
+        return tuple(field for field in self.state_fields if field.stage_id == stage_id)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "entryStageId": self.entry_stage_id,
+            "mainStageIds": list(self.main_stage_ids),
+            "iterateStageIds": list(self.iterate_stage_ids),
+            "subgraphs": [subgraph.to_dict() for subgraph in self.subgraphs],
+            "routers": [router.to_dict() for router in self.routers],
+            "featureFlags": [flag.to_dict() for flag in self.feature_flags],
+            "stateFields": [field.to_dict() for field in self.state_fields],
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True)
 class StageSpec:
     id: str
     title: str
@@ -528,6 +710,7 @@ class StageSpec:
     outputs: tuple[ArtifactSpec, ...] = ()
     validator_ids: tuple[str, ...] = ()
     tool_ids: tuple[str, ...] = ()
+    council_policy: CouncilPolicy = field(default_factory=CouncilPolicy)
     model_policy: ModelPolicy = field(default_factory=ModelPolicy)
     adapter_id: str | None = None
     budget: BudgetPolicy = field(default_factory=BudgetPolicy)
@@ -605,6 +788,9 @@ class RunSpec:
     workspace: Path
     budget: BudgetPolicy = field(default_factory=BudgetPolicy)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+CampaignExecutionSpec = RunSpec
 
 
 @dataclass(frozen=True)
@@ -955,6 +1141,82 @@ class RuntimeContext:
             },
         )
         return result
+
+    def run_council(
+        self,
+        *,
+        council_id: str | None = None,
+        prompt: str = "",
+        member_outputs: dict[str, Any] | None = None,
+        verdict: str = "pass",
+        passed: bool = True,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Record a product-visible council/duality evaluation.
+
+        Provider-backed adapters may do real model work before calling this,
+        but this method is the SDK boundary that turns the council into events
+        and structured state.
+        """
+
+        policy = self.stage.council_policy
+        council_kind = policy.kind
+        council_id = council_id or f"{self.stage.id}:{council_kind}"
+        member_outputs = dict(member_outputs or {})
+        model_ids = tuple(policy.model_ids or member_outputs.keys() or self.stage.model_policy.allowed_model_ids)
+        synthesis_model_id = policy.synthesis_model_id
+        payload = {
+            "stage_id": self.stage.id,
+            "council_id": council_id,
+            "kind": council_kind,
+            "tier": policy.tier,
+            "model_ids": list(model_ids),
+            "synthesis_model_id": synthesis_model_id,
+            "prompt": prompt,
+            "metadata": {**dict(policy.metadata), **dict(metadata or {})},
+        }
+        if council_kind == "duality_check":
+            self.event_bus.emit("DualityCheckStarted", run=self.run, payload=payload)
+        self.event_bus.emit("CouncilStarted", run=self.run, payload=payload)
+
+        for model_id in model_ids:
+            output = member_outputs.get(model_id, "")
+            self.event_bus.emit(
+                "CouncilMemberCompleted",
+                run=self.run,
+                payload={
+                    "stage_id": self.stage.id,
+                    "council_id": council_id,
+                    "kind": council_kind,
+                    "model_id": model_id,
+                    "output": output,
+                },
+            )
+
+        synthesis = next((str(value) for value in member_outputs.values() if value), "")
+        self.event_bus.emit(
+            "CouncilSynthesisRecorded",
+            run=self.run,
+            payload={
+                "stage_id": self.stage.id,
+                "council_id": council_id,
+                "kind": council_kind,
+                "synthesis_model_id": synthesis_model_id,
+                "synthesis": synthesis,
+            },
+        )
+        verdict_payload = {
+            "stage_id": self.stage.id,
+            "council_id": council_id,
+            "kind": council_kind,
+            "verdict": verdict,
+            "passed": bool(passed),
+            "metadata": dict(metadata or {}),
+        }
+        self.event_bus.emit("CouncilVerdictRecorded", run=self.run, payload=verdict_payload)
+        if council_kind == "duality_check":
+            self.event_bus.emit("DualityCheckCompleted", run=self.run, payload=verdict_payload)
+        return {"council_id": council_id, "kind": council_kind, "verdict": verdict, "passed": bool(passed)}
 
     def _model_policy_denial(self, model_id: str, kwargs: dict[str, Any]) -> str:
         policy = self.stage.model_policy

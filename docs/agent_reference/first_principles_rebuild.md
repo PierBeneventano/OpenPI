@@ -9,10 +9,11 @@ the accumulated prototype.
 ## Core Principle
 
 The research system is not an agent graph. It is a typed artifact-producing
-runtime:
+campaign runtime:
 
 ```text
-RunSpec
+CampaignGoal
+  -> ResearchGraphTemplate
   -> GraphSpec
   -> StageSpec
   -> RuntimeContext
@@ -38,13 +39,13 @@ around this kernel. They are not the semantic center.
 
 ## Target Runtime Objects
 
-### RunSpec
+### Campaign Execution Spec
 
-Immutable input to one execution:
+Internal input to one campaign execution attempt:
 
 ```text
-run id
 campaign id
+execution/session id
 objective
 graph spec
 workspace
@@ -54,8 +55,9 @@ human approval policy
 metadata
 ```
 
-The runner consumes a `RunSpec`. It should not read mutable project config to
-discover semantics mid-run.
+The runner consumes this as process/session metadata. The researcher-facing
+object remains the campaign, and the runner should not read mutable project
+config to discover semantics mid-execution.
 
 ### GraphSpec
 
@@ -90,6 +92,7 @@ budget policy
 failure policy
 routes
 pause policy
+council policy
 ```
 
 An agent is only one possible implementation of a stage handler.
@@ -99,7 +102,7 @@ An agent is only one possible implementation of a stage handler.
 Explicit context passed to stage handlers:
 
 ```text
-run spec
+campaign execution spec
 stage spec
 artifact repository
 validator registry
@@ -151,7 +154,7 @@ Validators are peers to agents, not cleanup utilities.
 Every mutation is an event:
 
 ```text
-RunStarted
+CampaignExecutionStarted
 StageStarted
 ArtifactWritten
 ArtifactIndexed
@@ -159,9 +162,12 @@ ValidationPassed
 ValidationFailed
 HumanDecisionRequired
 ApprovalDecided
+CouncilStarted
+CouncilVerdictRecorded
+DualityCheckCompleted
 StageCompleted
-RunCompleted
-RunFailed
+CampaignExecutionCompleted
+CampaignExecutionFailed
 ```
 
 Events are the audit trail and the source for product read models.
@@ -231,10 +237,9 @@ The read-model projector lives beside the kernel so VS Code, CLI, OpenClaude,
 and tests can all consume the same current-state view instead of inferring state
 from logs, status files, subprocesses, or directory scans.
 
-The product-shell SDK can project `CampaignReadModel` directly from a
-`KernelRunReadModel` via `campaign_model_from_kernel_run(...)`. This keeps UI,
-CLI, and steering surfaces pointed at kernel events rather than campaign-store
-or filesystem interpretations.
+The product-shell SDK can project `CampaignReadModel` directly from kernel
+execution read models. This keeps UI, CLI, and steering surfaces pointed at
+kernel events rather than campaign-store or filesystem interpretations.
 
 Campaign-store graph, artifact, and inspection views are now also rebuilt from
 campaign events. SQLite tables and exported JSON bundles remain useful indexes
@@ -248,26 +253,27 @@ on the read-side contract without importing storage and mutation internals.
 Agent integrations should also use the public operation contract exposed by
 `msc_sdk.validation.public_operation_contract(...)`. That contract names the
 supported CLI/SDK operations, capability profile, read-model sources, and
-mutation confirmation policy so OpenClaude/OpenClaw do not invent parallel
-control surfaces.
+mutation confirmation policy so OpenClaude and optional OpenClaw wrappers do
+not invent parallel control surfaces.
 
 The scheduler supports deterministic branch fan-out, join barriers, route
 conditions, and bounded loops. When a loop limit is reached, the kernel emits a
 human decision event instead of continuing autonomously.
 
-Budget spend is charged through `RuntimeContext.charge_budget(...)`. Run and
-stage caps are enforced by the kernel ledger, and budget failures produce
+Budget spend is charged through `RuntimeContext.charge_budget(...)`. Campaign
+execution and stage caps are enforced by the kernel ledger, and budget failures produce
 `BudgetExceeded` plus `HumanDecisionRequired` events.
 
 Human stops create durable decision records. A decision has an id, stage, reason,
 allowed actions, status, actor, and timestamps. Approval and rejection emit
-events that project back into the canonical run read model.
+events that project back into the canonical campaign execution read model.
 
-When the kernel stops for a human decision, it saves a `RunCheckpoint` containing
-the remaining queue, completed stage ids, available artifacts, and visit counts.
-After approval, `ResearchKernel.resume(...)` emits `RunResumed` and continues
-from that checkpoint. Pause-before resumes by running the blocked stage;
-pause-after resumes with the next queued stage without rerunning completed work.
+When the kernel stops for a human decision, it saves a campaign execution
+checkpoint containing the remaining queue, completed stage ids, available
+artifacts, and visit counts. After approval, `ResearchKernel.resume(...)` emits
+`CampaignExecutionResumed` and continues from that checkpoint. Pause-before
+resumes by running the blocked stage; pause-after resumes with the next queued
+stage without rerunning completed work.
 
 Tools are registered with the kernel and invoked through
 `RuntimeContext.use_tool(...)`. A stage may only use tools declared in
@@ -279,6 +285,12 @@ Models are registered with the kernel and invoked through
 `ModelPolicy`, and the runtime enforces token and structured-output constraints
 before dispatch. Policy failures emit `ModelDenied` and stop for a human
 decision.
+
+Councils are invoked through a typed runtime operation rather than hidden
+prompt logic. Persona councils, model councils, and the required duality check
+should emit council and gate events, write their verdict artifacts through the
+artifact path, and stop for human decision when scientific direction changes
+are needed.
 
 Artifact schemas are registered with the kernel and attached to
 `ArtifactSpec.schema_id`. The runtime validates schema-bound artifacts before
@@ -312,8 +324,8 @@ adapters should replace their deterministic content stage by stage.
 3. Replace proof adapters with production adapters for planning, literature,
    hypothesis generation, experiment design, execution, synthesis, writeup, and
    review.
-4. Continue moving run, approval, budget, and steering read paths onto event
-   projections instead of cache tables or status files.
+4. Continue moving campaign execution, approval, budget, and steering read paths
+   onto event projections instead of cache tables or status files.
 5. Delete legacy compatibility paths once kernel adapters produce the full
    research artifact set.
 

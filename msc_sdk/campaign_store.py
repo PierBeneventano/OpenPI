@@ -18,6 +18,7 @@ from typing import Any
 
 from .campaign_projection import EVENT_PROJECTION_SOURCE, CampaignEventProjector, artifact_audience
 from .events import redact
+from .research_tiers import TARGET_RESEARCH_TEMPLATE
 from .stage_contracts import compile_kernel_graph, contracts_by_id, project_kernel_graph, template_names
 
 
@@ -204,9 +205,9 @@ class CampaignStore:
         *,
         title: str,
         objective: str,
-        template: str = "consortium_scaffold",
+        template: str = TARGET_RESEARCH_TEMPLATE,
         budget: float = 1.0,
-        tier: str = "budget",
+        tier: str = "standard",
         output_format: str = "markdown",
         actor: str = "user",
     ) -> dict[str, Any]:
@@ -216,7 +217,7 @@ class CampaignStore:
             raise ValueError("Campaign title is required.")
         if not objective:
             raise ValueError("Research objective is required.")
-        template = template if template in TEMPLATE_NAMES else "consortium_scaffold"
+        template = template if template in TEMPLATE_NAMES else TARGET_RESEARCH_TEMPLATE
         campaign_id = self._unique_campaign_id(slugify(title))
         created_at = now_iso()
         workspace_root = str(Path("results") / campaign_id)
@@ -420,6 +421,11 @@ class CampaignStore:
                 "tool_families": metadata.get("toolFamilies") or [],
                 "human_pause_policy": metadata.get("humanPausePolicy") or [],
                 "failure_policy": metadata.get("failurePolicy"),
+                "council_policy": metadata.get("councilPolicy") or {},
+                "tier_policy": metadata.get("tierPolicy") or {},
+                "model_policy": metadata.get("modelPolicy") or {},
+                "duality_required": bool(metadata.get("dualityRequired")),
+                "requires_duality_pass": bool(metadata.get("requiresDualityPass")),
                 "allowed_routes": metadata.get("allowedRoutes") or [],
                 "legacy_runtime_mapping": metadata.get("legacyRuntimeMapping") or {},
             },
@@ -595,6 +601,97 @@ class CampaignStore:
             "missing_required_artifacts": missing_required,
         }
 
+    def request_evidence(
+        self,
+        campaign_ref: str | Path,
+        *,
+        question: str,
+        node_id: str | None = None,
+        artifact_path: str | None = None,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        campaign_id = self.resolve_ref(campaign_ref)
+        event = self.append_event(
+            campaign_id,
+            "EvidenceRequested",
+            actor=actor,
+            payload={
+                "question": question,
+                "node_id": node_id,
+                "artifact_path": artifact_path,
+                "safe_next_actions": ["summarize-artifacts", "rerun-stage", "rewrite-stage"],
+            },
+        )
+        return {"ok": True, "campaign_id": campaign_id, "event": event}
+
+    def inspect_budget(self, campaign_ref: str | Path) -> dict[str, Any]:
+        workspace = self.workspace_read_model(campaign_ref)
+        return {
+            "ok": True,
+            "campaign": workspace["campaign"]["id"],
+            "budget_cap_usd": workspace["campaign"].get("budget_cap_usd"),
+            "tier": workspace["campaign"].get("tier"),
+            "execution": {
+                "status": workspace["execution"]["status"],
+                "attempts": workspace["execution"]["attempts"],
+            },
+        }
+
+    def diagnose_execution(self, campaign_ref: str | Path) -> dict[str, Any]:
+        workspace = self.workspace_read_model(campaign_ref)
+        latest = workspace["execution"].get("latest_attempt") or {}
+        status = workspace["execution"]["status"]
+        return {
+            "ok": True,
+            "campaign": workspace["campaign"]["id"],
+            "status": status,
+            "current_stage_id": workspace["execution"].get("current_stage_id"),
+            "latest_attempt": latest,
+            "pending_decisions": workspace["pending_decisions"],
+            "safe_next_actions": workspace["safe_next_actions"],
+            "diagnosis": "human_decision_required" if workspace["pending_decisions"] else status,
+        }
+
+    def propose_repair(
+        self,
+        campaign_ref: str | Path,
+        *,
+        node_id: str | None = None,
+        reason: str = "",
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        return self.propose_graph_change(
+            campaign_ref,
+            change_type="repair_stage_or_execution",
+            instruction=reason or "Prepare a bounded repair proposal.",
+            node_id=node_id,
+            actor=actor,
+        )
+
+    def change_tier_model(
+        self,
+        campaign_ref: str | Path,
+        *,
+        tier: str | None = None,
+        model: str | None = None,
+        node_id: str | None = None,
+        reason: str = "",
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        bits = []
+        if tier:
+            bits.append(f"tier={tier}")
+        if model:
+            bits.append(f"model={model}")
+        instruction = reason or "Change model/tier policy: " + ", ".join(bits or ["unspecified"])
+        return self.propose_graph_change(
+            campaign_ref,
+            change_type="model_tier_policy",
+            instruction=instruction,
+            node_id=node_id,
+            actor=actor,
+        )
+
     def workspace_read_model(self, campaign_ref: str | Path) -> dict[str, Any]:
         """Return the product-facing campaign workspace model.
 
@@ -659,6 +756,10 @@ class CampaignStore:
                 "bundle_path": campaign["bundle_path"],
             },
             "execution": execution,
+            "councils": self._council_read_models(events),
+            "duality": self._duality_read_model(events),
+            "tier_policy": graph.get("metadata", {}).get("tierPolicy"),
+            "model_policy": graph.get("metadata", {}).get("modelPolicy"),
             "safe_next_actions": safe_next_actions,
             "graph": graph,
             "decisions": decisions,
@@ -681,16 +782,76 @@ class CampaignStore:
             },
         }
 
+    @staticmethod
+    def _council_read_models(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows: dict[str, dict[str, Any]] = {}
+        for event in events:
+            if event["type"] not in {"CouncilStarted", "CouncilMemberCompleted", "CouncilSynthesisRecorded", "CouncilVerdictRecorded"}:
+                continue
+            payload = event["payload"]
+            council_id = str(payload.get("council_id") or event["id"])
+            row = rows.setdefault(
+                council_id,
+                {
+                    "id": council_id,
+                    "stage_id": payload.get("stage_id"),
+                    "kind": payload.get("kind"),
+                    "status": "running",
+                    "members": [],
+                    "synthesis": None,
+                    "verdict": None,
+                    "passed": None,
+                    "started_at": event["created_at"],
+                    "updated_at": event["created_at"],
+                },
+            )
+            row["updated_at"] = event["created_at"]
+            if event["type"] == "CouncilMemberCompleted":
+                row["members"].append({"model_id": payload.get("model_id"), "output": payload.get("output")})
+            elif event["type"] == "CouncilSynthesisRecorded":
+                row["synthesis"] = payload.get("synthesis")
+            elif event["type"] == "CouncilVerdictRecorded":
+                row["status"] = "completed"
+                row["verdict"] = payload.get("verdict")
+                row["passed"] = payload.get("passed")
+        return sorted(rows.values(), key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+
+    @staticmethod
+    def _duality_read_model(events: list[dict[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {"status": "not_started", "required": True}
+        for event in events:
+            if event["type"] == "DualityCheckStarted":
+                result.update({"status": "running", "stage_id": event["payload"].get("stage_id"), "started_at": event["created_at"]})
+            elif event["type"] == "DualityCheckCompleted":
+                result.update(
+                    {
+                        "status": "passed" if event["payload"].get("passed") else "failed",
+                        "stage_id": event["payload"].get("stage_id"),
+                        "completed_at": event["created_at"],
+                        "verdict": event["payload"].get("verdict"),
+                        "metadata": dict(event["payload"].get("metadata") or {}),
+                    }
+                )
+        return result
+
     def _decision_read_models(self, campaign_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM approvals WHERE campaign_id=? ORDER BY created_at DESC",
                 (campaign_id,),
             ).fetchall()
+        dry_run_success_run_ids = self._dry_run_success_run_ids(campaign_id)
         decisions: list[dict[str, Any]] = []
         for row in rows:
             metadata = json.loads(row["metadata_json"] or "{}")
             target_type = str(row["target_type"])
+            if (
+                target_type == "failure_recovery"
+                and row["status"] == "pending"
+                and str(row["target_id"]) in dry_run_success_run_ids
+                and metadata.get("exit_code") == 0
+            ):
+                continue
             reason = str(metadata.get("reason") or metadata.get("error") or metadata.get("requested_status") or target_type)
             decisions.append(
                 {
@@ -712,6 +873,14 @@ class CampaignStore:
                 }
             )
         return decisions
+
+    def _dry_run_success_run_ids(self, campaign_id: str) -> set[str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM runs WHERE campaign_id=? AND status=? AND exit_code=0",
+                (campaign_id, "dry_run_passed"),
+            ).fetchall()
+        return {str(row["id"]) for row in rows}
 
     @staticmethod
     def _decision_title(target_type: str, reason: str) -> str:
@@ -899,11 +1068,26 @@ class CampaignStore:
                         "updated_at": event["created_at"],
                     }
                 )
-                status = "completed" if attempt_status == "completed" else "human_decision_required"
+                if attempt_status == "dry_run_passed":
+                    status = "dry_run_passed"
+                elif event_type == "CampaignExecutionFailed" or attempt_status != "completed":
+                    status = "human_decision_required"
+                else:
+                    status = "completed"
             elif event_type == "GraphNodeStatusChanged":
                 if payload.get("status") in {"running", "human_decision_required", "failed"}:
                     current_stage_id = str(payload.get("node_id") or current_stage_id or "")
-            elif event_type in {"ApprovalRequested", "HumanDecisionRequired"}:
+            elif event_type == "ApprovalRequested":
+                pending_ids = {str(decision.get("id") or "") for decision in pending_decisions}
+                pending_targets = {str(decision.get("target_id") or "") for decision in pending_decisions}
+                approval_id = str(payload.get("approval_id") or "")
+                target_id = str(payload.get("target_id") or "")
+                if approval_id not in pending_ids and target_id not in pending_targets:
+                    continue
+                status = "human_decision_required"
+                if target_id in graph_node_ids:
+                    current_stage_id = target_id
+            elif event_type == "HumanDecisionRequired":
                 status = "human_decision_required"
                 target_id = str(payload.get("target_id") or payload.get("stage_id") or "")
                 if target_id in graph_node_ids:
@@ -972,7 +1156,7 @@ class CampaignStore:
             return ["continue-campaign", "record-feedback"]
         if execution_status == "running":
             return ["pause-campaign", "record-feedback"]
-        if execution_status == "completed":
+        if execution_status in {"completed", "dry_run_passed"}:
             return ["review-deliverables", "record-feedback", "rerun-stage"]
         if graph.get("nodes"):
             return ["continue-campaign"]
@@ -1226,10 +1410,11 @@ class CampaignStore:
                 actor=actor,
                 payload={"run_id": run_id, "status": run_status, "exit_code": exit_code, **(metadata or {})},
             )
+            execution_completed = run_status in {"completed", "dry_run_passed"}
             self._append_event(
                 conn,
                 campaign_id=campaign_id,
-                event_type="CampaignExecutionCompleted" if run_status == "completed" else "CampaignExecutionFailed",
+                event_type="CampaignExecutionCompleted" if execution_completed else "CampaignExecutionFailed",
                 actor=actor,
                 payload={
                     "execution_id": run_id,
@@ -1241,7 +1426,7 @@ class CampaignStore:
                 },
             )
             approval = None
-            if run_status != "completed":
+            if not execution_completed:
                 approval = self._create_approval(
                     conn,
                     campaign_id=campaign_id,
@@ -2325,7 +2510,7 @@ class CampaignStore:
 
 
 def build_graph_ir(campaign_id: str, title: str, template: str, tier: str, budget: float) -> dict[str, Any]:
-    template = template if template in TEMPLATE_NAMES else "consortium_scaffold"
+    template = template if template in TEMPLATE_NAMES else TARGET_RESEARCH_TEMPLATE
     graph = compile_kernel_graph(
         graph_id=f"{campaign_id}:{template}",
         template=template,

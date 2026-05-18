@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .campaigns import CampaignClient
+from .research_tiers import target_model_policy
 from .validation import public_operation_contract
 
 OPENCLAUDE_BASE_URL = "https://openrouter.ai/api/v1"
@@ -152,6 +153,7 @@ def openclaude_models(*, default_model: str = DEFAULT_OPENCLAUDE_MODEL) -> dict[
             for alias, model in OPENCLAUDE_MODEL_ALIASES.items()
         ],
         "custom_model_allowed": True,
+        "research_tier_policy": target_model_policy(),
     }
 
 
@@ -197,7 +199,12 @@ def openclaude_context_pack(
         "msc_cli": msc_cli_invocation(root),
         "campaign": workspace.get("campaign"),
         "execution": workspace.get("execution"),
+        "graph": _graph_context(workspace),
         "safe_next_actions": workspace.get("safe_next_actions") or [],
+        "councils": workspace.get("councils") or [],
+        "duality": workspace.get("duality") or {},
+        "tier_policy": workspace.get("tier_policy"),
+        "model_policy": workspace.get("model_policy"),
         "current_stage": _current_stage(workspace),
         "pending_decisions": workspace.get("pending_decisions") or [],
         "active_context_links": active_links,
@@ -205,9 +212,35 @@ def openclaude_context_pack(
         "selected_artifacts": selected_artifacts[:max_artifacts],
         "context_policy": {
             "source_of_truth": "campaign workspace read model plus campaign events",
+            "graph_source_of_truth": "SDK graph template and campaign graph projection",
             "included_artifacts": "produced deliverables/evidence and user-linked artifacts",
             "excluded_by_default": ["prompt", "log", "system_state", "diagnostic"],
         },
+    }
+
+
+def _graph_context(workspace: dict[str, Any]) -> dict[str, Any]:
+    graph = workspace.get("graph") or {}
+    metadata = graph.get("metadata") or {}
+    return {
+        "template": metadata.get("template"),
+        "sdk_graph_authority": metadata.get("sdkGraphAuthority"),
+        "top_level_node_count": metadata.get("topLevelNodeCount"),
+        "nodes": [
+            {
+                "id": node.get("id"),
+                "title": node.get("title") or node.get("label"),
+                "kind": (node.get("metadata") or {}).get("kind") or node.get("type"),
+                "router": ((node.get("metadata") or {}).get("routerSpec") or {}).get("id"),
+                "subgraph": (node.get("metadata") or {}).get("subgraphId"),
+                "council_policy": ((node.get("metadata") or {}).get("councilPolicy") or {}).get("kind"),
+                "requires_duality_pass": bool((node.get("metadata") or {}).get("requiresDualityPass")),
+            }
+            for node in graph.get("nodes") or []
+        ],
+        "subgraphs": metadata.get("subgraphs") or [],
+        "routers": metadata.get("routers") or [],
+        "feature_flags": metadata.get("featureFlags") or [],
     }
 
 
@@ -233,6 +266,8 @@ def openclaude_researcher_workflows(campaign_ref: str, *, cli_prefix: str = "msc
             f"{cli_prefix} campaigns workspace {campaign_ref} --json",
             f"{cli_prefix} campaigns explain-node {campaign_ref} <stage_id> --json",
             f"{cli_prefix} campaigns summarize-artifacts {campaign_ref} --json",
+            f"{cli_prefix} campaigns inspect-budget {campaign_ref} --json",
+            f"{cli_prefix} campaigns diagnose-execution {campaign_ref} --json",
         ],
         "researcher_questions": [
             "Answer from the campaign workspace read model first.",
@@ -246,6 +281,9 @@ def openclaude_researcher_workflows(campaign_ref: str, *, cli_prefix: str = "msc
             f"{cli_prefix} campaigns rewind {campaign_ref} <stage_id> --reason <reason> --decision-id <decision_id> --run-id <run_id> --json",
             f"{cli_prefix} campaigns rewrite-stage {campaign_ref} <stage_id> --instruction <instruction> --json",
             f"{cli_prefix} campaigns reroute {campaign_ref} --from <stage_id> --to <stage_id> --reason <reason> --json",
+            f"{cli_prefix} campaigns request-evidence {campaign_ref} --question <question> --node <stage_id> --json",
+            f"{cli_prefix} campaigns propose-repair {campaign_ref} --node <stage_id> --reason <reason> --json",
+            f"{cli_prefix} campaigns change-tier-model {campaign_ref} --tier <tier> --model <model> --node <stage_id> --json",
             f"Use `{cli_prefix} selftest commands --json` and the operation contract to discover the current SDK surface before declaring that an operation is unavailable.",
             "If the SDK lacks a command that would make the requested task cleaner, perform the best supported action and explicitly report the missing SDK capability as a recommended improvement.",
         ],

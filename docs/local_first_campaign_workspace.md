@@ -66,9 +66,9 @@ Short version:
 - Pass 5: explicit stage contract model. Extract the historical pipeline into
   typed stage definitions with purpose, inputs, outputs, validators, tools,
   budget policy, failure policy, and next routes.
-- Pass 6: runner event bridge. Emit `RunStarted`, stage status transitions,
-  `ArtifactIndexed`, budget updates, steering events, and `RunExited` into the
-  campaign store.
+- Pass 6: runner event bridge. Emit `CampaignExecutionStarted`, stage status
+  transitions, `ArtifactIndexed`, budget updates, steering events, and
+  campaign execution completion/failure events into the campaign store.
 - Pass 7: approval and steering APIs for pause/resume/stop/reroute/rewrite and
   failure recovery.
 - Pass 8: OpenClaude harness over the SDK/CLI so natural-language steering is

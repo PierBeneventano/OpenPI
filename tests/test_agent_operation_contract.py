@@ -18,13 +18,19 @@ def test_public_operation_contract_read_only_excludes_mutations():
 
 def test_public_operation_contract_openclaude_allows_autonomous_campaign_mutations():
     contract = ValidationClient().operation_contract("openclaude_v1")
+    operations = {operation["operation"] for operation in contract["operations"]}
 
     assert contract["ok"] is True
     assert contract["mutations_allowed"] is True
     assert contract["confirmation_required_for_mutations"] is False
-    assert any(operation["operation"] == "campaigns.approve" for operation in contract["operations"])
-    assert any(operation["operation"] == "campaigns.context_link" for operation in contract["operations"])
-    assert any(operation["operation"] == "campaigns.rewind" for operation in contract["operations"])
+    assert "campaigns.approve" in operations
+    assert "campaigns.context_link" in operations
+    assert "campaigns.rewind" in operations
+    assert "campaigns.request_evidence" in operations
+    assert "campaigns.inspect_budget" in operations
+    assert "campaigns.diagnose_execution" in operations
+    assert "campaigns.propose_repair" in operations
+    assert "campaigns.change_tier_model" in operations
     assert "SQLite" in contract["storage_boundary"]
 
 

@@ -21,7 +21,8 @@ from consortium.cli.core.env_manager import (
 from consortium.cli.core.flag_translator import build_argv
 from consortium.cli.core.llm_config_generator import write_llm_config
 from consortium.cli.core.paths import build_runner_argv, find_project_root
-from consortium.cli.core.presets import PRESETS, TIERS, TIER_ORDER, resolve_tier_name
+from consortium.cli.core.presets import PRESETS, TIERS, TIER_CHOICES, resolve_tier_name
+from consortium.models import AVAILABLE_MODELS
 
 console = Console()
 
@@ -38,9 +39,9 @@ def _should_use_repo_env(project_root: Path | None) -> bool:
 @click.argument("task", required=False)
 @click.option(
     "--tier", "-t",
-    type=click.Choice(list(TIER_ORDER)),
+    type=click.Choice(list(TIER_CHOICES)),
     default=None,
-    help="Price tier: live-smoke ($1-5), budget ($20-50), light ($50-100), medium ($100-300), pro ($300-500), max ($500+).",
+    help="Product tier: scaffold, lean, standard, serious, ultra. Legacy tier names remain accepted.",
 )
 @click.option(
     "--preset", "-p",
@@ -148,6 +149,12 @@ def run(
     effective_model = model or (
         persisted_model if persisted_model and persisted_model != selected_tier.model else selected_tier.model
     )
+    if effective_model not in AVAILABLE_MODELS:
+        console.print(
+            "[bold white on red] Error [/] "
+            f"Unknown model '{effective_model}'. Choose one of: {', '.join(AVAILABLE_MODELS)}."
+        )
+        raise SystemExit(2)
     effective_budget = budget if budget is not None else (
         int(persisted_budget)
         if persisted_budget is not None and int(persisted_budget) != selected_tier.budget_usd

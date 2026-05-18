@@ -39,6 +39,7 @@ question
   -> execution plan
   -> theory and/or empirical tracks
   -> evidence synthesis
+  -> duality check
   -> writeup
   -> critique
   -> repair or finish
@@ -53,8 +54,8 @@ The redesigned system should be built from five durable primitives.
 ### Campaign
 
 A campaign is the local research container. It owns the objective, budget
-policy, planned graph, runtime graph, artifacts, approvals, runs, events, and
-steering history.
+policy, planned graph, runtime graph, artifacts, approvals, execution attempts,
+events, and steering history.
 
 Campaign state should be local-first and repo-native:
 
@@ -84,8 +85,8 @@ Control graph:
   gates, routers, loops, retries, approvals, fan-out, fan-in
 
 Runtime graph:
-  what actually happened in this run, including skipped nodes, failures,
-  artifacts, spend, and human interventions
+  what actually happened in this campaign execution attempt, including skipped
+  nodes, failures, artifacts, spend, and human interventions
 ```
 
 The historical engine is not a pure DAG. It is a directed state machine with a
@@ -155,14 +156,17 @@ ObjectiveUpdated
 BudgetPolicySet
 GraphPlanned
 GraphApproved
-RunStarted
+CampaignExecutionStarted
 GraphNodeStatusChanged
 ArtifactDeclared
 ArtifactIndexed
 InstructionSent
 ApprovalRequested
 ApprovalDecided
-RunExited
+CouncilVerdictRecorded
+DualityCheckCompleted
+CampaignExecutionCompleted
+CampaignExecutionFailed
 CampaignExported
 ```
 
@@ -173,8 +177,8 @@ assistant steering.
 
 ### 1. Research State Is Central
 
-There must be one durable campaign/run state that records objective, graph,
-artifacts, validation results, budget, approvals, steering messages, and
+There must be one durable campaign execution state that records objective,
+graph, artifacts, validation results, budget, approvals, steering messages, and
 runtime events.
 
 Agents, files, and chat history are not source-of-truth by themselves.
@@ -288,8 +292,8 @@ GraphChangeProposed
 GraphChangeApproved
 BudgetIncreaseRequested
 ArtifactRevisionRequested
-RunPaused
-RunResumed
+CampaignExecutionPaused
+CampaignExecutionResumed
 ```
 
 ### 10. The System Must Explain Itself

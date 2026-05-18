@@ -83,8 +83,21 @@ class CampaignEventProjector:
             elif event_type in {"RunStarted", "CampaignExecutionStarted"}:
                 status = "running"
             elif event_type in {"RunExited", "CampaignExecutionCompleted", "CampaignExecutionFailed"}:
-                status = "completed" if event_payload.get("status") == "completed" else "human_decision_required"
+                exit_status = event_payload.get("status")
+                if exit_status == "completed":
+                    status = "completed"
+                elif exit_status == "dry_run_passed":
+                    status = "approved"
+                else:
+                    status = "human_decision_required"
             elif event_type == "ApprovalRequested":
+                metadata = dict(event_payload.get("metadata") or {})
+                if (
+                    event_payload.get("target_type") == "failure_recovery"
+                    and metadata.get("exit_code") == 0
+                    and metadata.get("reason") is None
+                ):
+                    continue
                 status = "human_decision_required"
             elif event_type == "ApprovalDecided":
                 status = "approved" if event_payload.get("status") == "approved" else "draft"

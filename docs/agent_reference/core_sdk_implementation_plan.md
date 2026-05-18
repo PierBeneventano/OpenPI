@@ -20,18 +20,23 @@ CampaignGoal
   -> ReadModel
 ```
 
-The SDK should preserve the proven LangGraph research method while making it
-typed, inspectable, steerable, and auditable.
+The SDK should preserve the proven research method while making it typed,
+inspectable, steerable, and auditable. LangGraph is allowed as an execution
+adapter, but the SDK is the product surface.
 
 ## Design Commitments
 
-- The legacy LangGraph pipeline is the source material for the standard
-  research template.
+- The legacy LangGraph pipeline and the raw researcher feedback snapshot are
+  source material for the standard research template.
 - The SDK owns the product architecture.
 - Campaign execution replaces the user-facing "run" concept.
+- OpenClaude is the local AI coworker over the SDK/CLI.
+- OpenClaw, if present, is an optional wrapper over SDK operations.
 - Prompts are first-class stage instruction payloads, not scaffold files.
 - Events are the product source of truth.
 - Artifacts are produced deliverables/evidence, not arbitrary files.
+- Persona councils, model councils, and duality checks are first-class research
+  concepts in the stage model.
 - Human feedback and decisions are typed operations/events.
 - Compatibility with old result folders is temporary migration logic.
 
@@ -55,6 +60,9 @@ This is the standard research pipeline distilled from the legacy LangGraph. It
 should include:
 
 - stage ids and order,
+- persona council stages,
+- model council posture on selected stages,
+- required duality gate before writeup,
 - gate/control nodes,
 - loops and reroutes,
 - human inflection points,
@@ -64,8 +72,10 @@ should include:
 - tool/model policies,
 - failure policies.
 
-The first production template should intentionally mirror the proven
-LangGraph-derived research workflow before introducing variants.
+The first production template should intentionally preserve the desired
+scientific workflow before introducing variants. It does not need to preserve
+the exact old LangGraph node count if a cleaner SDK graph expresses the same
+research behavior more clearly.
 
 ### GraphSpec
 
@@ -80,6 +90,7 @@ StageSpec should include:
 
 - id, title, kind, purpose,
 - instruction payload,
+- council policy,
 - declared inputs,
 - declared outputs,
 - tool/model permissions,
@@ -92,6 +103,11 @@ StageSpec should include:
 StageSpec should preserve high-quality legacy prompts by reference or structured
 payload, not by writing markdown scaffold files.
 
+Council policy should describe whether a stage uses a persona council, a model
+council, a single specialist model, or a deterministic validator. It should
+also expose the target model/tier posture so OpenClaude can explain cost and
+quality implications.
+
 ### RuntimeContext
 
 The only interface stage adapters use to do product-relevant work. It should
@@ -100,6 +116,7 @@ provide:
 - `read_input(...)`,
 - `use_model(...)`,
 - `use_tool(...)`,
+- `run_council(...)`,
 - `write_artifact(...)`,
 - `emit_event(...)`,
 - `request_human_decision(...)`,
@@ -123,9 +140,13 @@ The event stream should describe campaign execution:
 - `ValidationFailed`
 - `HumanDecisionRequired`
 - `InstructionSent`
+- `CouncilStarted`
+- `CouncilVerdictRecorded`
 - `RouteSelected`
+- `DualityCheckCompleted`
 - `StageRerunRequested`
-- `CampaignExecutionPaused`
+- `CampaignExecutionResumed`
+- `CampaignExecutionCheckpointed`
 - `CampaignExecutionCompleted`
 - `CampaignExecutionFailed`
 
@@ -167,16 +188,19 @@ Acceptance:
   object.
 - Old events still project correctly.
 
-### 2. Extract The LangGraph Research Template
+### 2. Extract The Research Workflow Template
 
-Promote the proven LangGraph structure into a first-class
+Promote the proven scientific workflow into a first-class
 `ResearchGraphTemplate`.
 
 Tasks:
 
 - Inventory current LangGraph stages, gates, loops, joins, and reroutes.
+- Compare that inventory with the researcher feedback snapshot.
 - Map each legacy node to a template node.
-- Preserve stage ordering and control logic.
+- Preserve scientific transitions and control logic.
+- Preserve persona councils, model council posture, duality gate, and revision
+  continuation semantics.
 - Preserve human-in-the-loop points.
 - Preserve legacy prompt payloads.
 - Preserve tool/model expectations.
@@ -185,7 +209,7 @@ Acceptance:
 
 - One template represents the full standard research pipeline.
 - Template parity tests compare it against the current legacy graph/source
-  material.
+  material and the researcher-intent concepts documented in the north star.
 
 ### 3. Make Prompts Stage Payloads
 
@@ -235,13 +259,17 @@ Tasks:
 - Index produced artifacts.
 - Run validators.
 - Route to next stage.
+- Run the required duality gate before writeup.
 - Pause at declared human inflection points.
 - Support reroute/rewind with feedback context.
+- Support continuing from prior artifacts and feedback.
 
 Acceptance:
 
 - A minimal graph can execute through campaign execution events.
 - Human feedback can trigger a stage rerun or rewind.
+- Paper/writeup generation cannot proceed until duality checking passes or the
+  researcher explicitly chooses a safe recovery route.
 
 ### 6. Adapter Cutover
 
@@ -288,24 +316,53 @@ Tasks:
 - Attach feedback to stage/artifact/decision/campaign.
 - Support approve, reject, rerun stage, rewind to stage, reroute, revise
   instruction, and request evidence.
+- Require decisions for scientific direction changes, failed gates, expensive
+  work, repair, reroute, rewind, and budget increases.
+- Allow cheap bounded retries only when the stage policy marks them as
+  non-directional.
 
 Acceptance:
 
 - Human review points are visible before execution.
 - Feedback changes future execution context in a typed way.
 
+### 9. OpenClaude Operation Surface
+
+Make the SDK/CLI expressive enough that OpenClaude can cowork with the
+researcher without writing hidden state.
+
+Tasks:
+
+- Expose explain, pause, resume, stop, approve, reject, rerun, rewind, reroute,
+  revise instruction, request evidence, inspect budget, and summarize artifact
+  operations.
+- Expose liveness/failure/artifact diagnostics through read-only commands.
+- Make model/tier changes explicit proposals or approved operations.
+- Ensure optional OpenClaw wrappers can only call the same operations.
+
+Acceptance:
+
+- OpenClaude can perform the useful supervision behaviors described in the
+  researcher feedback snapshot through SDK/CLI calls.
+- No assistant path mutates campaign DB, status files, graph state, or
+  artifacts outside typed operations.
+
 ## Near-Term Refactor Targets
 
 - Delete or quarantine `write_scaffold_artifacts(...)`.
 - Rename "run" UI/CLI concepts to campaign execution concepts.
 - Extract prompt payload references from legacy agent builders.
-- Create a template parity suite against the LangGraph pipeline.
+- Create a template parity suite against the legacy pipeline and researcher
+  intent snapshot.
+- Add researcher-intent coverage for councils, duality checking, and revision
+  continuation.
 - Make the first several stage adapters SDK-native.
 - Strengthen event projection tests for rerun/rewind behavior.
 
 ## Non-Goals
 
 - Do not invent a new research method before preserving the proven one.
+- Do not treat the exact old LangGraph node roster as the product contract.
 - Do not make a generic workflow engine first.
 - Do not optimize for multi-campaign cloud orchestration yet.
 - Do not expose storage implementation details to the researcher.

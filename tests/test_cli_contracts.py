@@ -322,6 +322,82 @@ def test_run_explicit_tier_beats_setup_style_defaults(tmp_path, monkeypatch):
     assert llm_cfg["counsel"]["enabled"] is False
 
 
+def test_run_accepts_product_tier_names_before_legacy_runtime(tmp_path, monkeypatch):
+    import consortium.cli.commands.run as run_cmd
+
+    runner = CliRunner()
+    config_dir = tmp_path / "cfg"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    save_env_file({"OPENROUTER_API_KEY": "sk-or-test"}, str(config_dir))
+
+    captured: dict[str, object] = {}
+
+    def fake_run(argv, env=None, **kwargs):
+        captured["argv"] = argv
+        captured["env"] = env
+        return _fake_completed_process(0)
+
+    monkeypatch.setattr(run_cmd.subprocess, "run", fake_run)
+
+    result = _invoke(
+        runner,
+        [
+            "--config-dir",
+            str(config_dir),
+            "--quiet",
+            "run",
+            "--tier",
+            "standard",
+            "--dry-run",
+            "Test task",
+        ],
+    )
+
+    assert result.exit_code == 0
+    argv = captured["argv"]
+    assert "--model" in argv and argv[argv.index("--model") + 1] == "claude-sonnet-4-6"
+    assert "--dry-run" in argv
+
+
+def test_run_rejects_invalid_model_before_spawning_runner(tmp_path, monkeypatch):
+    import consortium.cli.commands.run as run_cmd
+
+    runner = CliRunner()
+    config_dir = tmp_path / "cfg"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    save_env_file({"OPENROUTER_API_KEY": "sk-or-test"}, str(config_dir))
+
+    called = False
+
+    def fake_run(*args, **kwargs):
+        nonlocal called
+        called = True
+        return _fake_completed_process(0)
+
+    monkeypatch.setattr(run_cmd.subprocess, "run", fake_run)
+
+    result = _invoke(
+        runner,
+        [
+            "--config-dir",
+            str(config_dir),
+            "run",
+            "--tier",
+            "standard",
+            "--model",
+            "moonshotai/kimi-k2",
+            "--dry-run",
+            "Test task",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "Unknown model 'moonshotai/kimi-k2'" in result.output
+    assert called is False
+
+
 def test_load_config_derives_tier_defaults_without_persisting_them(tmp_path, monkeypatch):
     config_dir = tmp_path / "cfg"
     config_dir.mkdir()
@@ -477,6 +553,18 @@ def test_live_smoke_llm_config_forces_cheap_single_model_surface():
     assert cfg["persona_council"]["max_post_vote_retries"] == 0
     assert {spec["model"] for spec in cfg["persona_council"]["personas"]} == {"deepseek-chat"}
     assert set(cfg["run_experiment_tool"].values()) == {"deepseek-chat"}
+
+
+def test_product_tier_names_resolve_to_runtime_tiers():
+    from consortium.cli.core.presets import TIER_CHOICES, resolve_tier_name
+
+    assert "standard" in TIER_CHOICES
+    assert "serious" in TIER_CHOICES
+    assert resolve_tier_name("scaffold") == "live-smoke"
+    assert resolve_tier_name("lean") == "budget"
+    assert resolve_tier_name("standard") == "medium"
+    assert resolve_tier_name("serious") == "pro"
+    assert resolve_tier_name("ultra") == "ultra"
 
 
 def test_status_reports_stalled_run_and_reads_ledger_cost(tmp_path, monkeypatch):
