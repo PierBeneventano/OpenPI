@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from msc_sdk.campaign_projection import CampaignEventProjector
@@ -303,6 +305,95 @@ def test_failure_recovery_decision_is_researcher_readable(tmp_path: Path):
     assert decision["title"] == "Campaign execution reached graph transition limit"
     assert "used more graph transitions than the runtime allowed" in decision["summary"]
     assert decision["reason"] == "Recursion limit of 25 reached without hitting a stop condition."
+
+
+def test_live_milestone_gate_projects_pending_decision_and_typed_approval(tmp_path: Path):
+    received: list[dict[str, str]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def do_GET(self):
+            if self.path != "/milestone":
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = json.dumps(
+                {
+                    "waiting": True,
+                    "phase": "research_plan",
+                    "latest_report_path": "results/live-milestone-demo/milestone_reports/research_plan_cycle0.pdf",
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            if self.path != "/milestone_response":
+                self.send_response(404)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            received.append(payload)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        store = CampaignStore(tmp_path)
+        store.create_campaign(
+            title="Live Milestone Demo",
+            objective="Expose live runner milestone gates through the SDK.",
+            template="target_research",
+            budget=1,
+        )
+        store.record_run_started(
+            "live-milestone-demo",
+            command=["msc", "run", "--human-gates"],
+            pid=111,
+            metadata={
+                "steering": {
+                    "human_gates": True,
+                    "http_base_url": base_url,
+                    "milestone_status_url": f"{base_url}/milestone",
+                    "milestone_approval_url": f"{base_url}/milestone_response",
+                }
+            },
+        )
+
+        workspace = store.workspace_read_model("live-milestone-demo")
+        decision = workspace["pending_decisions"][0]
+
+        assert workspace["execution"]["status"] == "human_decision_required"
+        assert workspace["execution"]["live_milestone"]["phase"] == "research_plan"
+        assert decision["target_type"] == "live_milestone"
+        assert decision["target_id"] == "milestone_goals"
+        assert "approve-milestone" in workspace["safe_next_actions"]
+
+        approved = store.approve_milestone(
+            "live-milestone-demo",
+            feedback="The plan is coherent enough for this live smoke test.",
+        )
+
+        assert approved["ok"]
+        assert received == [
+            {"action": "approve", "feedback": "The plan is coherent enough for this live smoke test."}
+        ]
+        events = [event["type"] for event in store.events("live-milestone-demo")["events"]]
+        assert "MilestoneDecisionSubmitted" in events
+        assert "HumanFeedbackRecorded" in events
+    finally:
+        server.shutdown()
+        thread.join(timeout=1)
 
 
 def test_dry_run_passed_is_not_projected_as_execution_failure(tmp_path: Path):

@@ -12,6 +12,8 @@ import json
 import re
 import shutil
 import sqlite3
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -649,7 +651,66 @@ class CampaignStore:
             "latest_attempt": latest,
             "pending_decisions": workspace["pending_decisions"],
             "safe_next_actions": workspace["safe_next_actions"],
+            "live_milestone": workspace["execution"].get("live_milestone"),
             "diagnosis": "human_decision_required" if workspace["pending_decisions"] else status,
+        }
+
+    def approve_milestone(
+        self,
+        campaign_ref: str | Path,
+        *,
+        feedback: str,
+        action: str = "approve",
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        campaign_id = self.resolve_ref(campaign_ref)
+        action = action.strip().lower()
+        if action not in {"approve", "modify", "abort"}:
+            raise ValueError("Milestone action must be approve, modify, or abort.")
+        workspace = self.workspace_read_model(campaign_id)
+        live_milestone = workspace["execution"].get("live_milestone") or {}
+        if not live_milestone.get("waiting"):
+            raise RuntimeError("No live milestone gate is currently waiting for approval.")
+        approval_url = live_milestone.get("approval_url")
+        if not approval_url:
+            raise RuntimeError("Live milestone gate did not expose an approval URL.")
+        response = self._http_json(
+            str(approval_url),
+            method="POST",
+            payload={"action": action, "feedback": feedback},
+            timeout=2.0,
+        )
+        event = self.append_event(
+            campaign_id,
+            "MilestoneDecisionSubmitted",
+            actor=actor,
+            payload={
+                "action": action,
+                "feedback": feedback,
+                "milestone": live_milestone,
+                "response": response,
+            },
+        )
+        self.record_instruction(
+            campaign_id,
+            text=feedback,
+            instruction_type="milestone_approval",
+            direction="to_campaign",
+            actor=actor,
+            metadata={
+                "node_id": live_milestone.get("stage_id"),
+                "milestone_phase": live_milestone.get("phase"),
+                "action": action,
+                "approval_url": approval_url,
+            },
+        )
+        return {
+            "ok": True,
+            "campaign_id": campaign_id,
+            "action": action,
+            "milestone": live_milestone,
+            "response": response,
+            "event": event,
         }
 
     def propose_repair(
@@ -722,6 +783,15 @@ class CampaignStore:
             events=events,
             pending_decisions=pending_decisions,
         )
+        live_milestone = self._live_milestone_read_model(campaign_id=campaign_id, execution=execution)
+        if live_milestone.get("waiting"):
+            milestone_decision = self._live_milestone_decision(campaign_id, live_milestone, execution)
+            decisions = [milestone_decision, *decisions]
+            pending_decisions = [milestone_decision, *pending_decisions]
+            execution["status"] = "human_decision_required"
+            execution["pending_decision_count"] = len(pending_decisions)
+            execution["current_stage_id"] = milestone_decision["target_id"]
+        execution["live_milestone"] = live_milestone
         deliverables = [
             artifact for artifact in flat_artifacts
             if artifact["exists"] and artifact.get("audience") in {"deliverable", "evidence"}
@@ -775,12 +845,116 @@ class CampaignStore:
                 "artifacts": diagnostics,
                 "events": events,
                 "legacy_attempts": execution["attempts"],
+                "live_milestone": live_milestone,
             },
             "provenance": {
                 "source": EVENT_PROJECTION_SOURCE,
                 "reader": "msc_sdk.campaign_store.CampaignStore.workspace_read_model",
             },
         }
+
+    def _live_milestone_read_model(self, *, campaign_id: str, execution: dict[str, Any]) -> dict[str, Any]:
+        latest = execution.get("latest_attempt") or {}
+        metadata = latest.get("metadata") or {}
+        steering = metadata.get("steering") or {}
+        status_url = steering.get("milestone_status_url")
+        approval_url = steering.get("milestone_approval_url")
+        if not status_url:
+            return {"status": "unavailable", "waiting": False, "reason": "no_milestone_endpoint"}
+        try:
+            status = self._http_json(str(status_url), timeout=0.5)
+        except Exception as exc:
+            return {
+                "status": "unreachable",
+                "waiting": False,
+                "status_url": status_url,
+                "approval_url": approval_url,
+                "reason": str(exc),
+            }
+        phase = status.get("phase") or self._phase_from_milestone_path(status.get("latest_report_path"))
+        stage_id = self._stage_for_milestone_phase(phase)
+        return {
+            "status": "waiting" if status.get("waiting") else "not_waiting",
+            "waiting": bool(status.get("waiting")),
+            "phase": phase,
+            "stage_id": stage_id,
+            "latest_report_path": status.get("latest_report_path"),
+            "status_url": status_url,
+            "approval_url": approval_url,
+            "campaign_id": campaign_id,
+            "attempt_id": latest.get("execution_id"),
+            "steering": {
+                "http_base_url": steering.get("http_base_url"),
+                "human_gates": bool(steering.get("human_gates")),
+            },
+        }
+
+    @staticmethod
+    def _live_milestone_decision(campaign_id: str, milestone: dict[str, Any], execution: dict[str, Any]) -> dict[str, Any]:
+        phase = milestone.get("phase") or "milestone"
+        stage_id = milestone.get("stage_id") or execution.get("current_stage_id") or "milestone"
+        decision_id = f"live-milestone:{campaign_id}:{phase}"
+        return {
+            "id": decision_id,
+            "campaign_id": campaign_id,
+            "target_type": "live_milestone",
+            "target_id": stage_id,
+            "target_label": f"live milestone gate ({phase})",
+            "status": "pending",
+            "created_at": execution.get("updated_at"),
+            "decided_at": None,
+            "actor": "runner",
+            "title": "Live milestone gate needs review",
+            "reason": f"The live runner is waiting for human approval at {phase}.",
+            "summary": "Inspect the campaign workspace and milestone report, record feedback, then approve, modify, or abort through the typed SDK command.",
+            "safe_next_actions": ["approve-milestone", "record-feedback", "request-evidence", "stop-campaign"],
+            "evidence": [milestone.get("latest_report_path")] if milestone.get("latest_report_path") else [],
+            "metadata": {"milestone": milestone},
+        }
+
+    @staticmethod
+    def _phase_from_milestone_path(path_value: Any) -> str | None:
+        if not path_value:
+            return None
+        name = Path(str(path_value)).name
+        for suffix in (".pdf", ".tex", ".json"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+        if "_cycle" in name:
+            return name.split("_cycle", 1)[0]
+        return None
+
+    @staticmethod
+    def _stage_for_milestone_phase(phase: str | None) -> str:
+        return {
+            "research_plan": "milestone_goals",
+            "track_results": "track_merge",
+            "analysis": "verify_completion",
+            "review": "milestone_review",
+        }.get(str(phase or ""), "milestone_goals")
+
+    @staticmethod
+    def _http_json(
+        url: str,
+        *,
+        method: str = "GET",
+        payload: dict[str, Any] | None = None,
+        timeout: float = 1.0,
+    ) -> dict[str, Any]:
+        data = None
+        headers = {"Accept": "application/json"}
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read().decode("utf-8")
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Could not reach live milestone endpoint {url}: {exc}") from exc
+        if not body:
+            return {}
+        return json.loads(body)
 
     @staticmethod
     def _council_read_models(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1050,6 +1224,7 @@ class CampaignStore:
                         "pid": payload.get("pid"),
                         "command": payload.get("command"),
                         "graph_version": payload.get("graph_version"),
+                        "metadata": dict(payload.get("metadata") or {}),
                         "started_at": event["created_at"],
                         "updated_at": event["created_at"],
                     }
@@ -1360,7 +1535,13 @@ class CampaignStore:
                 campaign_id=campaign_id,
                 event_type="RunStarted",
                 actor=actor,
-                payload={"run_id": run_id, "pid": pid, "command": command_json, "graph_version": graph_version},
+                payload={
+                    "run_id": run_id,
+                    "pid": pid,
+                    "command": command_json,
+                    "graph_version": graph_version,
+                    "metadata": metadata or {},
+                },
             )
             self._append_event(
                 conn,
@@ -1373,6 +1554,7 @@ class CampaignStore:
                     "pid": pid,
                     "command": command_json,
                     "graph_version": graph_version,
+                    "metadata": metadata or {},
                     "compatibility_event_id": event["id"],
                 },
             )

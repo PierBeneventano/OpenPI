@@ -59,6 +59,8 @@ def _should_use_repo_env(project_root: Path | None) -> bool:
 @click.option("--counsel/--no-counsel", default=None, help="Enable/disable multi-model counsel.")
 @click.option("--math/--no-math", default=None, help="Enable/disable math agents.")
 @click.option("--tree-search/--no-tree-search", default=None, help="Enable/disable tree search.")
+@click.option("--human-gates", is_flag=True, help="Pause at live milestone gates for typed human approval.")
+@click.option("--milestone-timeout", type=int, default=None, help="Seconds a live milestone gate waits before auto-proceeding.")
 @click.option("--max-run-seconds", type=int, default=None, help="Hard timeout in seconds.")
 @click.option("--stream/--no-stream", default=True, help="Enable/disable streaming display.")
 @click.option("--campaign-id", type=str, default=None, help="Attach this run to a local-first campaign id.")
@@ -84,6 +86,8 @@ def run(
     counsel: bool | None,
     math: bool | None,
     tree_search: bool | None,
+    human_gates: bool,
+    milestone_timeout: int | None,
     max_run_seconds: int | None,
     stream: bool,
     campaign_id: str | None,
@@ -246,6 +250,11 @@ def run(
         overrides["enable_tree_search"] = True
     else:
         overrides["enable_tree_search"] = False
+    if human_gates:
+        overrides["enable_milestone_gates"] = True
+        overrides["autonomous_mode"] = False
+    if milestone_timeout:
+        overrides["milestone_timeout"] = milestone_timeout
     if iterate:
         overrides["iterate"] = iterate
     if iterate_start_stage:
@@ -280,6 +289,7 @@ def run(
         table.add_row("Budget", f"${effective_budget}")
         table.add_row("Output", effective_output)
         table.add_row("Counsel", counsel_status)
+        table.add_row("Human gates", "yes" if human_gates else "no")
         table.add_row("Credentials", f"OpenRouter via {openrouter_source}")
         table.add_row("Dry run", "yes" if dry_run else "no")
         console.print(table)

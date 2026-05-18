@@ -282,6 +282,7 @@ def openclaude_researcher_workflows(campaign_ref: str, *, cli_prefix: str = "msc
             f"{cli_prefix} campaigns rewrite-stage {campaign_ref} <stage_id> --instruction <instruction> --json",
             f"{cli_prefix} campaigns reroute {campaign_ref} --from <stage_id> --to <stage_id> --reason <reason> --json",
             f"{cli_prefix} campaigns request-evidence {campaign_ref} --question <question> --node <stage_id> --json",
+            f"{cli_prefix} campaigns approve-milestone {campaign_ref} --feedback <feedback> --json",
             f"{cli_prefix} campaigns propose-repair {campaign_ref} --node <stage_id> --reason <reason> --json",
             f"{cli_prefix} campaigns change-tier-model {campaign_ref} --tier <tier> --model <model> --node <stage_id> --json",
             f"Use `{cli_prefix} selftest commands --json` and the operation contract to discover the current SDK surface before declaring that an operation is unavailable.",

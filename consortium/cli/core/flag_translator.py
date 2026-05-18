@@ -35,6 +35,8 @@ def preset_to_argv(preset: Preset, task: str, **overrides: object) -> list[str]:
         argv.append("--enable-math-agents")
     if overrides.pop("enable_tree_search", preset.enable_tree_search):
         argv.append("--enable-tree-search")
+    if overrides.pop("enable_milestone_gates", False):
+        argv.append("--enable-milestone-gates")
     if overrides.pop("adversarial_verification", preset.adversarial_verification):
         argv.append("--adversarial-verification")
     if overrides.pop("enable_planning", preset.enable_planning):
@@ -43,8 +45,11 @@ def preset_to_argv(preset: Preset, task: str, **overrides: object) -> list[str]:
         argv.append("--enforce-paper-artifacts")
     if overrides.pop("enforce_editorial_artifacts", preset.enforce_editorial_artifacts):
         argv.append("--enforce-editorial-artifacts")
-    if overrides.pop("autonomous_mode", preset.autonomous_mode):
+    autonomous_mode = overrides.pop("autonomous_mode", preset.autonomous_mode)
+    if autonomous_mode is True:
         argv.append("--autonomous-mode")
+    elif autonomous_mode is False:
+        argv.append("--no-autonomous-mode")
 
     # Ensemble review
     if overrides.pop("enable_ensemble_review", preset.enable_ensemble_review):
@@ -60,6 +65,7 @@ def preset_to_argv(preset: Preset, task: str, **overrides: object) -> list[str]:
         ("duality_max_attempts", "--duality-max-attempts"),
         ("persona_post_vote_retries", "--persona-post-vote-retries"),
         ("max_validation_retries", "--max-validation-retries"),
+        ("milestone_timeout", "--milestone-timeout"),
         ("tree_max_breadth", "--tree-max-breadth"),
         ("tree_max_depth", "--tree-max-depth"),
         ("tree_max_parallel", "--tree-max-parallel"),

@@ -40,6 +40,7 @@ _milestone_lock = threading.Lock()
 _milestone_event = threading.Event()
 _milestone_response: Optional[dict] = None
 _milestone_latest_path: Optional[str] = None
+_milestone_latest_phase: Optional[str] = None
 _milestone_waiting: bool = False
 
 
@@ -55,6 +56,7 @@ def get_milestone_status() -> dict:
     """Called by the HTTP handler for GET /milestone."""
     return {
         "waiting": _milestone_waiting,
+        "phase": _milestone_latest_phase,
         "latest_report_path": _milestone_latest_path,
     }
 
@@ -313,7 +315,7 @@ def generate_milestone_report(
     Returns the PDF path on success, or the .tex path if PDF compilation
     fails, or None on total failure.  Never raises.
     """
-    global _milestone_latest_path
+    global _milestone_latest_path, _milestone_latest_phase
     try:
         report_dir = os.path.join(workspace_dir, "milestone_reports")
         os.makedirs(report_dir, exist_ok=True)
@@ -359,6 +361,7 @@ def generate_milestone_report(
         pdf_path = _compile_tex_to_pdf(tex_path)
         result_path = pdf_path or tex_path
         _milestone_latest_path = result_path
+        _milestone_latest_phase = phase
         print(f"[milestone] Report generated: {result_path}")
         return result_path
 

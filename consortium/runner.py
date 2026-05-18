@@ -117,12 +117,35 @@ def _record_campaign_run_started(args, *, workspace_dir: str | None, command: li
 
         root = _campaign_root_for_args(args)
         store = CampaignStore(root)
+        callback_host = getattr(args, "callback_host", "127.0.0.1")
+        callback_port = int(getattr(args, "callback_port", 5001))
+        steering = None
+        if not getattr(args, "no_steering", False):
+            http_port = callback_port + 1
+            http_base_url = f"http://{callback_host}:{http_port}"
+            steering = {
+                "host": callback_host,
+                "tcp_port": callback_port,
+                "http_port": http_port,
+                "http_base_url": http_base_url,
+                "status_url": f"{http_base_url}/status",
+                "milestone_status_url": f"{http_base_url}/milestone",
+                "milestone_approval_url": f"{http_base_url}/milestone_response",
+                "human_gates": bool(
+                    getattr(args, "enable_milestone_gates", False)
+                    and not getattr(args, "autonomous_mode", True)
+                ),
+            }
         record = store.record_run_started(
             campaign_id,
             command=command,
             pid=os.getpid(),
             graph_version=getattr(args, "campaign_graph_version", None),
-            metadata={"workspace_dir": workspace_dir, "dry_run": dry_run},
+            metadata={
+                "workspace_dir": workspace_dir,
+                "dry_run": dry_run,
+                **({"steering": steering} if steering else {}),
+            },
         )
         run_id = record["run_id"]
         os.environ["MSC_CAMPAIGN_ID"] = campaign_id
