@@ -61,6 +61,7 @@ def _should_use_repo_env(project_root: Path | None) -> bool:
 @click.option("--tree-search/--no-tree-search", default=None, help="Enable/disable tree search.")
 @click.option("--human-gates", is_flag=True, help="Pause at live milestone gates for typed human approval.")
 @click.option("--milestone-timeout", type=int, default=None, help="Seconds a live milestone gate waits before auto-proceeding.")
+@click.option("--duality-max-attempts", type=int, default=None, help="Maximum duality follow-up attempts before proceeding.")
 @click.option("--max-run-seconds", type=int, default=None, help="Hard timeout in seconds.")
 @click.option("--stream/--no-stream", default=True, help="Enable/disable streaming display.")
 @click.option("--campaign-id", type=str, default=None, help="Attach this run to a local-first campaign id.")
@@ -88,6 +89,7 @@ def run(
     tree_search: bool | None,
     human_gates: bool,
     milestone_timeout: int | None,
+    duality_max_attempts: int | None,
     max_run_seconds: int | None,
     stream: bool,
     campaign_id: str | None,
@@ -255,6 +257,8 @@ def run(
         overrides["autonomous_mode"] = False
     if milestone_timeout:
         overrides["milestone_timeout"] = milestone_timeout
+    if duality_max_attempts is not None:
+        overrides["duality_max_attempts"] = duality_max_attempts
     if iterate:
         overrides["iterate"] = iterate
     if iterate_start_stage:
