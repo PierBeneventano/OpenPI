@@ -1177,7 +1177,8 @@ def main():
 
         # Quality limits (new args, fallback to defaults)
         theory_repair_max_attempts = getattr(args, "theory_repair_max_attempts", None) or 2
-        duality_max_attempts = getattr(args, "duality_max_attempts", None) or 2
+        duality_max_attempts_arg = getattr(args, "duality_max_attempts", None)
+        duality_max_attempts = 2 if duality_max_attempts_arg is None else int(duality_max_attempts_arg)
         max_validation_retries = getattr(args, "max_validation_retries", None) or 3
         enable_ensemble_review = getattr(args, "enable_ensemble_review", False)
 
