@@ -234,16 +234,6 @@ class CampaignClient:
     def diagnose_execution(self, campaign_ref: str | Path) -> dict[str, Any]:
         return self.store.diagnose_execution(campaign_ref)
 
-    def approve_milestone(
-        self,
-        campaign_ref: str | Path,
-        *,
-        feedback: str,
-        action: str = "approve",
-        actor: str = "user",
-    ) -> dict[str, Any]:
-        return self.store.approve_milestone(campaign_ref, feedback=feedback, action=action, actor=actor)
-
     def start(
         self,
         campaign_ref: str | Path,

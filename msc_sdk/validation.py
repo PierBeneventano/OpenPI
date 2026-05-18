@@ -63,7 +63,6 @@ PUBLIC_COMMANDS = [
     CommandSpec("campaigns.summarize_artifacts", "msc campaigns summarize-artifacts <campaign> --json", "CampaignClient.summarize_artifacts(ref)", "read.artifacts"),
     CommandSpec("campaigns.inspect_budget", "msc campaigns inspect-budget <campaign> --json", "CampaignClient.inspect_budget(ref)", "read.budget"),
     CommandSpec("campaigns.diagnose_execution", "msc campaigns diagnose-execution <campaign> --json", "CampaignClient.diagnose_execution(ref)", "read.diagnostics"),
-    CommandSpec("campaigns.approve_milestone", "msc campaigns approve-milestone <campaign> --feedback <text> --json", "CampaignClient.approve_milestone(...)", "write.approvals", True),
     CommandSpec("campaigns.start", "msc campaigns start <campaign> --json", "CampaignClient.start(ref)", "write.campaigns", True),
     CommandSpec("campaigns.continue", "msc campaigns continue <campaign> --json", "CampaignClient.continue_execution(ref)", "write.campaigns", True),
     CommandSpec("campaigns.request_evidence", "msc campaigns request-evidence <campaign> --question <text> --json", "CampaignClient.request_evidence(...)", "write.feedback", True),

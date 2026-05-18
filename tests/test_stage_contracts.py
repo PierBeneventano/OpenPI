@@ -147,7 +147,7 @@ def test_historical_contracts_compile_to_kernel_graph_spec():
     assert stages["duality_gate"].routes[1].target == "followup_lit_review"
     assert stages["duality_gate"].routes[1].max_visits == 2
     assert stages["duality_gate"].routes[1].metadata["routeLabel"] == "failed"
-    assert stages["writeup_agent"].adapter_id == "historical.writeup_agent"
+    assert stages["writeup_agent"].adapter_id == "sdk_native.writeup_agent"
     assert "artifacts/final_paper.md" in [
         artifact.path for artifact in stages["writeup_agent"].outputs
     ]

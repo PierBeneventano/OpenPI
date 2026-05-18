@@ -62,7 +62,7 @@ budget_policy
 failure_policy
 routes
 human_pause_policy
-legacy_runtime_mapping
+diagnostic_runtime_mapping
 ```
 
 Done when:

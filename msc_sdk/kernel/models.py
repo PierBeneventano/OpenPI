@@ -15,9 +15,6 @@ EvidenceRelationship = Literal["supports", "refutes", "qualifies", "derives_from
 StageKind = Literal["agent", "tool", "validator", "router", "approval", "control"]
 CouncilKind = Literal["none", "persona_council", "model_council", "duality_check", "deterministic_gate"]
 EventType = Literal[
-    "RunStarted",
-    "RunResumed",
-    "RunCheckpointed",
     "CampaignExecutionStarted",
     "CampaignExecutionResumed",
     "CampaignExecutionCheckpointed",
@@ -50,8 +47,6 @@ EventType = Literal[
     "StageCompleted",
     "HumanDecisionRequired",
     "ApprovalDecided",
-    "RunCompleted",
-    "RunFailed",
 ]
 
 

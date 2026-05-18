@@ -9,12 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import shutil
 import sqlite3
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -315,7 +312,16 @@ class CampaignStore:
                 campaign_id=campaign_id,
                 event_type="CampaignImported",
                 actor=actor,
-                payload={"bundle_path": str(source), "original_id": original_id},
+                payload={
+                    "title": title,
+                    "objective": objective,
+                    "workspace_root": workspace_root,
+                    "budget": budget,
+                    "tier": tier,
+                    "output_format": output_format,
+                    "bundle_path": str(source),
+                    "original_id": original_id,
+                },
             )
         self.write_snapshot(campaign_id)
         self.export_bundle(campaign_id, actor="system")
@@ -430,7 +436,7 @@ class CampaignStore:
                 "duality_required": bool(metadata.get("dualityRequired")),
                 "requires_duality_pass": bool(metadata.get("requiresDualityPass")),
                 "allowed_routes": metadata.get("allowedRoutes") or [],
-                "legacy_runtime_mapping": metadata.get("legacyRuntimeMapping") or {},
+                "diagnostics": metadata.get("diagnostics") or {},
             },
             "artifacts": artifacts,
         }
@@ -652,67 +658,7 @@ class CampaignStore:
             "latest_attempt": latest,
             "pending_decisions": workspace["pending_decisions"],
             "safe_next_actions": workspace["safe_next_actions"],
-            "live_milestone": workspace["execution"].get("live_milestone"),
-            "process_liveness": workspace["execution"].get("process_liveness"),
             "diagnosis": "human_decision_required" if workspace["pending_decisions"] else status,
-        }
-
-    def approve_milestone(
-        self,
-        campaign_ref: str | Path,
-        *,
-        feedback: str,
-        action: str = "approve",
-        actor: str = "user",
-    ) -> dict[str, Any]:
-        campaign_id = self.resolve_ref(campaign_ref)
-        action = action.strip().lower()
-        if action not in {"approve", "modify", "abort"}:
-            raise ValueError("Milestone action must be approve, modify, or abort.")
-        workspace = self.workspace_read_model(campaign_id)
-        live_milestone = workspace["execution"].get("live_milestone") or {}
-        if not live_milestone.get("waiting"):
-            raise RuntimeError("No live milestone gate is currently waiting for approval.")
-        approval_url = live_milestone.get("approval_url")
-        if not approval_url:
-            raise RuntimeError("Live milestone gate did not expose an approval URL.")
-        response = self._http_json(
-            str(approval_url),
-            method="POST",
-            payload={"action": action, "feedback": feedback},
-            timeout=2.0,
-        )
-        event = self.append_event(
-            campaign_id,
-            "MilestoneDecisionSubmitted",
-            actor=actor,
-            payload={
-                "action": action,
-                "feedback": feedback,
-                "milestone": live_milestone,
-                "response": response,
-            },
-        )
-        self.record_instruction(
-            campaign_id,
-            text=feedback,
-            instruction_type="milestone_approval",
-            direction="to_campaign",
-            actor=actor,
-            metadata={
-                "node_id": live_milestone.get("stage_id"),
-                "milestone_phase": live_milestone.get("phase"),
-                "action": action,
-                "approval_url": approval_url,
-            },
-        )
-        return {
-            "ok": True,
-            "campaign_id": campaign_id,
-            "action": action,
-            "milestone": live_milestone,
-            "response": response,
-            "event": event,
         }
 
     def start_native_execution(
@@ -795,9 +741,8 @@ class CampaignStore:
     def workspace_read_model(self, campaign_ref: str | Path) -> dict[str, Any]:
         """Return the product-facing campaign workspace model.
 
-        This is the canonical read surface for UIs and steering layers. It
-        keeps legacy run/process details available as diagnostics, but the main
-        shape is campaign execution, decisions, graph, feedback, and
+        This is the canonical read surface for UIs and steering layers. The
+        main shape is campaign execution, decisions, graph, feedback, and
         deliverables.
         """
 
@@ -822,20 +767,6 @@ class CampaignStore:
             events=events,
             pending_decisions=pending_decisions,
         )
-        live_milestone = self._live_milestone_read_model(campaign_id=campaign_id, execution=execution)
-        process_liveness = self._process_liveness_read_model(execution)
-        if live_milestone.get("waiting"):
-            milestone_decision = self._live_milestone_decision(campaign_id, live_milestone, execution)
-            decisions = [milestone_decision, *decisions]
-            pending_decisions = [milestone_decision, *pending_decisions]
-            execution["status"] = "human_decision_required"
-            execution["pending_decision_count"] = len(pending_decisions)
-            execution["current_stage_id"] = milestone_decision["target_id"]
-        elif execution.get("status") == "running" and process_liveness.get("status") == "stale":
-            execution["status"] = "failed"
-            execution["failure_reason"] = process_liveness.get("reason")
-        execution["live_milestone"] = live_milestone
-        execution["process_liveness"] = process_liveness
         deliverables = [
             artifact for artifact in flat_artifacts
             if artifact["exists"] and artifact.get("audience") in {"deliverable", "evidence"}
@@ -888,139 +819,12 @@ class CampaignStore:
             "diagnostics": {
                 "artifacts": diagnostics,
                 "events": events,
-                "legacy_attempts": execution["attempts"],
-                "live_milestone": live_milestone,
-                "process_liveness": process_liveness,
             },
             "provenance": {
                 "source": EVENT_PROJECTION_SOURCE,
                 "reader": "msc_sdk.campaign_store.CampaignStore.workspace_read_model",
             },
         }
-
-    @staticmethod
-    def _process_liveness_read_model(execution: dict[str, Any]) -> dict[str, Any]:
-        latest = execution.get("latest_attempt") or {}
-        status = latest.get("status")
-        pid = latest.get("pid")
-        if status != "running" or not pid:
-            return {"status": "not_applicable", "pid": pid}
-        try:
-            os.kill(int(pid), 0)
-        except ProcessLookupError:
-            return {
-                "status": "stale",
-                "pid": pid,
-                "reason": "runner process is not alive and no exit event was recorded",
-            }
-        except PermissionError:
-            return {"status": "unknown", "pid": pid, "reason": "process exists but cannot be inspected"}
-        except (TypeError, ValueError):
-            return {"status": "unknown", "pid": pid, "reason": "invalid pid"}
-        return {"status": "alive", "pid": pid}
-
-    def _live_milestone_read_model(self, *, campaign_id: str, execution: dict[str, Any]) -> dict[str, Any]:
-        latest = execution.get("latest_attempt") or {}
-        metadata = latest.get("metadata") or {}
-        steering = metadata.get("steering") or {}
-        status_url = steering.get("milestone_status_url")
-        approval_url = steering.get("milestone_approval_url")
-        if not status_url:
-            return {"status": "unavailable", "waiting": False, "reason": "no_milestone_endpoint"}
-        try:
-            status = self._http_json(str(status_url), timeout=0.5)
-        except Exception as exc:
-            return {
-                "status": "unreachable",
-                "waiting": False,
-                "status_url": status_url,
-                "approval_url": approval_url,
-                "reason": str(exc),
-            }
-        phase = status.get("phase") or self._phase_from_milestone_path(status.get("latest_report_path"))
-        stage_id = self._stage_for_milestone_phase(phase)
-        return {
-            "status": "waiting" if status.get("waiting") else "not_waiting",
-            "waiting": bool(status.get("waiting")),
-            "phase": phase,
-            "stage_id": stage_id,
-            "latest_report_path": status.get("latest_report_path"),
-            "status_url": status_url,
-            "approval_url": approval_url,
-            "campaign_id": campaign_id,
-            "attempt_id": latest.get("execution_id"),
-            "steering": {
-                "http_base_url": steering.get("http_base_url"),
-                "human_gates": bool(steering.get("human_gates")),
-            },
-        }
-
-    @staticmethod
-    def _live_milestone_decision(campaign_id: str, milestone: dict[str, Any], execution: dict[str, Any]) -> dict[str, Any]:
-        phase = milestone.get("phase") or "milestone"
-        stage_id = milestone.get("stage_id") or execution.get("current_stage_id") or "milestone"
-        decision_id = f"live-milestone:{campaign_id}:{phase}"
-        return {
-            "id": decision_id,
-            "campaign_id": campaign_id,
-            "target_type": "live_milestone",
-            "target_id": stage_id,
-            "target_label": f"live milestone gate ({phase})",
-            "status": "pending",
-            "created_at": execution.get("updated_at"),
-            "decided_at": None,
-            "actor": "runner",
-            "title": "Live milestone gate needs review",
-            "reason": f"The live runner is waiting for human approval at {phase}.",
-            "summary": "Inspect the campaign workspace and milestone report, record feedback, then approve, modify, or abort through the typed SDK command.",
-            "safe_next_actions": ["approve-milestone", "record-feedback", "request-evidence", "stop-campaign"],
-            "evidence": [milestone.get("latest_report_path")] if milestone.get("latest_report_path") else [],
-            "metadata": {"milestone": milestone},
-        }
-
-    @staticmethod
-    def _phase_from_milestone_path(path_value: Any) -> str | None:
-        if not path_value:
-            return None
-        name = Path(str(path_value)).name
-        for suffix in (".pdf", ".tex", ".json"):
-            if name.endswith(suffix):
-                name = name[: -len(suffix)]
-        if "_cycle" in name:
-            return name.split("_cycle", 1)[0]
-        return None
-
-    @staticmethod
-    def _stage_for_milestone_phase(phase: str | None) -> str:
-        return {
-            "research_plan": "milestone_goals",
-            "track_results": "track_merge",
-            "analysis": "verify_completion",
-            "review": "milestone_review",
-        }.get(str(phase or ""), "milestone_goals")
-
-    @staticmethod
-    def _http_json(
-        url: str,
-        *,
-        method: str = "GET",
-        payload: dict[str, Any] | None = None,
-        timeout: float = 1.0,
-    ) -> dict[str, Any]:
-        data = None
-        headers = {"Accept": "application/json"}
-        if payload is not None:
-            data = json.dumps(payload).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = response.read().decode("utf-8")
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Could not reach live milestone endpoint {url}: {exc}") from exc
-        if not body:
-            return {}
-        return json.loads(body)
 
     @staticmethod
     def _council_read_models(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1281,7 +1085,7 @@ class CampaignStore:
             payload = event["payload"]
             event_type = event["type"]
             updated_at = event["created_at"]
-            if event_type in {"RunStarted", "CampaignExecutionStarted"}:
+            if event_type == "CampaignExecutionStarted":
                 execution_id = str(payload.get("execution_id") or payload.get("run_id") or event["id"])
                 attempt = attempts.setdefault(execution_id, {"execution_id": execution_id, "run_id": payload.get("run_id")})
                 attempt.update(
@@ -1297,7 +1101,7 @@ class CampaignStore:
                 )
                 status = "running"
                 started_at = started_at or event["created_at"]
-            elif event_type in {"RunExited", "CampaignExecutionCompleted", "CampaignExecutionFailed"}:
+            elif event_type in {"CampaignExecutionCompleted", "CampaignExecutionFailed"}:
                 execution_id = str(payload.get("execution_id") or payload.get("run_id") or event["id"])
                 attempt = attempts.setdefault(execution_id, {"execution_id": execution_id, "run_id": payload.get("run_id")})
                 attempt_status = str(payload.get("status") or ("completed" if payload.get("exit_code") == 0 else "failed"))
@@ -1514,9 +1318,9 @@ class CampaignStore:
         Completion is centralized here so the runner, UI, CLI, and OpenClaude
         controls all read the same semantics: required artifacts must exist,
         executable validators must pass, and the status transition must be
-        represented by an event. Most historical validators are currently
-        declared-but-unbound, so they are surfaced explicitly instead of being
-        silently treated as runtime behavior.
+        represented by an event. Most declared validators are currently
+        unbound, so they are surfaced explicitly instead of being silently
+        treated as runtime behavior.
         """
 
         campaign_id = self.resolve_ref(campaign_ref)
@@ -1599,19 +1403,6 @@ class CampaignStore:
             event = self._append_event(
                 conn,
                 campaign_id=campaign_id,
-                event_type="RunStarted",
-                actor=actor,
-                payload={
-                    "run_id": run_id,
-                    "pid": pid,
-                    "command": command_json,
-                    "graph_version": graph_version,
-                    "metadata": metadata or {},
-                },
-            )
-            self._append_event(
-                conn,
-                campaign_id=campaign_id,
                 event_type="CampaignExecutionStarted",
                 actor=actor,
                 payload={
@@ -1621,7 +1412,6 @@ class CampaignStore:
                     "command": command_json,
                     "graph_version": graph_version,
                     "metadata": metadata or {},
-                    "compatibility_event_id": event["id"],
                 },
             )
         return {"ok": True, "campaign_id": campaign_id, "run_id": run_id, "event": event}
@@ -1651,15 +1441,8 @@ class CampaignStore:
                 (run_status, exited_at, exit_code, run_id, campaign_id),
             )
             conn.execute("UPDATE campaigns SET status=?, updated_at=? WHERE id=?", (campaign_status, exited_at, campaign_id))
-            event = self._append_event(
-                conn,
-                campaign_id=campaign_id,
-                event_type="RunExited",
-                actor=actor,
-                payload={"run_id": run_id, "status": run_status, "exit_code": exit_code, **(metadata or {})},
-            )
             execution_completed = run_status in {"completed", "dry_run_passed"}
-            self._append_event(
+            event = self._append_event(
                 conn,
                 campaign_id=campaign_id,
                 event_type="CampaignExecutionCompleted" if execution_completed else "CampaignExecutionFailed",
@@ -1669,7 +1452,6 @@ class CampaignStore:
                     "run_id": run_id,
                     "status": run_status,
                     "exit_code": exit_code,
-                    "compatibility_event_id": event["id"],
                     **(metadata or {}),
                 },
             )
@@ -2062,8 +1844,8 @@ class CampaignStore:
     def _collapse_artifact_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Prefer the most useful product artifact per stage/path.
 
-        Declarations, legacy runtime files, and run-scoped contract artifacts
-        can all describe the same logical output. Product read models should
+        Declarations, SDK-native artifacts, and adapter-written contract
+        artifacts can all describe the same logical output. Product read models
         default to the best concrete artifact while events retain the full
         history.
         """
@@ -2075,10 +1857,8 @@ class CampaignStore:
             has_run = bool(metadata.get("run_id"))
             concrete = status == "existing" or row.get("checksum") is not None
             role_rank = {
+                "sdk_native": 5,
                 "contract_runtime": 4,
-                "runtime": 3,
-                "runtime_legacy": 2,
-                "stage_summary": 1,
             }.get(source_role, 0)
             return (10 if concrete else 0) + role_rank + (1 if has_run else 0), str(row.get("id") or "")
 
@@ -2099,13 +1879,7 @@ class CampaignStore:
 
     def _project_campaign(self, campaign_id: str) -> dict[str, Any]:
         events = self._event_rows(campaign_id)
-        return CampaignEventProjector(self.root).project(
-            campaign_id,
-            events,
-            legacy_campaign=self._legacy_campaign_row(campaign_id),
-            legacy_graph=self._legacy_snapshot_graph(campaign_id),
-            legacy_artifact_rows=list(self._legacy_artifact_rows(campaign_id).values()),
-        )
+        return CampaignEventProjector(self.root).project(campaign_id, events)
 
     def _event_rows(self, campaign_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:
@@ -2124,40 +1898,6 @@ class CampaignStore:
             }
             for row in rows
         ]
-
-    def _legacy_campaign_row(self, campaign_id: str) -> dict[str, Any] | None:
-        with self.connect() as conn:
-            row = conn.execute("SELECT * FROM campaigns WHERE id=?", (campaign_id,)).fetchone()
-        return dict(row) if row is not None else None
-
-    def _legacy_snapshot_graph(self, campaign_id: str) -> dict[str, Any]:
-        with self.connect() as conn:
-            snapshot = conn.execute(
-                "SELECT * FROM graph_snapshots WHERE campaign_id=? ORDER BY version DESC LIMIT 1",
-                (campaign_id,),
-            ).fetchone()
-        if snapshot is None:
-            return {
-                "campaign": campaign_id,
-                "version": 0,
-                "state": "planned",
-                "nodes": [],
-                "edges": [],
-                "metadata": {"read_source": "empty"},
-            }
-        graph = json.loads(snapshot["graph_json"])
-        graph["state"] = snapshot["state"]
-        graph["version"] = snapshot["version"]
-        graph["metadata"] = {**dict(graph.get("metadata") or {}), "read_source": "legacy_snapshot_fallback"}
-        return graph
-
-    def _legacy_artifact_rows(self, campaign_id: str) -> dict[str, dict[str, Any]]:
-        with self.connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM artifacts WHERE campaign_id=? ORDER BY stage_id, required DESC, path",
-                (campaign_id,),
-            ).fetchall()
-        return {str(row["id"]): dict(row) for row in rows}
 
     def replay_jsonl(self) -> int:
         if not self.event_log_path.exists():
@@ -2254,150 +1994,6 @@ class CampaignStore:
                                     "metadata": artifact.get("metadata") or {},
                                 },
                             )
-
-    def _runtime_workspaces_for_campaign(self, conn: sqlite3.Connection, campaign_id: str) -> list[str]:
-        workspaces: list[str] = []
-        for row in conn.execute("SELECT metadata_json FROM runs WHERE campaign_id=? ORDER BY started_at", (campaign_id,)).fetchall():
-            metadata = json.loads(row["metadata_json"] or "{}")
-            workspace = metadata.get("workspace_dir")
-            if workspace and workspace not in workspaces:
-                workspaces.append(str(workspace))
-        for row in conn.execute(
-            "SELECT payload_json FROM campaign_events WHERE campaign_id=? AND type IN ('RunExited', 'GraphNodeStatusChanged') ORDER BY created_at",
-            (campaign_id,),
-        ).fetchall():
-            payload = json.loads(row["payload_json"] or "{}")
-            workspace = payload.get("workspace_dir")
-            if workspace and workspace not in workspaces:
-                workspaces.append(str(workspace))
-        return workspaces
-
-    def _index_runtime_workspace_files(self, conn: sqlite3.Connection, campaign_id: str) -> None:
-        contracts = contracts_by_id()
-        for workspace in self._runtime_workspaces_for_campaign(conn, campaign_id):
-            workspace_path = self.root / workspace
-            if not workspace_path.exists():
-                continue
-            for stage_id, contract in contracts.items():
-                artifacts = [
-                    *[(artifact, True) for artifact in contract.required_artifacts],
-                    *[(artifact, False) for artifact in contract.optional_artifacts],
-                ]
-                for artifact, required in artifacts:
-                    for rel_path in (artifact.path, *artifact.legacy_paths):
-                        full = workspace_path / rel_path
-                        if not full.exists() or not full.is_file():
-                            continue
-                        self._upsert_runtime_artifact(
-                            conn,
-                            campaign_id=campaign_id,
-                            stage_id=stage_id,
-                            rel_path=rel_path,
-                            full=full,
-                            workspace=workspace,
-                            required=required,
-                            contract_path=artifact.path,
-                            source_role="runtime_legacy" if rel_path != artifact.path else "runtime",
-                        )
-
-            summaries = workspace_path / "stage_summaries"
-            if summaries.exists():
-                for full in summaries.glob("*_summary.*"):
-                    if not full.is_file():
-                        continue
-                    stage_id = full.stem.removesuffix("_summary")
-                    rel_path = str(full.relative_to(workspace_path))
-                    self._upsert_runtime_artifact(
-                        conn,
-                        campaign_id=campaign_id,
-                        stage_id=stage_id,
-                        rel_path=rel_path,
-                        full=full,
-                        workspace=workspace,
-                        required=False,
-                        contract_path=None,
-                        source_role="stage_summary",
-                    )
-
-            for rel_path in ("run_summary.json", "run_status.json", "STATUS.txt", "budget_state.json", "budget_ledger.jsonl", "effective_models.json"):
-                full = workspace_path / rel_path
-                if full.exists() and full.is_file():
-                    self._upsert_runtime_artifact(
-                        conn,
-                        campaign_id=campaign_id,
-                        stage_id="_run",
-                        rel_path=rel_path,
-                        full=full,
-                        workspace=workspace,
-                        required=False,
-                        contract_path=None,
-                        source_role="run_metadata",
-                    )
-
-    def _upsert_runtime_artifact(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        campaign_id: str,
-        stage_id: str,
-        rel_path: str,
-        full: Path,
-        workspace: str,
-        required: bool,
-        contract_path: str | None,
-        source_role: str,
-    ) -> None:
-        artifact_id = f"{campaign_id}:{stage_id}:{rel_path}:runtime"
-        checksum = file_checksum(full)
-        metadata = {
-            "workspace": workspace,
-            "source_role": source_role,
-            "audience": artifact_audience(source_role=source_role, required=required),
-        }
-        if contract_path:
-            metadata["contract_path"] = contract_path
-        previous = conn.execute("SELECT status, checksum FROM artifacts WHERE id=?", (artifact_id,)).fetchone()
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO artifacts
-            (id, campaign_id, stage_id, path, kind, required, status, producer_node_id,
-             size_bytes, checksum, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                artifact_id,
-                campaign_id,
-                stage_id,
-                rel_path,
-                full.suffix.replace(".", "") or "text",
-                1 if required else 0,
-                "existing",
-                stage_id,
-                full.stat().st_size,
-                checksum,
-                json_dumps(metadata),
-            ),
-        )
-        if previous is None or previous["status"] != "existing" or previous["checksum"] != checksum:
-            self._append_event(
-                conn,
-                campaign_id=campaign_id,
-                event_type="ArtifactIndexed",
-                actor="system",
-                payload={
-                    "artifact_id": artifact_id,
-                    "stage_id": stage_id,
-                    "path": rel_path,
-                    "kind": full.suffix.replace(".", "") or "text",
-                    "required": required,
-                    "producer_node_id": stage_id,
-                    "workspace": workspace,
-                    "size_bytes": full.stat().st_size,
-                    "checksum": checksum,
-                    "source_role": source_role,
-                    "metadata": {"contract_path": contract_path} if contract_path else {},
-                },
-            )
 
     def write_readme(self, campaign_id: str) -> None:
         campaign = self.get_campaign(campaign_id)

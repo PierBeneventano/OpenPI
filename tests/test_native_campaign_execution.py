@@ -48,6 +48,8 @@ def test_sdk_native_campaign_completes_lean_smoke_path(tmp_path: Path):
     assert first["workspace"]["pending_decisions"][0]["target_type"] == "kernel_decision"
     assert first["workspace"]["pending_decisions"][0]["reason"] == "pause_after_stage"
     assert "approve" in first["workspace"]["safe_next_actions"]
+    with client.store.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
 
     _approve_all(client, first["workspace"])
     second = client.continue_execution(campaign_id)
@@ -73,6 +75,8 @@ def test_sdk_native_campaign_completes_lean_smoke_path(tmp_path: Path):
     )
     assert client.summarize_artifacts(campaign_id)["by_stage"]["writeup_agent"]["missing_required"] == 0
     event_types = [event["type"] for event in client.events(campaign_id)["events"]]
+    assert not any(event_type.startswith("Run") for event_type in event_types)
+    assert "CampaignExecutionPrepared" in event_types
     assert "CampaignExecutionCompleted" in event_types
     assert "DualityCheckCompleted" in event_types
 

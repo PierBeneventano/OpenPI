@@ -1,8 +1,8 @@
 """Campaign event projection helpers.
 
 This module owns the read-side reconstruction of campaign state from campaign
-events. Storage backends may pass cache rows as fallbacks, but product views
-should be derived here rather than from SQLite tables directly.
+events. Product views are derived here rather than from SQLite tables,
+snapshots, status files, or runtime workspace scans.
 """
 
 from __future__ import annotations
@@ -41,15 +41,11 @@ class CampaignEventProjector:
         self,
         campaign_id: str,
         events: list[dict[str, Any]],
-        *,
-        legacy_campaign: dict[str, Any] | None = None,
-        legacy_graph: dict[str, Any] | None = None,
-        legacy_artifact_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         return {
-            "campaign": self._campaign_header(campaign_id, events, legacy_campaign=legacy_campaign),
-            "graph": self._graph(campaign_id, events, legacy_graph=legacy_graph),
-            "artifact_rows": self._artifact_rows(campaign_id, events, legacy_artifact_rows=legacy_artifact_rows or []),
+            "campaign": self._campaign_header(campaign_id, events),
+            "graph": self._graph(campaign_id, events),
+            "artifact_rows": self._artifact_rows(campaign_id, events),
             "events": events,
         }
 
@@ -57,21 +53,21 @@ class CampaignEventProjector:
         self,
         campaign_id: str,
         events: list[dict[str, Any]],
-        *,
-        legacy_campaign: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        created = next((event for event in events if event["type"] == "CampaignCreated"), None)
+        created = next((event for event in events if event["type"] in {"CampaignCreated", "CampaignImported"}), None)
         payload = dict(created["payload"]) if created else {}
-        created_at = created["created_at"] if created else str((legacy_campaign or {}).get("created_at") or "")
-        status = str((legacy_campaign or {}).get("status") or "draft")
+        created_at = created["created_at"] if created else ""
+        status = "draft"
         updated_at = created_at
-        bundle_path = str((legacy_campaign or {}).get("bundle_path") or self.root / "campaigns" / campaign_id)
+        bundle_path = str(self.root / "campaigns" / campaign_id)
         for event in events:
             updated_at = event["created_at"]
             event_type = event["type"]
             event_payload = event["payload"]
             if event_type == "GraphApproved":
                 status = "approved"
+            elif event_type == "CampaignImported":
+                status = "imported"
             elif event_type == "GraphChangeProposed":
                 status = "pending_approval"
             elif event_type == "CampaignPaused":
@@ -80,9 +76,9 @@ class CampaignEventProjector:
                 status = "approved"
             elif event_type == "CampaignStopped":
                 status = "stopped"
-            elif event_type in {"RunStarted", "CampaignExecutionStarted"}:
+            elif event_type == "CampaignExecutionStarted":
                 status = "running"
-            elif event_type in {"RunExited", "CampaignExecutionCompleted", "CampaignExecutionFailed"}:
+            elif event_type in {"CampaignExecutionCompleted", "CampaignExecutionFailed"}:
                 exit_status = event_payload.get("status")
                 if exit_status == "completed":
                     status = "completed"
@@ -105,15 +101,15 @@ class CampaignEventProjector:
                 bundle_path = str(event_payload.get("bundle_path") or bundle_path)
         return {
             "id": campaign_id,
-            "title": str(payload.get("title") or (legacy_campaign or {}).get("title") or campaign_id),
-            "objective": str(payload.get("objective") or (legacy_campaign or {}).get("objective") or ""),
+            "title": str(payload.get("title") or campaign_id),
+            "objective": str(payload.get("objective") or ""),
             "status": status,
             "created_at": created_at,
             "updated_at": updated_at,
-            "workspace_root": str(payload.get("workspace_root") or (legacy_campaign or {}).get("workspace_root") or Path("results") / campaign_id),
-            "budget_cap_usd": payload.get("budget") if "budget" in payload else (legacy_campaign or {}).get("budget_cap_usd"),
-            "tier": payload.get("tier") if "tier" in payload else (legacy_campaign or {}).get("tier"),
-            "output_format": payload.get("output_format") if "output_format" in payload else (legacy_campaign or {}).get("output_format"),
+            "workspace_root": str(payload.get("workspace_root") or Path("results") / campaign_id),
+            "budget_cap_usd": payload.get("budget"),
+            "tier": payload.get("tier"),
+            "output_format": payload.get("output_format"),
             "bundle_path": bundle_path,
         }
 
@@ -121,8 +117,6 @@ class CampaignEventProjector:
         self,
         campaign_id: str,
         events: list[dict[str, Any]],
-        *,
-        legacy_graph: dict[str, Any] | None,
     ) -> dict[str, Any]:
         graph: dict[str, Any] | None = None
         state = "planned"
@@ -144,19 +138,13 @@ class CampaignEventProjector:
             elif event["type"] == "GraphNodeStatusChanged":
                 node_status[str(payload.get("node_id"))] = str(payload.get("status") or "unknown")
         if graph is None:
-            graph = json.loads(json.dumps(legacy_graph)) if legacy_graph is not None else {
+            graph = {
                 "campaign": campaign_id,
                 "version": 0,
                 "state": "planned",
                 "nodes": [],
                 "edges": [],
                 "metadata": {"read_source": "empty"},
-            }
-            state = str(graph.get("state") or state)
-            version = int(graph.get("version") or version)
-            node_status = {
-                str(node.get("id")): str(node.get("status") or "planned")
-                for node in graph.get("nodes", [])
             }
         graph["campaign"] = campaign_id
         graph["state"] = state
@@ -172,8 +160,6 @@ class CampaignEventProjector:
         self,
         campaign_id: str,
         events: list[dict[str, Any]],
-        *,
-        legacy_artifact_rows: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         rows: dict[str, dict[str, Any]] = {}
         declarations_by_key: dict[tuple[str, str, int], dict[str, Any]] = {}
@@ -186,8 +172,6 @@ class CampaignEventProjector:
             elif event["type"] == "ArtifactIndexed":
                 row = self._artifact_index_row(campaign_id, payload, declarations_by_key)
                 rows[row["id"]] = row
-        if not rows:
-            return legacy_artifact_rows
         return sorted(
             rows.values(),
             key=lambda row: (

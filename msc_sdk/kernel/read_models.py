@@ -11,8 +11,6 @@ from .models import EventRecord
 
 
 TERMINAL_RUN_EVENTS = {
-    "RunCompleted",
-    "RunFailed",
     "CampaignExecutionCompleted",
     "CampaignExecutionFailed",
 }
@@ -116,19 +114,19 @@ def project_run(events: Iterable[EventRecord]) -> KernelRunReadModel:
         event_type = str(event.type)
         stage_id = str(payload.get("stage_id") or "")
 
-        if event_type in {"RunStarted", "CampaignExecutionStarted"}:
+        if event_type == "CampaignExecutionStarted":
             model.status = "running"
             model.objective = str(payload.get("objective") or "")
             model.graph_id = str(payload.get("graph_id") or "")
             model.workspace = str(payload.get("workspace") or "")
-        elif event_type in {"RunResumed", "CampaignExecutionResumed"}:
+        elif event_type == "CampaignExecutionResumed":
             model.status = "running"
-        elif event_type in {"RunCompleted", "CampaignExecutionCompleted"}:
+        elif event_type == "CampaignExecutionCompleted":
             model.status = "completed"
             model.completed_stage_ids = [
                 str(stage) for stage in payload.get("completed_stage_ids") or []
             ]
-        elif event_type in {"RunFailed", "CampaignExecutionFailed"}:
+        elif event_type == "CampaignExecutionFailed":
             model.status = "human_decision_required"
         elif event_type == "StageStarted" and stage_id:
             stage = _stage(model, stage_id)

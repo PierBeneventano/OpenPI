@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from msc_sdk.campaign_projection import CampaignEventProjector
@@ -211,7 +208,7 @@ def test_campaign_workspace_model_uses_campaign_execution_and_deliverables(tmp_p
         template="literature_only",
         budget=1,
     )
-    run = store.record_run_started("workspace-demo", command=["msc", "run"], pid=os.getpid())
+    run = store.record_run_started("workspace-demo", command=["msc", "run"], pid=321)
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "workspace-demo")
     monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
@@ -241,7 +238,7 @@ def test_campaign_workspace_model_uses_campaign_execution_and_deliverables(tmp_p
     assert workspace["feedback"][0]["type"] == "revision"
 
     events = [event["type"] for event in store.events("workspace-demo")["events"]]
-    assert "RunStarted" in events
+    assert not any(event_type.startswith("Run") for event_type in events)
     assert "CampaignExecutionStarted" in events
     assert "HumanFeedbackRecorded" in events
 
@@ -308,95 +305,6 @@ def test_failure_recovery_decision_is_researcher_readable(tmp_path: Path):
     assert decision["reason"] == "Recursion limit of 25 reached without hitting a stop condition."
 
 
-def test_live_milestone_gate_projects_pending_decision_and_typed_approval(tmp_path: Path):
-    received: list[dict[str, str]] = []
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *_args):
-            return
-
-        def do_GET(self):
-            if self.path != "/milestone":
-                self.send_response(404)
-                self.end_headers()
-                return
-            body = json.dumps(
-                {
-                    "waiting": True,
-                    "phase": "research_plan",
-                    "latest_report_path": "results/live-milestone-demo/milestone_reports/research_plan_cycle0.pdf",
-                }
-            ).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
-
-        def do_POST(self):
-            if self.path != "/milestone_response":
-                self.send_response(404)
-                self.end_headers()
-                return
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            received.append(payload)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"ok":true}')
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    base_url = f"http://127.0.0.1:{server.server_port}"
-    try:
-        store = CampaignStore(tmp_path)
-        store.create_campaign(
-            title="Live Milestone Demo",
-            objective="Expose live runner milestone gates through the SDK.",
-            template="target_research",
-            budget=1,
-        )
-        store.record_run_started(
-            "live-milestone-demo",
-            command=["msc", "run", "--human-gates"],
-            pid=111,
-            metadata={
-                "steering": {
-                    "human_gates": True,
-                    "http_base_url": base_url,
-                    "milestone_status_url": f"{base_url}/milestone",
-                    "milestone_approval_url": f"{base_url}/milestone_response",
-                }
-            },
-        )
-
-        workspace = store.workspace_read_model("live-milestone-demo")
-        decision = workspace["pending_decisions"][0]
-
-        assert workspace["execution"]["status"] == "human_decision_required"
-        assert workspace["execution"]["live_milestone"]["phase"] == "research_plan"
-        assert decision["target_type"] == "live_milestone"
-        assert decision["target_id"] == "milestone_goals"
-        assert "approve-milestone" in workspace["safe_next_actions"]
-
-        approved = store.approve_milestone(
-            "live-milestone-demo",
-            feedback="The plan is coherent enough for this live smoke test.",
-        )
-
-        assert approved["ok"]
-        assert received == [
-            {"action": "approve", "feedback": "The plan is coherent enough for this live smoke test."}
-        ]
-        events = [event["type"] for event in store.events("live-milestone-demo")["events"]]
-        assert "MilestoneDecisionSubmitted" in events
-        assert "HumanFeedbackRecorded" in events
-    finally:
-        server.shutdown()
-        thread.join(timeout=1)
-
-
 def test_dry_run_passed_is_not_projected_as_execution_failure(tmp_path: Path):
     store = CampaignStore(tmp_path)
     store.create_campaign(
@@ -420,15 +328,15 @@ def test_dry_run_passed_is_not_projected_as_execution_failure(tmp_path: Path):
     assert workspace["safe_next_actions"] == ["review-deliverables", "record-feedback", "rerun-stage"]
 
 
-def test_legacy_spurious_dry_run_failure_recovery_is_hidden(tmp_path: Path):
+def test_spurious_dry_run_failure_recovery_is_hidden(tmp_path: Path):
     store = CampaignStore(tmp_path)
     store.create_campaign(
-        title="Legacy Dry Run Bug Demo",
+        title="Spurious Dry Run Bug Demo",
         objective="Ignore old dry-run success events that were mislabeled as failures.",
         template="target_research",
         budget=1,
     )
-    run = store.record_run_started("legacy-dry-run-bug-demo", command=["msc", "run", "--dry-run"], pid=44)
+    run = store.record_run_started("spurious-dry-run-bug-demo", command=["msc", "run", "--dry-run"], pid=44)
     run_id = run["run_id"]
     with store.connect() as conn:
         conn.execute(
@@ -437,28 +345,21 @@ def test_legacy_spurious_dry_run_failure_recovery_is_hidden(tmp_path: Path):
         )
         store._append_event(
             conn,
-            campaign_id="legacy-dry-run-bug-demo",
-            event_type="RunExited",
-            actor="runner",
-            payload={"run_id": run_id, "status": "dry_run_passed", "exit_code": 0},
-        )
-        store._append_event(
-            conn,
-            campaign_id="legacy-dry-run-bug-demo",
+            campaign_id="spurious-dry-run-bug-demo",
             event_type="CampaignExecutionFailed",
             actor="runner",
             payload={"execution_id": run_id, "run_id": run_id, "status": "dry_run_passed", "exit_code": 0},
         )
         store._create_approval(
             conn,
-            campaign_id="legacy-dry-run-bug-demo",
+            campaign_id="spurious-dry-run-bug-demo",
             target_type="failure_recovery",
             target_id=run_id,
             actor="runner",
             metadata={"run_id": run_id, "exit_code": 0, "reason": None},
         )
 
-    workspace = store.workspace_read_model("legacy-dry-run-bug-demo")
+    workspace = store.workspace_read_model("spurious-dry-run-bug-demo")
 
     assert workspace["campaign"]["status"] == "approved"
     assert workspace["execution"]["status"] == "dry_run_passed"
@@ -687,20 +588,20 @@ def test_materializer_skips_existing_required_artifacts(tmp_path: Path, monkeypa
     assert (root / "artifacts" / "research_proposal.md").read_text() == "# Native Proposal"
 
 
-def test_experiment_track_materializer_writes_legacy_summary_for_adapter(tmp_path: Path, monkeypatch):
+def test_experiment_track_materializer_writes_diagnostic_summary_for_adapter(tmp_path: Path, monkeypatch):
     store = CampaignStore(tmp_path)
     store.create_campaign(
         title="Experiment Summary Demo",
-        objective="Bridge SDK experiment artifacts back to legacy track merge.",
+        objective="Bridge SDK experiment artifacts back to an adapter track merge.",
         template="target_research",
         budget=1,
     )
     run = store.record_run_started("experiment-summary-demo", command=["msc", "run"], pid=460)
-    legacy_workspace = tmp_path / "results" / "legacy-run"
+    adapter_workspace = tmp_path / "results" / "adapter-run"
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "experiment-summary-demo")
     monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
-    monkeypatch.setenv("RESULTS_BASE_DIR", str(legacy_workspace))
+    monkeypatch.setenv("RESULTS_BASE_DIR", str(adapter_workspace))
 
     materialize_stage_outputs(
         "experiment_track",
@@ -708,10 +609,10 @@ def test_experiment_track_materializer_writes_legacy_summary_for_adapter(tmp_pat
         {"agent_outputs": {"experiment_track": "Empirical track completed."}},
     )
 
-    summary = json.loads((legacy_workspace / "paper_workspace" / "experiment_track_summary.json").read_text())
+    summary = json.loads((adapter_workspace / "paper_workspace" / "experiment_track_summary.json").read_text())
     assert summary["passed"] == ["G1"]
     assert summary["metrics"]["without_batch_norm"][-1] > summary["metrics"]["with_batch_norm"][-1]
-    assert (legacy_workspace / "paper_workspace" / "experiment_report.tex").exists()
+    assert (adapter_workspace / "paper_workspace" / "experiment_report.tex").exists()
 
 
 def test_experimentation_materializer_writes_concrete_toy_results(tmp_path: Path, monkeypatch):
@@ -723,41 +624,23 @@ def test_experimentation_materializer_writes_concrete_toy_results(tmp_path: Path
         budget=1,
     )
     run = store.record_run_started("experiment-results-demo", command=["msc", "run"], pid=461)
-    legacy_workspace = tmp_path / "results" / "legacy-run"
+    adapter_workspace = tmp_path / "results" / "adapter-run"
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "experiment-results-demo")
     monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
-    monkeypatch.setenv("RESULTS_BASE_DIR", str(legacy_workspace))
+    monkeypatch.setenv("RESULTS_BASE_DIR", str(adapter_workspace))
 
     materialize_stage_outputs(
         "experimentation_agent",
         {"task": "Compare spectral norm growth."},
-        {"agent_outputs": {"experimentation_agent": "Pseudo-code from legacy model."}},
+        {"agent_outputs": {"experimentation_agent": "Pseudo-code from adapter model."}},
     )
 
     root = tmp_path / "results" / "experiment-results-demo" / "runs" / run["run_id"] / "experimentation_agent"
     results_md = (root / "artifacts" / "experiment_results.md").read_text()
-    legacy_results = json.loads((legacy_workspace / "paper_workspace" / "experiment_results.json").read_text())
+    adapter_results = json.loads((adapter_workspace / "paper_workspace" / "experiment_results.json").read_text())
     assert "Without BN" in results_md
-    assert legacy_results["without_batch_norm"][-1] > legacy_results["with_batch_norm"][-1]
-
-
-def test_workspace_marks_missing_running_process_as_failed(tmp_path: Path):
-    store = CampaignStore(tmp_path)
-    store.create_campaign(
-        title="Stale Process Demo",
-        objective="Expose stale process diagnostics.",
-        template="target_research",
-        budget=1,
-    )
-    store.record_run_started("stale-process-demo", command=["msc", "run"], pid=99999999)
-
-    workspace = store.workspace_read_model("stale-process-demo")
-
-    assert workspace["execution"]["status"] == "failed"
-    assert workspace["execution"]["process_liveness"]["status"] == "stale"
-    diagnosis = store.diagnose_execution("stale-process-demo")
-    assert diagnosis["process_liveness"]["status"] == "stale"
+    assert adapter_results["without_batch_norm"][-1] > adapter_results["with_batch_norm"][-1]
 
 
 def test_stage_completion_is_derived_from_required_artifacts(tmp_path: Path, monkeypatch):
@@ -833,7 +716,7 @@ def test_run_scoped_artifacts_are_collapsed_to_researcher_artifact(tmp_path: Pat
     assert matrix_rows[0]["audience"] == "deliverable"
 
 
-def test_legacy_scaffold_files_project_as_prompts_not_deliverables(tmp_path: Path):
+def test_scaffold_files_project_as_prompts_not_deliverables(tmp_path: Path):
     workspace = tmp_path / "results" / "demo" / "literature_review_agent"
     artifact = workspace / "artifacts" / "literature_matrix.md"
     artifact.parent.mkdir(parents=True)

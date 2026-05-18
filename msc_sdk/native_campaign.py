@@ -29,6 +29,7 @@ from .kernel import (
     StageSpec,
     build_kernel_native_research_kernel,
 )
+from .kernel.models import stable_id
 from .stage_contracts import compile_kernel_graph
 
 
@@ -106,7 +107,6 @@ class StoreBackedKernelEventBus:
         payload: dict[str, Any],
     ) -> None:
         if event_type in {"CampaignExecutionStarted", "CampaignExecutionResumed"}:
-            self._set_run_status(conn, run=run, status="running")
             conn.execute("UPDATE campaigns SET status=?, updated_at=? WHERE id=?", ("running", now_iso(), run.campaign_id))
             return
         if event_type == "StageStarted":
@@ -126,38 +126,16 @@ class StoreBackedKernelEventBus:
                 "UPDATE campaigns SET status=?, updated_at=? WHERE id=?",
                 ("human_decision_required", now_iso(), run.campaign_id),
             )
-            self._set_run_status(conn, run=run, status="human_decision_required")
             return
         if event_type == "CampaignExecutionCompleted":
-            self._set_run_status(conn, run=run, status="completed", exit_code=0)
             conn.execute("UPDATE campaigns SET status=?, updated_at=? WHERE id=?", ("completed", now_iso(), run.campaign_id))
             return
         if event_type == "CampaignExecutionFailed":
             status = str(payload.get("status") or "failed")
-            run_status = "human_decision_required" if status == "human_decision_required" else "failed"
-            self._set_run_status(conn, run=run, status=run_status, exit_code=None if run_status == "human_decision_required" else 1)
             conn.execute(
                 "UPDATE campaigns SET status=?, updated_at=? WHERE id=?",
-                ("human_decision_required", now_iso(), run.campaign_id),
+                ("human_decision_required" if status == "human_decision_required" else "failed", now_iso(), run.campaign_id),
             )
-
-    @staticmethod
-    def _set_run_status(
-        conn: sqlite3.Connection,
-        *,
-        run: RunSpec,
-        status: str,
-        exit_code: int | None = None,
-    ) -> None:
-        exited_at = now_iso() if status in {"completed", "failed"} else None
-        conn.execute(
-            """
-            UPDATE runs
-            SET status=?, exited_at=COALESCE(?, exited_at), exit_code=COALESCE(?, exit_code)
-            WHERE id=? AND campaign_id=?
-            """,
-            (status, exited_at, exit_code, run.id, run.campaign_id),
-        )
 
     def _set_node_status(
         self,
@@ -304,17 +282,22 @@ class NativeCampaignExecutor:
             "human_gates": bool(human_gates),
             "force_duality_fail": bool(force_duality_fail),
         }
-        started = self.store.record_run_started(
+        run_id = stable_id(campaign_id, NATIVE_RUNTIME, str(graph_version), now_iso())
+        self.store.append_event(
             campaign_id,
-            command={"operation": "campaigns.start", "runtime": NATIVE_RUNTIME, "metadata": metadata},
-            pid=None,
-            graph_version=graph_version,
+            "CampaignExecutionPrepared",
             actor=actor,
-            metadata=metadata,
+            payload={
+                "execution_id": run_id,
+                "run_id": run_id,
+                "runtime": NATIVE_RUNTIME,
+                "graph_version": graph_version,
+                "metadata": metadata,
+            },
         )
         return self._run_segment(
             campaign_id,
-            run_id=started["run_id"],
+            run_id=run_id,
             metadata=metadata,
             checkpoint=None,
         )
@@ -442,17 +425,14 @@ class NativeCampaignExecutor:
         return _checkpoint_from_payload(payload)
 
     def _run_metadata(self, campaign_id: str, run_id: str) -> dict[str, Any]:
-        with self.store.connect() as conn:
-            row = conn.execute(
-                "SELECT metadata_json FROM runs WHERE campaign_id=? AND id=?",
-                (campaign_id, run_id),
-            ).fetchone()
-        if row is None:
-            return {}
-        metadata = json.loads(row["metadata_json"] or "{}")
-        if "graph_version" in metadata and isinstance(metadata.get("graph_version"), int):
-            metadata.pop("graph_version", None)
-        return metadata
+        for event in reversed(self.store.events(campaign_id)["events"]):
+            if event["type"] not in {"CampaignExecutionStarted", "CampaignExecutionResumed", "CampaignExecutionPrepared"}:
+                continue
+            payload = event["payload"]
+            if str(payload.get("run_id") or payload.get("execution_id")) != run_id:
+                continue
+            return dict(payload.get("metadata") or {})
+        return {}
 
 
 def _apply_native_policy(graph: GraphSpec, *, math_enabled: bool, human_gates: bool) -> GraphSpec:
@@ -475,6 +455,7 @@ def _apply_native_policy(graph: GraphSpec, *, math_enabled: bool, human_gates: b
                 routes=tuple(routes),
                 pause_before=pause_before,
                 pause_after=pause_after,
+                adapter_id=f"{NATIVE_RUNTIME}.{stage.id}",
                 metadata={**dict(stage.metadata), "adapter": NATIVE_RUNTIME, "native_runtime": True},
             )
         )

@@ -1172,7 +1172,7 @@ function summarizeCampaignEvents(events) {
   for (const event of events || []) {
     const type = String(event.type || '');
     const payload = event.payload || {};
-    if (type === 'RunStarted' || type === 'CampaignExecutionStarted') {
+    if (type === 'CampaignExecutionStarted') {
       const runId = String(payload.run_id || payload.execution_id || event.id || '');
       if (!runId) {
         continue;
@@ -1188,7 +1188,7 @@ function summarizeCampaignEvents(events) {
         started_at: event.created_at || current.started_at || null,
         updated_at: event.created_at || current.updated_at || null
       });
-    } else if (type === 'RunExited' || type === 'CampaignExecutionCompleted' || type === 'CampaignExecutionFailed') {
+    } else if (type === 'CampaignExecutionCompleted' || type === 'CampaignExecutionFailed') {
       const runId = String(payload.run_id || payload.execution_id || event.id || '');
       if (!runId) {
         continue;

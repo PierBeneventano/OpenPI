@@ -97,7 +97,7 @@ def register_kernel_native_adapters(registry: StageAdapterRegistry) -> None:
     }
     for stage_id in KERNEL_NATIVE_SCAFFOLD_STAGE_IDS:
         handler = handlers.get(stage_id) or _generic_stage(stage_id)
-        registry.register(f"historical.{stage_id}", handler)
+        registry.register(f"sdk_native.{stage_id}", handler)
 
 
 def register_declared_pass_validators(registry: ValidatorRegistry, graph: GraphSpec) -> None:

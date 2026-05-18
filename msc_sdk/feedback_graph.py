@@ -70,10 +70,9 @@ FEEDBACK_THEORY_AGENT_STAGE_IDS: tuple[str, ...] = (
     "proof_transcription_agent",
 )
 
-# The researcher-facing table names T1-T6, while the current legacy adapter
-# also has deterministic repair/review gates inside the theory branch. Preserve
-# both so the product can show the six scientific agents and diagnostics can
-# expose the adapter's extra gates.
+# The researcher-facing table names T1-T6. The SDK also models deterministic
+# repair/review gates inside the theory branch so diagnostics can show the full
+# control structure without flattening the six scientific agents.
 FEEDBACK_THEORY_SUBGRAPH_STAGE_IDS: tuple[str, ...] = (
     "math_literature_agent",
     "math_proposer_agent",
@@ -155,7 +154,7 @@ def _subgraphs() -> tuple[SubgraphSpec, ...]:
             metadata={
                 "label": "Theory Track",
                 "feedbackAgentStageIds": list(FEEDBACK_THEORY_AGENT_STAGE_IDS),
-                "adapter": "legacy_langgraph",
+                "adapter": "sdk_native",
                 "collapsedByDefault": True,
             },
         ),
@@ -174,7 +173,7 @@ def _subgraphs() -> tuple[SubgraphSpec, ...]:
             metadata={
                 "label": "Experiment Track",
                 "feedbackAgentStageIds": list(FEEDBACK_EXPERIMENT_SUBGRAPH_STAGE_IDS),
-                "adapter": "legacy_langgraph",
+                "adapter": "sdk_native",
                 "collapsedByDefault": True,
             },
         ),
@@ -239,10 +238,10 @@ def _routers() -> tuple[RouterSpec, ...]:
                     label="missing_artifacts",
                     target="brainstorm_agent",
                     retry=RetryPolicy(max_attempts=2, counter="brainstorm_artifact_retries"),
-                    metadata={"legacyCondition": "missing_or_invalid_artifacts"},
+                    metadata={"sourceCondition": "missing_or_invalid_artifacts"},
                 ),
                 RouteCondition(label="halt", terminal=True, expression="critical_failure is set"),
-                RouteCondition(label="advance", target="formalize_goals_entry", metadata={"legacyCondition": "valid"}),
+                RouteCondition(label="advance", target="formalize_goals_entry", metadata={"sourceCondition": "valid"}),
             ),
         ),
         RouterSpec(
@@ -281,20 +280,20 @@ def _routers() -> tuple[RouterSpec, ...]:
                     label="pass",
                     target="formalize_results_agent",
                     expression="goals_met / goals_total >= 0.8",
-                    metadata={"legacyCondition": "complete"},
+                    metadata={"sourceCondition": "complete"},
                 ),
                 RouteCondition(
                     label="incomplete",
                     target="formalize_goals_agent",
                     expression="0.3 <= goals_met / goals_total < 0.8",
                     retry=RetryPolicy(max_attempts=3, counter="verify_rework_attempts"),
-                    metadata={"legacyCondition": "needs_goal_refinement"},
+                    metadata={"sourceCondition": "needs_goal_refinement"},
                 ),
                 RouteCondition(
                     label="rethink",
                     target="brainstorm_agent",
                     expression="goals_met / goals_total < 0.3",
-                    metadata={"legacyCondition": "needs_fundamental_rethink"},
+                    metadata={"sourceCondition": "needs_fundamental_rethink"},
                 ),
             ),
         ),
@@ -312,7 +311,7 @@ def _routers() -> tuple[RouterSpec, ...]:
                     target="followup_lit_review",
                     expression="duality_check_result.both_passed is false",
                     retry=RetryPolicy(max_attempts=2, counter="duality_rework_attempts"),
-                    metadata={"legacyCondition": "needs_followup_lit_review"},
+                    metadata={"sourceCondition": "needs_followup_lit_review"},
                 ),
             ),
         ),
@@ -323,9 +322,9 @@ def _routers() -> tuple[RouterSpec, ...]:
                 RouteCondition(
                     label="missing_artifacts",
                     target="writeup_agent",
-                    metadata={"legacyCondition": "missing_or_invalid_paper_artifacts"},
+                    metadata={"sourceCondition": "missing_or_invalid_paper_artifacts"},
                 ),
-                RouteCondition(label="advance", target="proofreading_entry", metadata={"legacyCondition": "valid"}),
+                RouteCondition(label="advance", target="proofreading_entry", metadata={"sourceCondition": "valid"}),
             ),
         ),
         RouterSpec(
@@ -335,9 +334,9 @@ def _routers() -> tuple[RouterSpec, ...]:
                 RouteCondition(
                     label="quality_below_threshold",
                     target="proofreading_agent",
-                    metadata={"legacyCondition": "copyedit_incomplete"},
+                    metadata={"sourceCondition": "copyedit_incomplete"},
                 ),
-                RouteCondition(label="advance", target="reviewer_agent", metadata={"legacyCondition": "ready_for_review"}),
+                RouteCondition(label="advance", target="reviewer_agent", metadata={"sourceCondition": "ready_for_review"}),
             ),
         ),
         RouterSpec(
@@ -347,9 +346,9 @@ def _routers() -> tuple[RouterSpec, ...]:
                 RouteCondition(
                     label="score_below_min_review_score",
                     target="reviewer_agent",
-                    metadata={"legacyCondition": "review_needs_retry"},
+                    metadata={"sourceCondition": "review_needs_retry"},
                 ),
-                RouteCondition(label="advance", target="milestone_review", metadata={"legacyCondition": "review_accepted"}),
+                RouteCondition(label="advance", target="milestone_review", metadata={"sourceCondition": "review_accepted"}),
             ),
         ),
         RouterSpec(
@@ -360,19 +359,19 @@ def _routers() -> tuple[RouterSpec, ...]:
                     label="missing_paper_artifacts",
                     target="writeup_agent",
                     retry=RetryPolicy(max_attempts=3, counter="validation_retry_count"),
-                    metadata={"legacyCondition": "paper_artifact_failure"},
+                    metadata={"sourceCondition": "paper_artifact_failure"},
                 ),
                 RouteCondition(
                     label="missing_experiment_outputs",
                     target="experiment_track",
                     retry=RetryPolicy(max_attempts=3, counter="validation_retry_count"),
-                    metadata={"legacyCondition": "experiment_artifact_failure"},
+                    metadata={"sourceCondition": "experiment_artifact_failure"},
                 ),
                 RouteCondition(
                     label="missing_theory_outputs",
                     target="theory_track",
                     retry=RetryPolicy(max_attempts=3, counter="validation_retry_count"),
-                    metadata={"legacyCondition": "theory_artifact_failure"},
+                    metadata={"sourceCondition": "theory_artifact_failure"},
                 ),
                 RouteCondition(label="finished", terminal=True, expression="finished is true"),
             ),

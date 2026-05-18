@@ -1,9 +1,8 @@
-"""Typed product contracts for the historical MSc research engine.
+"""Typed product contracts for the target research graph.
 
-The contracts in this module are intentionally descriptive. They do not drive
-LangGraph execution yet; they expose the semantics of the existing engine so
-campaign state, graph previews, OpenClaude steering, and tests can reason about
-the same nodes the runtime already knows how to run.
+The contracts in this module are intentionally descriptive. They expose the
+feedback-derived SDK graph shape, artifact contracts, routing posture, pause
+rules, and adapter ids used by native campaign execution.
 """
 
 from __future__ import annotations
@@ -107,7 +106,7 @@ class StageContract:
     human_pause_policy: tuple[str, ...] = ()
     failure_policy: str = "stop_and_await_human_feedback"
     allowed_routes: tuple[RouteContract, ...] = ()
-    legacy_runtime_mapping: dict[str, Any] = field(default_factory=dict)
+    diagnostic_runtime_mapping: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -119,7 +118,7 @@ class StageContract:
 
 
 def historical_stage_contracts() -> list[StageContract]:
-    """Load runtime-owned contracts for the current historical engine."""
+    """Load the feedback-derived source contracts."""
 
     from consortium.stage_contracts.historical import CONTRACTS
 
@@ -181,7 +180,7 @@ def compile_kernel_graph(
     template: str,
     budget: float = 0.0,
 ) -> GraphSpec:
-    """Compile historical source contracts into the kernel graph language."""
+    """Compile target research source contracts into the kernel graph language."""
 
     ids = template_node_ids(template)
     all_contracts = contracts_by_id()
@@ -300,14 +299,20 @@ def _stage_spec_from_contract(
         budget_share = float(total_budget_usd) * (contract.budget_policy.relative_weight / total_weight)
     metadata = {
         **dict(contract.metadata),
-        "contract_source": "historical_stage_contract",
-        "legacy_runtime_mapping": dict(contract.legacy_runtime_mapping),
+        "contract_source": "feedback_stage_contract",
+        "runtime_mapping_diagnostics": dict(contract.diagnostic_runtime_mapping),
         "human_pause_policy": list(contract.human_pause_policy),
         "failure_policy": contract.failure_policy,
         "council_policy": _council_policy_for_contract(contract),
         "budget_policy": contract.budget_policy.to_dict(tier="kernel", budget_share_usd=budget_share),
-        "required_artifact_contracts": [artifact.to_dict() for artifact in contract.required_artifacts],
-        "optional_artifact_contracts": [artifact.to_dict() for artifact in contract.optional_artifacts],
+        "required_artifact_contracts": [
+            _artifact_contract_dict(_artifact_spec(artifact, required=True))
+            for artifact in contract.required_artifacts
+        ],
+        "optional_artifact_contracts": [
+            _artifact_contract_dict(_artifact_spec(artifact, required=False))
+            for artifact in contract.optional_artifacts
+        ],
     }
     field_contracts = state_field_contracts_for_stage(contract.id)
     if field_contracts:
@@ -327,8 +332,6 @@ def _stage_spec_from_contract(
         metadata["subgraph_id"] = subgraph.id
         if contract.id == subgraph.id:
             metadata["subgraph_collapsed_by_default"] = True
-    if contract.legacy_runtime_mapping:
-        metadata["adapter"] = "legacy_langgraph"
     routes = tuple(
         _route_spec(route, source_stage_id=contract.id)
         for route in contract.allowed_routes
@@ -340,7 +343,7 @@ def _stage_spec_from_contract(
                 target=fallback_next_stage_id,
                 kind="next",
                 condition="always",
-                metadata={"legacy_kind": "template_order", "synthesized": True},
+                metadata={"source_kind": "template_order", "synthesized": True},
             ),
         )
     return StageSpec(
@@ -359,7 +362,7 @@ def _stage_spec_from_contract(
         validator_ids=tuple(contract.validators),
         tool_ids=tuple(contract.tool_families),
         council_policy=CouncilPolicy(kind=_council_policy_for_contract(contract)),
-        adapter_id=f"historical.{contract.id}",
+        adapter_id=f"sdk_native.{contract.id}",
         budget=KernelBudgetPolicy(max_usd=budget_share, spend_allowed=contract.budget_policy.spend),
         failure=FailurePolicy(mode="stop_for_human"),
         routes=routes,
@@ -419,7 +422,7 @@ def _requires_duality_pass(stage_id: str) -> bool:
 
 
 def _route_spec(route: RouteContract, *, source_stage_id: str) -> RouteSpec:
-    route_metadata: dict[str, Any] = {"legacy_kind": route.kind}
+    route_metadata: dict[str, Any] = {"source_kind": route.kind}
     router = target_research_graph_template().router_map().get(source_stage_id)
     if router is not None:
         branch = _router_branch_for_route(router, route)
@@ -508,7 +511,7 @@ def _stage_node(
         {
             "template": template,
             "order": order,
-            "kind": metadata.get("legacy_kind") or stage.kind,
+            "kind": metadata.get("source_kind") or stage.kind,
             "purpose": stage.purpose,
             "validators": list(stage.validator_ids),
             "toolFamilies": list(stage.tool_ids),
@@ -520,8 +523,10 @@ def _stage_node(
             "dualityRequired": bool(metadata.get("duality_required") or stage.id == "duality_check"),
             "requiresDualityPass": bool(metadata.get("requires_duality_pass")),
             "allowedRoutes": [_route_edge(stage.id, route) for route in stage.routes],
-            "legacyRuntimeMapping": dict(metadata.get("legacy_runtime_mapping") or {}),
-            "adapter": metadata.get("adapter") or "legacy_langgraph",
+            "adapter": metadata.get("adapter") or "sdk_native",
+            "diagnostics": {
+                "runtimeMapping": dict(metadata.get("runtime_mapping_diagnostics") or {}),
+            },
             "routerSpec": metadata.get("router_spec"),
             "subgraphSpec": metadata.get("subgraph_spec"),
             "subgraphId": metadata.get("subgraph_id"),
@@ -538,7 +543,7 @@ def _stage_node(
     )
     return {
         "id": stage.id,
-        "type": stage.metadata.get("legacy_kind") or stage.kind,
+        "type": stage.metadata.get("source_kind") or stage.kind,
         "title": stage.title,
         "status": "planned",
         "inputs": [
@@ -574,7 +579,7 @@ def _route_edge(source: str, route: RouteSpec) -> dict[str, Any]:
     return {
         "source": source,
         "target": route.target,
-        "kind": metadata.get("legacy_kind") or route.kind,
+        "kind": metadata.get("source_kind") or route.kind,
         "metadata": metadata,
     }
 
@@ -585,5 +590,4 @@ def _artifact_contract_dict(artifact: ArtifactSpec) -> dict[str, Any]:
         "kind": artifact.kind,
         "required": artifact.required,
         "description": artifact.description,
-        "legacy_paths": [],
     }

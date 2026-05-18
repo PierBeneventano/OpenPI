@@ -79,10 +79,12 @@ The duality check is a core scientific gate. A failed duality check emits:
 Writeup artifacts are not produced after failed duality until the researcher or
 OpenClaude resolves the decision through the SDK.
 
-## Legacy Compatibility
+## Pruned Legacy Boundary
 
-Legacy tables such as `runs` still exist as compatibility indexes. Raw process
-details remain diagnostics. Product behavior should be implemented against
-campaign events, graph specs, artifact contracts, approvals, and workspace read
-models.
+Archived runner paths may still keep internal process/session indexes while
+they exist, but SDK-native execution does not depend on them and product read
+models do not project old run events, PID liveness, runner HTTP gates, status
+JSON, or raw workspace scans as truth.
 
+Product behavior should be implemented against campaign events, graph specs,
+artifact contracts, approvals, and workspace read models.

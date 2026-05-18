@@ -6,6 +6,9 @@ current north star. It folds the researcher intent snapshot in
 the snapshot as the authoritative V0 graph-shape reference and representing it
 through product-facing SDK abstractions.
 
+See [`legacy_pruning_boundary.md`](legacy_pruning_boundary.md) for the current
+line between SDK-native product truth and archived adapter code.
+
 ## Target State
 
 The product source of truth is:
@@ -16,8 +19,8 @@ CampaignGoal -> ResearchGraphTemplate -> GraphSpec -> StageSpec
 ```
 
 The researcher sees a campaign, a graph, decisions, deliverables, OpenClaude
-steering, and diagnostics on request. Internal process/session IDs may remain
-for compatibility, but they are not the product center.
+steering, and diagnostics on request. Internal process/session IDs are
+diagnostics only; they are not the product center.
 
 ## Cutover Order
 
@@ -25,8 +28,9 @@ for compatibility, but they are not the product center.
    [`target_research_workflow.md`](target_research_workflow.md) plus
    `msc_sdk.feedback_graph` as the faithful SDK representation of the feedback
    graph.
-2. Make campaign-execution events primary while projecting legacy `Run*` events
-   as compatibility aliases.
+2. Make campaign-execution events the only product execution events. Internal
+   adapter indexes may exist, but they must not mint or project legacy run
+   events as truth.
 3. Compile the target workflow template into `GraphSpec`/`StageSpec` with all
    29 feedback top-level nodes, nested theory/experiment subgraphs, router
    labels, retry caps, fan-out/fan-in, council policy, tier policy, validators,
@@ -40,8 +44,8 @@ for compatibility, but they are not the product center.
 7. Make campaign event projection the public read authority for UI, CLI,
    OpenClaude, and optional OpenClaw wrappers.
 8. Hide raw engine artifacts by default; expose them through diagnostics.
-9. Replace legacy adapters stage by stage only after the product read model is
-   stable.
+9. Keep any old execution path quarantined as a diagnostic launcher until the
+   SDK-native adapters cover the full target workflow, then delete it.
 
 ## Acceptance Checklist
 
@@ -53,7 +57,8 @@ for compatibility, but they are not the product center.
   nodes, T1-T6 theory agents, and E1-E5 experiment agents in the SDK graph
   template.
 - The SDK emits campaign-execution, council, and duality events.
-- `RunStarted` / `RunExited` remain readable compatibility events.
+- No product read model depends on old run/session events, status JSON, PID
+  liveness, or runner HTTP gates.
 - The workspace read model includes council summaries, duality status, pending
   decisions, safe next actions, deliverables, diagnostics, and model/tier
   policy.

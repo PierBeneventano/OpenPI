@@ -150,8 +150,8 @@ The event stream should describe campaign execution:
 - `CampaignExecutionCompleted`
 - `CampaignExecutionFailed`
 
-Existing `RunStarted` / `RunExited` events should be migrated or projected into
-campaign execution state, not exposed as product concepts.
+Old run/session events should be migrated into campaign execution state and then
+removed from product projections. They are not exposed as product concepts.
 
 ### ReadModel
 
@@ -178,15 +178,16 @@ Tasks:
 
 - Add campaign execution read-model fields.
 - Keep process/session ids internal.
-- Mark `RunStarted` and `RunExited` as compatibility events.
-- Add projection aliases from old run events to campaign execution state.
+- Emit campaign execution events from SDK-owned code.
+- Keep old process/session details in diagnostics only when an archived adapter
+  still needs them.
 - Update CLI text to avoid "start run" as the primary concept.
 
 Acceptance:
 
 - Product read models can describe campaign execution without a user-facing run
   object.
-- Old events still project correctly.
+- Product read models do not depend on old run/session events.
 
 ### 2. Extract The Research Workflow Template
 

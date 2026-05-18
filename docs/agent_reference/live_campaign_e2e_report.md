@@ -21,10 +21,16 @@ Configuration used for live attempts:
 The live campaign did not reach final writeup completion, so this branch should not be treated as production-ready for unattended researcher use. It did validate several important production surfaces and exposed blockers that would otherwise be hidden from a researcher:
 
 - Campaign creation, graph approval, execution start, workspace inspection, budget inspection, artifact summaries, event history, feedback, and typed milestone approval all worked through public SDK/CLI operations.
-- The research-plan milestone correctly appeared as a pending `live_milestone` decision in the campaign workspace and was approved with `msc campaigns approve-milestone`.
+- The research-plan milestone appeared through the temporary live-runner bridge and was approved through a typed CLI command available at the time.
 - SDK artifact projection worked for generated deliverables and evidence artifacts.
-- Stale/interrupted runs are now diagnosed as failed instead of appearing indefinitely `running`.
+- Stale/interrupted live-runner attempts exposed the need to remove process liveness from product truth.
 - The live legacy adapter still has blocking reliability gaps: experiment subgraph liveness can stall, duality failure still routes through legacy autonomous research loops unless configured carefully, and several semantic validators remain declared but unbound.
+
+Supersession note: later SDK-native migration work removed the temporary live
+milestone bridge, old run events, PID liveness projection, and runner HTTP gate
+approval command from the product surface. Use `msc campaigns start`,
+`msc campaigns workspace`, `msc campaigns approve`, and `msc campaigns continue`
+for current campaign execution tests.
 
 ## Fixes Committed
 
@@ -53,10 +59,7 @@ Most recent diagnosis:
   "campaign": "e2e-live-sdk-hitl-ultimate-2026-05-18",
   "status": "failed",
   "current_stage_id": "experiment_track",
-  "process_liveness": {
-    "status": "stale",
-    "reason": "runner process is not alive and no exit event was recorded"
-  },
+  "diagnosis": "live runner stalled without enough SDK-native state",
   "safe_next_actions": ["continue-campaign"]
 }
 ```
@@ -104,10 +107,11 @@ At each research-plan milestone, I inspected SDK-visible artifacts and approved 
 
 ```bash
 msc campaigns feedback <campaign> --node milestone_goals --text "..." --json
-msc campaigns approve-milestone <campaign> --feedback "..." --json
+msc campaigns approve <approval-id> --json
 ```
 
-The approval path posted to the runner milestone endpoint internally and recorded `MilestoneDecisionSubmitted`, `InstructionSent`, and `HumanFeedbackRecorded` events.
+Current SDK-native approval records campaign approval, feedback, and execution
+continuation events without posting to a runner-owned HTTP endpoint.
 
 ## Final Observed State
 
@@ -138,7 +142,7 @@ Production blockers before a researcher can reliably run this end to end:
 
 - Stage-level semantic validators are still mostly `declared_unbound`; artifact existence is doing too much work.
 - Legacy subgraph internals do not project current substage status, so `experiment_track` can appear stuck without showing the active child node.
-- The outer `msc run` interruption path can still kill the child process before the child records `RunExited`; stale-process diagnosis mitigates this but does not replace clean cancellation.
+- The outer `msc run` interruption path could kill the child process before the child recorded a clean SDK execution failure; SDK-native execution removes this product dependency.
 - Duality failure should emit a required human/OpenClaude decision with evidence and safe actions. The legacy graph currently treats it as an autonomous follow-up route.
 - `safe_next_actions` for stale failed runs should offer clearer recovery choices than only `continue-campaign`.
 - The live smoke path needs a bounded runtime policy per stage so a hanging model call becomes a typed pause/failure rather than an indefinite wait.

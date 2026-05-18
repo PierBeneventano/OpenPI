@@ -1,10 +1,8 @@
-"""Contracts for the current LangGraph research engine.
+"""Diagnostic source contracts derived from the original research engine.
 
-These definitions describe the working historical engine in product terms.
-They should stay close to the node ids and routes wired in ``consortium.graph``.
-The runner is still the source of execution behavior; this registry is the
-read-only semantic layer used by campaigns, the VS Code cockpit, tests, and
-OpenClaude-facing controls.
+These definitions preserve node ids, routes, and artifact hints from the
+original graph as structured SDK data. They are source material for the
+SDK-native target graph, not an execution authority.
 """
 
 from __future__ import annotations
@@ -48,7 +46,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_persona_debate_framing",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("literature_review_agent"),),
-        legacy_runtime_mapping={"module": "consortium.persona_council", "builder": "create_persona_council_node"},
+        diagnostic_runtime_mapping={"module": "consortium.persona_council", "builder": "create_persona_council_node"},
     ),
     StageContract(
         id="literature_review_agent",
@@ -67,7 +65,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_literature_feasibility",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("lit_review_gate"),),
-        legacy_runtime_mapping={"builder": "build_literature_review_node"},
+        diagnostic_runtime_mapping={"builder": "build_literature_review_node"},
     ),
     StageContract(
         id="lit_review_gate",
@@ -85,7 +83,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("persona_council", "loop", condition="infeasible", description="Reframe the project after failed literature feasibility."),
             r("brainstorm_agent", "route", condition="feasible"),
         ),
-        legacy_runtime_mapping={"router": "lit_review_gate_router"},
+        diagnostic_runtime_mapping={"router": "lit_review_gate_router"},
     ),
     StageContract(
         id="brainstorm_agent",
@@ -104,7 +102,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_hypotheses_and_goals",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("brainstorm_artifact_gate"),),
-        legacy_runtime_mapping={"builder": "build_brainstorm_node"},
+        diagnostic_runtime_mapping={"builder": "build_brainstorm_node"},
     ),
     StageContract(
         id="brainstorm_artifact_gate",
@@ -122,7 +120,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("brainstorm_agent", "loop", condition="missing_or_invalid_artifacts"),
             r("formalize_goals_entry", "route", condition="valid"),
         ),
-        legacy_runtime_mapping={"router": "brainstorm_artifact_gate_router"},
+        diagnostic_runtime_mapping={"router": "brainstorm_artifact_gate_router"},
     ),
     StageContract(
         id="formalize_goals_entry",
@@ -136,7 +134,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         budget_policy=CONTROL_BUDGET,
         failure_policy=GATE_FAILURE,
         allowed_routes=(r("formalize_goals_agent"),),
-        legacy_runtime_mapping={"builder": "build_formalize_goals_entry_node"},
+        diagnostic_runtime_mapping={"builder": "build_formalize_goals_entry_node"},
     ),
     StageContract(
         id="formalize_goals_agent",
@@ -155,7 +153,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_hypotheses_and_goals",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("research_plan_writeup_agent"),),
-        legacy_runtime_mapping={"builder": "build_formalize_goals_node"},
+        diagnostic_runtime_mapping={"builder": "build_formalize_goals_node"},
     ),
     StageContract(
         id="research_plan_writeup_agent",
@@ -171,7 +169,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_graph_planning",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("track_decomposition_gate"),),
-        legacy_runtime_mapping={"builder": "build_research_plan_writeup_node"},
+        diagnostic_runtime_mapping={"builder": "build_research_plan_writeup_node"},
     ),
     StageContract(
         id="track_decomposition_gate",
@@ -186,7 +184,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_graph_planning",),
         failure_policy=GATE_FAILURE,
         allowed_routes=(r("milestone_goals"),),
-        legacy_runtime_mapping={"builder": "build_track_decomposition_gate_node"},
+        diagnostic_runtime_mapping={"builder": "build_track_decomposition_gate_node"},
     ),
     StageContract(
         id="milestone_goals",
@@ -204,7 +202,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("theory_track", "fanout", condition="math_enabled_and_theory_questions"),
             r("experiment_track", "fanout", condition="empirical_questions_or_default"),
         ),
-        legacy_runtime_mapping={"builder": "build_milestone_gate_node", "milestone": "research_plan"},
+        diagnostic_runtime_mapping={"builder": "build_milestone_gate_node", "milestone": "research_plan"},
     ),
     StageContract(
         id="theory_track",
@@ -223,7 +221,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("math_literature_agent", "subgraph", condition="expanded_control_view"),
             r("track_merge", "fanin", condition="track_complete_or_skipped"),
         ),
-        legacy_runtime_mapping={"builder": "build_track_subgraph_node", "status_key": "theory_track_status"},
+        diagnostic_runtime_mapping={"builder": "build_track_subgraph_node", "status_key": "theory_track_status"},
     ),
     StageContract(
         id="math_literature_agent",
@@ -239,7 +237,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("before_theory_proof_escalation",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("math_proposer_agent", "subgraph"),),
-        legacy_runtime_mapping={"builder": "build_math_literature_node"},
+        diagnostic_runtime_mapping={"builder": "build_math_literature_node"},
     ),
     StageContract(
         id="math_proposer_agent",
@@ -255,7 +253,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("before_theory_proof_escalation",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("goal_tag_validation_gate", "subgraph"),),
-        legacy_runtime_mapping={"builder": "build_math_proposer_node"},
+        diagnostic_runtime_mapping={"builder": "build_math_proposer_node"},
     ),
     StageContract(
         id="goal_tag_validation_gate",
@@ -269,7 +267,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         budget_policy=CONTROL_BUDGET,
         failure_policy=GATE_FAILURE,
         allowed_routes=(r("math_prover_agent", "subgraph"),),
-        legacy_runtime_mapping={"node": "goal_tag_validation_gate"},
+        diagnostic_runtime_mapping={"node": "goal_tag_validation_gate"},
     ),
     StageContract(
         id="math_prover_agent",
@@ -285,7 +283,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("before_theory_proof_escalation",),
         failure_policy=RETRY_FAILURE,
         allowed_routes=(r("math_rigorous_verifier_agent", "subgraph"),),
-        legacy_runtime_mapping={"builder": "build_math_prover_node"},
+        diagnostic_runtime_mapping={"builder": "build_math_prover_node"},
     ),
     StageContract(
         id="math_rigorous_verifier_agent",
@@ -301,7 +299,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_theory_verification",),
         failure_policy=RETRY_FAILURE,
         allowed_routes=(r("human_review_gate", "subgraph"),),
-        legacy_runtime_mapping={"builder": "build_math_rigorous_verifier_node"},
+        diagnostic_runtime_mapping={"builder": "build_math_rigorous_verifier_node"},
     ),
     StageContract(
         id="human_review_gate",
@@ -316,7 +314,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_theory_verification",),
         failure_policy=GATE_FAILURE,
         allowed_routes=(r("math_empirical_verifier_agent", "subgraph"),),
-        legacy_runtime_mapping={"node": "human_review_gate"},
+        diagnostic_runtime_mapping={"node": "human_review_gate"},
     ),
     StageContract(
         id="math_empirical_verifier_agent",
@@ -332,7 +330,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_theory_verification",),
         failure_policy=RETRY_FAILURE,
         allowed_routes=(r("proof_transcription_agent", "subgraph"),),
-        legacy_runtime_mapping={"builder": "build_math_empirical_verifier_node"},
+        diagnostic_runtime_mapping={"builder": "build_math_empirical_verifier_node"},
     ),
     StageContract(
         id="proof_transcription_agent",
@@ -347,7 +345,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         budget_policy=AGENT_BUDGET,
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("theory_track_repair_gate", "subgraph"),),
-        legacy_runtime_mapping={"builder": "build_proof_transcription_node"},
+        diagnostic_runtime_mapping={"builder": "build_proof_transcription_node"},
     ),
     StageContract(
         id="theory_track_repair_gate",
@@ -365,7 +363,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("math_proposer_agent", "loop", condition="repair_requested"),
             r("track_merge", "fanin", condition="theory_complete"),
         ),
-        legacy_runtime_mapping={"node": "theory_track_repair_gate"},
+        diagnostic_runtime_mapping={"node": "theory_track_repair_gate"},
     ),
     StageContract(
         id="experiment_track",
@@ -384,7 +382,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("experiment_literature_agent", "subgraph", condition="expanded_control_view"),
             r("track_merge", "fanin", condition="track_complete_or_skipped"),
         ),
-        legacy_runtime_mapping={"builder": "build_track_subgraph_node", "status_key": "experiment_track_status"},
+        diagnostic_runtime_mapping={"builder": "build_track_subgraph_node", "status_key": "experiment_track_status"},
     ),
     StageContract(
         id="experiment_literature_agent",
@@ -399,7 +397,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         budget_policy=AGENT_BUDGET,
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("experiment_design_agent", "subgraph"),),
-        legacy_runtime_mapping={"builder": "build_experiment_literature_node"},
+        diagnostic_runtime_mapping={"builder": "build_experiment_literature_node"},
     ),
     StageContract(
         id="experiment_design_agent",
@@ -415,7 +413,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("before_expensive_experiments",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("experimentation_agent", "subgraph"),),
-        legacy_runtime_mapping={"builder": "build_experiment_design_node"},
+        diagnostic_runtime_mapping={"builder": "build_experiment_design_node"},
     ),
     StageContract(
         id="experimentation_agent",
@@ -437,7 +435,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("before_expensive_experiments",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("experiment_verification_agent", "subgraph"),),
-        legacy_runtime_mapping={"builder": "build_experimentation_node"},
+        diagnostic_runtime_mapping={"builder": "build_experimentation_node"},
     ),
     StageContract(
         id="experiment_verification_agent",
@@ -453,7 +451,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_experiment_synthesis",),
         failure_policy=RETRY_FAILURE,
         allowed_routes=(r("experiment_transcription_agent", "subgraph"),),
-        legacy_runtime_mapping={"builder": "build_experiment_verification_node"},
+        diagnostic_runtime_mapping={"builder": "build_experiment_verification_node"},
     ),
     StageContract(
         id="experiment_transcription_agent",
@@ -469,7 +467,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_experiment_synthesis",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("track_merge", "fanin"),),
-        legacy_runtime_mapping={"builder": "build_experiment_transcription_node"},
+        diagnostic_runtime_mapping={"builder": "build_experiment_transcription_node"},
     ),
     StageContract(
         id="track_merge",
@@ -483,7 +481,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         budget_policy=CONTROL_BUDGET,
         failure_policy=GATE_FAILURE,
         allowed_routes=(r("verify_completion"),),
-        legacy_runtime_mapping={"builder": "build_track_merge_node"},
+        diagnostic_runtime_mapping={"builder": "build_track_merge_node"},
     ),
     StageContract(
         id="verify_completion",
@@ -502,7 +500,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("formalize_goals_agent", "loop", condition="needs_goal_refinement"),
             r("brainstorm_agent", "loop", condition="needs_fundamental_rethink"),
         ),
-        legacy_runtime_mapping={"router": "verify_completion_router"},
+        diagnostic_runtime_mapping={"router": "verify_completion_router"},
     ),
     StageContract(
         id="formalize_results_agent",
@@ -518,7 +516,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_experiment_synthesis",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("duality_check"),),
-        legacy_runtime_mapping={"builder": "build_formalize_results_node"},
+        diagnostic_runtime_mapping={"builder": "build_formalize_results_node"},
     ),
     StageContract(
         id="duality_check",
@@ -533,7 +531,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_experiment_synthesis",),
         failure_policy=RETRY_FAILURE,
         allowed_routes=(r("duality_gate"),),
-        legacy_runtime_mapping={"builder": "create_duality_check_node"},
+        diagnostic_runtime_mapping={"builder": "create_duality_check_node"},
     ),
     StageContract(
         id="duality_gate",
@@ -551,7 +549,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("resource_preparation_agent", "route", condition="pass"),
             r("followup_lit_review", "loop", condition="needs_followup_lit_review"),
         ),
-        legacy_runtime_mapping={"router": "duality_gate_router"},
+        diagnostic_runtime_mapping={"router": "duality_gate_router"},
     ),
     StageContract(
         id="followup_lit_review",
@@ -565,7 +563,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         budget_policy=AGENT_BUDGET,
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("brainstorm_agent", "loop"),),
-        legacy_runtime_mapping={"builder": "build_followup_lit_review_node"},
+        diagnostic_runtime_mapping={"builder": "build_followup_lit_review_node"},
     ),
     StageContract(
         id="resource_preparation_agent",
@@ -581,7 +579,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("before_writeup",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("paper_contract_builder"),),
-        legacy_runtime_mapping={"builder": "build_resource_preparation_node"},
+        diagnostic_runtime_mapping={"builder": "build_resource_preparation_node"},
     ),
     StageContract(
         id="paper_contract_builder",
@@ -596,7 +594,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("before_writeup",),
         failure_policy=GATE_FAILURE,
         allowed_routes=(r("writeup_agent"),),
-        legacy_runtime_mapping={"builder": "build_paper_contract_node"},
+        diagnostic_runtime_mapping={"builder": "build_paper_contract_node"},
     ),
     StageContract(
         id="writeup_agent",
@@ -615,7 +613,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("before_writeup",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("writeup_artifact_gate"),),
-        legacy_runtime_mapping={"builder": "build_writeup_node"},
+        diagnostic_runtime_mapping={"builder": "build_writeup_node"},
     ),
     StageContract(
         id="writeup_artifact_gate",
@@ -633,7 +631,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("writeup_agent", "loop", condition="missing_or_invalid_paper_artifacts"),
             r("proofreading_entry", "route", condition="valid"),
         ),
-        legacy_runtime_mapping={"router": "writeup_artifact_gate_router"},
+        diagnostic_runtime_mapping={"router": "writeup_artifact_gate_router"},
     ),
     StageContract(
         id="proofreading_entry",
@@ -647,7 +645,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         budget_policy=CONTROL_BUDGET,
         failure_policy=GATE_FAILURE,
         allowed_routes=(r("proofreading_agent"),),
-        legacy_runtime_mapping={"builder": "build_proofreading_entry_node"},
+        diagnostic_runtime_mapping={"builder": "build_proofreading_entry_node"},
     ),
     StageContract(
         id="proofreading_agent",
@@ -665,7 +663,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         budget_policy=AGENT_BUDGET,
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("proofread_gate"),),
-        legacy_runtime_mapping={"builder": "build_proofreading_node"},
+        diagnostic_runtime_mapping={"builder": "build_proofreading_node"},
     ),
     StageContract(
         id="proofread_gate",
@@ -682,7 +680,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("proofreading_agent", "loop", condition="copyedit_incomplete"),
             r("reviewer_agent", "route", condition="ready_for_review"),
         ),
-        legacy_runtime_mapping={"router": "proofread_gate_router"},
+        diagnostic_runtime_mapping={"router": "proofread_gate_router"},
     ),
     StageContract(
         id="reviewer_agent",
@@ -704,7 +702,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_reviewer_verdict",),
         failure_policy=DEFAULT_FAILURE,
         allowed_routes=(r("review_gate"),),
-        legacy_runtime_mapping={"builder": "build_reviewer_node", "ensemble_builder": "build_ensemble_reviewer_node"},
+        diagnostic_runtime_mapping={"builder": "build_reviewer_node", "ensemble_builder": "build_ensemble_reviewer_node"},
     ),
     StageContract(
         id="review_gate",
@@ -722,7 +720,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("reviewer_agent", "loop", condition="review_needs_retry"),
             r("milestone_review", "route", condition="review_accepted"),
         ),
-        legacy_runtime_mapping={"router": "review_gate_router"},
+        diagnostic_runtime_mapping={"router": "review_gate_router"},
     ),
     StageContract(
         id="milestone_review",
@@ -737,7 +735,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         human_pause_policy=("after_reviewer_verdict",),
         failure_policy=GATE_FAILURE,
         allowed_routes=(r("validation_gate"),),
-        legacy_runtime_mapping={"builder": "build_milestone_gate_node", "milestone": "review"},
+        diagnostic_runtime_mapping={"builder": "build_milestone_gate_node", "milestone": "review"},
     ),
     StageContract(
         id="validation_gate",
@@ -756,7 +754,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("experiment_track", "loop", condition="experiment_artifact_failure"),
             r("theory_track", "loop", condition="theory_artifact_failure"),
         ),
-        legacy_runtime_mapping={"router": "validation_router", "terminal": True},
+        diagnostic_runtime_mapping={"router": "validation_router", "terminal": True},
     ),
     StageContract(
         id="iterate_entry",
@@ -770,7 +768,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         budget_policy=CONTROL_BUDGET,
         failure_policy=GATE_FAILURE,
         allowed_routes=(r("persona_council", "revision_route"),),
-        legacy_runtime_mapping={"mode": "iterate", "node": "iterate_entry"},
+        diagnostic_runtime_mapping={"mode": "iterate", "node": "iterate_entry"},
         metadata={"graph_scope": "revision"},
     ),
     StageContract(
@@ -789,7 +787,7 @@ CONTRACTS: tuple[StageContract, ...] = (
             r("literature_review_agent", "revision_route", condition="needs_research"),
             r("brainstorm_agent", "revision_route", condition="needs_full_rethink"),
         ),
-        legacy_runtime_mapping={"mode": "iterate", "node": "iterate_router"},
+        diagnostic_runtime_mapping={"mode": "iterate", "node": "iterate_router"},
         metadata={"graph_scope": "revision"},
     ),
 )

@@ -591,31 +591,6 @@ def campaigns_diagnose_execution(ctx: click.Context, campaign_ref: str, as_json:
     click.echo(f"{data['campaign']}: {data['diagnosis']}")
 
 
-@campaigns.command("approve-milestone")
-@click.argument("campaign_ref")
-@click.option("--feedback", required=True, help="Human feedback to send to the waiting milestone gate.")
-@click.option("--action", default="approve", show_default=True, type=click.Choice(["approve", "modify", "abort"]), help="Milestone action.")
-@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
-@click.pass_context
-def campaigns_approve_milestone(
-    ctx: click.Context,
-    campaign_ref: str,
-    feedback: str,
-    action: str,
-    as_json: bool,
-) -> None:
-    """Approve, modify, or abort a live runner milestone through the SDK."""
-    data = CampaignClient(ctx.obj["campaign_root"]).approve_milestone(
-        campaign_ref,
-        feedback=feedback,
-        action=action,
-    )
-    if as_json:
-        _emit_json(data)
-        return
-    click.echo(f"{data['campaign_id']}: milestone {data['action']}")
-
-
 @campaigns.command("start")
 @click.argument("campaign_ref")
 @click.option("--tier", default=None, help="Optional tier override for this SDK-native execution.")
