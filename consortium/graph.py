@@ -135,16 +135,20 @@ def build_pipeline_stages_v2(enable_math_agents: bool) -> list[str]:
     return stages
 
 
-def _emit_campaign_node_status(workspace_dir: str, node_id: str, status: str, extra: dict | None = None) -> None:
+class CampaignValidationGateError(RuntimeError):
+    """Raised when SDK artifact validation blocks the legacy adapter."""
+
+
+def _emit_campaign_node_status(workspace_dir: str, node_id: str, status: str, extra: dict | None = None) -> dict | None:
     """Best-effort bridge from the historical runner into campaign events."""
     campaign_id = os.getenv("MSC_CAMPAIGN_ID")
     campaign_root = os.getenv("MSC_CAMPAIGN_ROOT") or os.getenv("CONSORTIUM_PROJECT_ROOT")
     if not campaign_id or not campaign_root:
-        return
+        return None
     try:
         from msc_sdk.campaign_store import CampaignStore
 
-        CampaignStore(campaign_root).update_node_status(
+        return CampaignStore(campaign_root).update_node_status(
             campaign_id,
             node_id,
             status,
@@ -157,6 +161,7 @@ def _emit_campaign_node_status(workspace_dir: str, node_id: str, status: str, ex
         )
     except Exception:
         logger.debug("Failed to emit campaign node status for %s", node_id, exc_info=True)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -2337,16 +2342,7 @@ def build_research_graph_v2(config: "ResearchGraphConfig"):
         summarized = with_pdf_summary(node, name, workspace_dir, summary_model_id)
 
         def contract_materializing_node(state: dict) -> dict:
-            result = summarized(state) or {}
-            try:
-                return materialize_stage_outputs(name, state, result)
-            except Exception as exc:
-                logger.exception("Failed to materialize contract artifacts for %s", name)
-                return {
-                    **result,
-                    "critical_failure": f"{name} failed to write contract artifacts: {exc}",
-                    "agent_task": None,
-                }
+            return summarized(state) or {}
 
         contract_materializing_node.__name__ = getattr(summarized, "__name__", name)
         return contract_materializing_node
@@ -2370,6 +2366,7 @@ def build_research_graph_v2(config: "ResearchGraphConfig"):
             )
             try:
                 result = node(state) or {}
+                result = materialize_stage_outputs(name, state, result)
             except Exception as exc:
                 _emit_campaign_node_status(
                     workspace_dir,
@@ -2387,7 +2384,13 @@ def build_research_graph_v2(config: "ResearchGraphConfig"):
                 )
                 return result
             if name not in tracked_stage_index:
-                _emit_campaign_node_status(workspace_dir, name, "completed", status_payload)
+                completion_record = _emit_campaign_node_status(workspace_dir, name, "completed", status_payload)
+                if completion_record and completion_record.get("status") == "human_decision_required":
+                    missing = ", ".join((completion_record.get("completion") or {}).get("missing_required_artifacts") or [])
+                    raise CampaignValidationGateError(
+                        f"{name} did not satisfy SDK artifact contract"
+                        + (f": missing {missing}" if missing else "")
+                    )
                 return result
             update = dict(result)
             executed = list(update.get("executed_stages") or [])
@@ -2395,12 +2398,18 @@ def build_research_graph_v2(config: "ResearchGraphConfig"):
             update["executed_stages"] = executed
             prior_index = safe_int(state.get("pipeline_stage_index", 0), 0)
             update["pipeline_stage_index"] = max(prior_index, tracked_stage_index[name])
-            _emit_campaign_node_status(
+            completion_record = _emit_campaign_node_status(
                 workspace_dir,
                 name,
                 "completed",
                 {"pipeline_stage_index": tracked_stage_index[name]},
             )
+            if completion_record and completion_record.get("status") == "human_decision_required":
+                missing = ", ".join((completion_record.get("completion") or {}).get("missing_required_artifacts") or [])
+                raise CampaignValidationGateError(
+                    f"{name} did not satisfy SDK artifact contract"
+                    + (f": missing {missing}" if missing else "")
+                )
             return update
 
         wrapped.__name__ = getattr(node, "__name__", name)
@@ -2618,7 +2627,7 @@ def build_research_graph_v2(config: "ResearchGraphConfig"):
         ),
         "followup_lit_review": _wrap(
             build_followup_lit_review_node(_m("followup_lit_review"), workspace_dir, authorized_imports, counsel_models),
-            "followup_lit_review_agent",
+            "followup_lit_review",
         ),
         # Paper production chain (reused from v1)
         "resource_preparation_agent": _wrap(

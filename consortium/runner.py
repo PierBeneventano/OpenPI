@@ -1510,6 +1510,38 @@ def main():
         logger.info("Task finished.")
         logger.info("=" * 50)
 
+    except KeyboardInterrupt:
+        if "results_base_dir" in locals():
+            current_status = read_run_status(results_base_dir)
+            write_run_status(
+                results_base_dir,
+                status="interrupted",
+                current_stage=current_status.get("current_stage"),
+                status_reason="interrupted_by_user",
+                pid=os.getpid(),
+                finished_at=datetime.now().isoformat(),
+            )
+            _write_run_summary(
+                workspace_dir=results_base_dir,
+                task=task if "task" in locals() else _DEFAULT_TASK,
+                model_name=model_name if "model_name" in locals() else "unknown",
+                start_time=run_start_time,
+                stages_completed=stages_done if "stages_done" in locals() else [],
+                status="failed",
+                status_reason="interrupted_by_user",
+                current_stage=current_status.get("current_stage"),
+            )
+            _record_campaign_known_artifacts(args)
+            _record_campaign_run_exited(
+                args,
+                campaign_run_id if "campaign_run_id" in locals() else None,
+                exit_code=130,
+                status="failed",
+                metadata={"workspace_dir": results_base_dir, "error": "interrupted_by_user"},
+            )
+        logger.warning("Pipeline interrupted by user.")
+        return 130
+
     except Exception as e:
         if "results_base_dir" in locals():
             current_status = read_run_status(results_base_dir)

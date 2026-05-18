@@ -587,6 +587,76 @@ def test_materialize_brainstorm_outputs_creates_required_contract_artifacts(tmp_
     }
 
 
+def test_materialize_formalize_goals_creates_sdk_goal_contract(tmp_path: Path, monkeypatch):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Goal Runtime Demo",
+        objective="Materialize formalized goals.",
+        template="target_research",
+        budget=1,
+    )
+    run = store.record_run_started("goal-runtime-demo", command=["msc", "run"], pid=457)
+    monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
+    monkeypatch.setenv("MSC_CAMPAIGN_ID", "goal-runtime-demo")
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+
+    result = materialize_stage_outputs(
+        "formalize_goals_agent",
+        {"task": "Compare batch normalization against a baseline in a toy MLP."},
+        {"agent_outputs": {"formalize_goals_agent": "Goal: run a small empirical comparison."}},
+    )
+
+    assert result["research_goals"]["goals"][0]["track"] == "experiment"
+    root = tmp_path / "results" / "goal-runtime-demo" / "runs" / run["run_id"] / "formalize_goals_agent"
+    assert (root / "artifacts" / "research_goals.json").exists()
+    assert (root / "artifacts" / "goal_spec.md").exists()
+    completion = store.update_node_status(
+        "goal-runtime-demo",
+        "formalize_goals_agent",
+        "completed",
+        payload={"run_id": run["run_id"]},
+    )
+    assert completion["status"] == "completed"
+    assert completion["completion"]["complete"]
+
+
+def test_materialize_control_gate_creates_required_json_artifact(tmp_path: Path, monkeypatch):
+    store = CampaignStore(tmp_path)
+    store.create_campaign(
+        title="Gate Runtime Demo",
+        objective="Materialize gate artifacts.",
+        template="target_research",
+        budget=1,
+    )
+    run = store.record_run_started("gate-runtime-demo", command=["msc", "run"], pid=458)
+    monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
+    monkeypatch.setenv("MSC_CAMPAIGN_ID", "gate-runtime-demo")
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+
+    materialize_stage_outputs(
+        "track_decomposition_gate",
+        {
+            "task": "Run a minimal empirical study.",
+            "research_goals": {
+                "goals": [{"id": "G1", "description": "Empirical comparison", "track": "experiment"}]
+            },
+            "math_enabled": False,
+        },
+        {},
+    )
+
+    root = tmp_path / "results" / "gate-runtime-demo" / "runs" / run["run_id"] / "track_decomposition_gate"
+    decomposition = json.loads((root / "artifacts" / "track_decomposition.json").read_text())
+    assert decomposition["recommended_track"] == "empirical"
+    completion = store.update_node_status(
+        "gate-runtime-demo",
+        "track_decomposition_gate",
+        "completed",
+        payload={"run_id": run["run_id"]},
+    )
+    assert completion["status"] == "completed"
+
+
 def test_stage_completion_is_derived_from_required_artifacts(tmp_path: Path, monkeypatch):
     store = CampaignStore(tmp_path)
     store.create_campaign(
