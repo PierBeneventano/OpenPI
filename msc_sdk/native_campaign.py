@@ -108,6 +108,14 @@ class StoreBackedKernelEventBus:
     ) -> None:
         if event_type in {"CampaignExecutionStarted", "CampaignExecutionResumed"}:
             conn.execute("UPDATE campaigns SET status=?, updated_at=? WHERE id=?", ("running", now_iso(), run.campaign_id))
+            if event_type == "CampaignExecutionResumed":
+                for stage_id in payload.get("completed_stage_ids") or []:
+                    self._set_node_status(
+                        conn,
+                        campaign_id=run.campaign_id,
+                        node_id=str(stage_id),
+                        status="completed",
+                    )
             return
         if event_type == "StageStarted":
             self._set_node_status(conn, campaign_id=run.campaign_id, node_id=str(payload.get("stage_id")), status="running")

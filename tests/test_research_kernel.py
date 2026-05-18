@@ -99,7 +99,8 @@ def test_kernel_turns_missing_artifact_into_human_decision(tmp_path: Path):
         details={"missing": ["artifacts/research_plan.md"]},
     )
     assert "HumanDecisionRequired" in [event.type for event in events.events]
-    assert events.events[-1].type == "CampaignExecutionFailed"
+    assert events.events[-1].type == "CampaignExecutionCheckpointed"
+    assert "CampaignExecutionFailed" not in [event.type for event in events.events]
 
 
 def test_kernel_stage_can_request_first_class_human_decision(tmp_path: Path):

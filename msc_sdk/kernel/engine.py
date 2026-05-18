@@ -112,6 +112,7 @@ class ResearchKernel:
                     "blocked_stage_id": checkpoint.blocked_stage_id,
                     "reason": checkpoint.reason,
                     "queue": list(checkpoint.queue),
+                    "completed_stage_ids": list(checkpoint.completed_stage_ids),
                     "metadata": dict(run.metadata),
                 },
             )
@@ -187,17 +188,6 @@ class ResearchKernel:
                     available_artifacts=available_artifacts,
                     visit_counts=visit_counts,
                 )
-                self.event_bus.emit(
-                    "CampaignExecutionFailed",
-                    run=run,
-                    payload={
-                        "execution_id": run.id,
-                        "run_id": run.id,
-                        "stage_id": stage.id,
-                        "status": "human_decision_required",
-                        "metadata": dict(run.metadata),
-                    },
-                )
                 return outcomes
             if self._blocked_by_duality(run=run, stage=stage, completed=completed):
                 self._request_decision(
@@ -229,17 +219,6 @@ class ResearchKernel:
                     completed_stage_ids=completed_order,
                     available_artifacts=available_artifacts,
                     visit_counts=visit_counts,
-                )
-                self.event_bus.emit(
-                    "CampaignExecutionFailed",
-                    run=run,
-                    payload={
-                        "execution_id": run.id,
-                        "run_id": run.id,
-                        "stage_id": stage.id,
-                        "status": "human_decision_required",
-                        "metadata": dict(run.metadata),
-                    },
                 )
                 return outcomes
             visit_counts[stage_id] = visit_counts.get(stage_id, 0) + 1
@@ -290,17 +269,6 @@ class ResearchKernel:
                     available_artifacts=checkpoint_artifacts,
                     visit_counts=visit_counts,
                 )
-                self.event_bus.emit(
-                    "CampaignExecutionFailed",
-                    run=run,
-                    payload={
-                        "execution_id": run.id,
-                        "run_id": run.id,
-                        "stage_id": stage_id,
-                        "status": outcome.status,
-                        "metadata": dict(run.metadata),
-                    },
-                )
                 return outcomes
             completed.add(stage_id)
             completed_order.append(stage_id)
@@ -324,17 +292,6 @@ class ResearchKernel:
                     completed_stage_ids=completed_order,
                     available_artifacts=available_artifacts,
                     visit_counts=visit_counts,
-                )
-                self.event_bus.emit(
-                    "CampaignExecutionFailed",
-                    run=run,
-                    payload={
-                        "execution_id": run.id,
-                        "run_id": run.id,
-                        "stage_id": stage_id,
-                        "status": "human_decision_required",
-                        "metadata": dict(run.metadata),
-                    },
                 )
                 outcomes[-1] = StageOutcome(
                     stage_id=outcome.stage_id,

@@ -73,9 +73,14 @@ def test_sdk_native_campaign_completes_lean_smoke_path(tmp_path: Path):
         and artifact["exists"]
         for artifact in workspace["deliverables"]
     )
-    assert client.summarize_artifacts(campaign_id)["by_stage"]["writeup_agent"]["missing_required"] == 0
+    artifact_summary = client.summarize_artifacts(campaign_id)
+    assert artifact_summary["missing_required"] == 0
+    assert artifact_summary["by_stage"]["writeup_agent"]["missing_required"] == 0
+    assert artifact_summary["by_stage"]["theory_track"]["skipped"]
+    assert artifact_summary["by_stage"]["followup_lit_review"]["skipped"]
     event_types = [event["type"] for event in client.events(campaign_id)["events"]]
     assert not any(event_type.startswith("Run") for event_type in event_types)
+    assert "CampaignExecutionFailed" not in event_types
     assert "CampaignExecutionPrepared" in event_types
     assert "CampaignExecutionCompleted" in event_types
     assert "DualityCheckCompleted" in event_types

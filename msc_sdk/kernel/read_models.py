@@ -153,6 +153,7 @@ def project_run(events: Iterable[EventRecord]) -> KernelRunReadModel:
                 stage.status = "human_decision_required"
                 stage.safe_next_actions = [str(action) for action in payload.get("safe_next_actions") or []]
         elif event_type == "HumanDecisionRequired" and stage_id:
+            model.status = "human_decision_required"
             stage = _stage(model, stage_id)
             stage.status = "human_decision_required"
             stage.pending_decision_id = str(payload.get("decision_id") or "") or None

@@ -64,7 +64,19 @@ def campaigns_create(
         output_format=output_format,
     )
     if as_json:
-        _emit_json({"ok": True, "campaign": data})
+        _emit_json({
+            "ok": True,
+            "campaign": {
+                "campaign_id": data["campaign_id"],
+                "status": data["status"],
+                "title": data["name"],
+                "path": data["path"],
+                "workspace_root": data["workspace_root"],
+                "budget": data["budget"],
+                "graph_version": data["metadata"].get("graph_version"),
+                "graph_state": data["metadata"].get("graph_state"),
+            },
+        })
         return
     click.echo(f"{data['campaign_id']}: {data['status']}")
 

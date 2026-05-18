@@ -584,17 +584,43 @@ class CampaignStore:
 
     def summarize_artifacts(self, campaign_ref: str | Path) -> dict[str, Any]:
         campaign_id = self.resolve_ref(campaign_ref)
+        campaign = self.get_campaign(campaign_id)
+        graph = self.graph(campaign_id)
+        node_status = {
+            str(node.get("id") or ""): str(node.get("status") or "")
+            for node in graph.get("nodes") or []
+        }
         stages = self.artifacts(campaign_id)["stages"]
         rows = [artifact for stage in stages for artifact in [*stage["required_artifacts"], *stage["optional_artifacts"]]]
         required = [artifact for artifact in rows if artifact["required"]]
-        missing_required = [artifact for artifact in required if not artifact["exists"]]
+        missing_required = [
+            artifact for artifact in required
+            if not artifact["exists"] and self._stage_counts_as_missing(
+                campaign_status=str(campaign.get("status") or ""),
+                stage_status=node_status.get(str(artifact.get("stage_id") or ""), ""),
+            )
+        ]
         existing = [artifact for artifact in rows if artifact["exists"]]
         by_stage = {
             stage["stage_id"]: {
                 "required": len(stage["required_artifacts"]),
                 "optional": len(stage["optional_artifacts"]),
-                "missing_required": len([item for item in stage["required_artifacts"] if not item["exists"]]),
+                "missing_required": len([
+                    item for item in stage["required_artifacts"]
+                    if not item["exists"] and self._stage_counts_as_missing(
+                        campaign_status=str(campaign.get("status") or ""),
+                        stage_status=node_status.get(str(stage["stage_id"]), ""),
+                    )
+                ]),
+                "declared_missing_required": len([
+                    item for item in stage["required_artifacts"] if not item["exists"]
+                ]),
                 "existing": len([item for item in [*stage["required_artifacts"], *stage["optional_artifacts"]] if item["exists"]]),
+                "stage_status": node_status.get(str(stage["stage_id"]), ""),
+                "skipped": self._stage_is_skipped_for_summary(
+                    campaign_status=str(campaign.get("status") or ""),
+                    stage_status=node_status.get(str(stage["stage_id"]), ""),
+                ),
             }
             for stage in stages
         }
@@ -609,6 +635,17 @@ class CampaignStore:
             "by_stage": by_stage,
             "missing_required_artifacts": missing_required,
         }
+
+    @staticmethod
+    def _stage_is_skipped_for_summary(*, campaign_status: str, stage_status: str) -> bool:
+        return campaign_status == "completed" and stage_status in {"planned", "approved"}
+
+    @classmethod
+    def _stage_counts_as_missing(cls, *, campaign_status: str, stage_status: str) -> bool:
+        return not cls._stage_is_skipped_for_summary(
+            campaign_status=campaign_status,
+            stage_status=stage_status,
+        )
 
     def request_evidence(
         self,
