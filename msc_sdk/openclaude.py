@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shutil
+import shlex
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,36 @@ OPENCLAUDE_MODEL_ALIASES = {
     "balanced": "anthropic/claude-sonnet-4.5",
     "deep": "anthropic/claude-opus-4.1",
 }
+
+
+def msc_cli_invocation(project_root: str | Path) -> dict[str, Any]:
+    """Return the repo-local command OpenClaude should use for MSc SDK calls."""
+
+    root = Path(project_root).resolve()
+    local_msc = root / ".venv" / ("Scripts/msc.exe" if _is_windows() else "bin/msc")
+    if local_msc.exists():
+        argv = [str(local_msc), "--no-banner"]
+    else:
+        local_python = root / ".venv" / ("Scripts/python.exe" if _is_windows() else "bin/python")
+        if local_python.exists():
+            argv = [str(local_python), "-m", "consortium.cli.main", "--no-banner"]
+        else:
+            argv = ["python", "-m", "consortium.cli.main", "--no-banner"]
+    shell = " ".join(shlex.quote(part) for part in argv)
+    return {
+        "argv": argv,
+        "shell_prefix": shell,
+        "cwd": str(root),
+        "env": {"PYTHONPATH": str(root)},
+        "examples": {
+            "campaign_workspace": f"{shell} campaigns --root {shlex.quote(str(root))} workspace <campaign> --json",
+            "context_pack": f"{shell} openclaude context-pack <campaign> --json",
+        },
+    }
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
 
 
 @dataclass(frozen=True)
@@ -162,6 +194,7 @@ def openclaude_context_pack(
         "ok": True,
         "schema": "msc.openclaude.context_pack.v1",
         "campaign_ref": campaign_ref,
+        "msc_cli": msc_cli_invocation(root),
         "campaign": workspace.get("campaign"),
         "execution": workspace.get("execution"),
         "safe_next_actions": workspace.get("safe_next_actions") or [],
@@ -188,14 +221,18 @@ def _current_stage(workspace: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def openclaude_researcher_workflows(campaign_ref: str) -> dict[str, Any]:
+def openclaude_researcher_workflows(campaign_ref: str, *, cli_prefix: str = "msc") -> dict[str, Any]:
     """Return the campaign operations OpenClaude should use as its harness."""
 
     return {
+        "cli_invocation": [
+            f"Run SDK commands from the project root with this prefix: `{cli_prefix}`.",
+            "If bare `msc` is not on PATH, do not stop; use the provided repo-local prefix from `msc_cli.shell_prefix`.",
+        ],
         "status_and_orientation": [
-            f"msc campaigns workspace {campaign_ref} --json",
-            f"msc campaigns explain-node {campaign_ref} <stage_id> --json",
-            f"msc campaigns summarize-artifacts {campaign_ref} --json",
+            f"{cli_prefix} campaigns workspace {campaign_ref} --json",
+            f"{cli_prefix} campaigns explain-node {campaign_ref} <stage_id> --json",
+            f"{cli_prefix} campaigns summarize-artifacts {campaign_ref} --json",
         ],
         "researcher_questions": [
             "Answer from the campaign workspace read model first.",
@@ -203,25 +240,25 @@ def openclaude_researcher_workflows(campaign_ref: str) -> dict[str, Any]:
             "Open raw files only after the read model points to a produced deliverable or diagnostic.",
         ],
         "feedback_and_steering": [
-            f"msc campaigns feedback {campaign_ref} --text <feedback> --node <stage_id> --artifact-path <path> --json",
-            f"msc campaigns context link {campaign_ref} --note <note> --artifact-path <path> --json",
-            f"msc campaigns rerun-stage {campaign_ref} <stage_id> --reason <reason> --json",
-            f"msc campaigns rewind {campaign_ref} <stage_id> --reason <reason> --decision-id <decision_id> --run-id <run_id> --json",
-            f"msc campaigns rewrite-stage {campaign_ref} <stage_id> --instruction <instruction> --json",
-            f"msc campaigns reroute {campaign_ref} --from <stage_id> --to <stage_id> --reason <reason> --json",
-            "Use `msc selftest commands --json` and the operation contract to discover the current SDK surface before declaring that an operation is unavailable.",
+            f"{cli_prefix} campaigns feedback {campaign_ref} --text <feedback> --node <stage_id> --artifact-path <path> --json",
+            f"{cli_prefix} campaigns context link {campaign_ref} --note <note> --artifact-path <path> --json",
+            f"{cli_prefix} campaigns rerun-stage {campaign_ref} <stage_id> --reason <reason> --json",
+            f"{cli_prefix} campaigns rewind {campaign_ref} <stage_id> --reason <reason> --decision-id <decision_id> --run-id <run_id> --json",
+            f"{cli_prefix} campaigns rewrite-stage {campaign_ref} <stage_id> --instruction <instruction> --json",
+            f"{cli_prefix} campaigns reroute {campaign_ref} --from <stage_id> --to <stage_id> --reason <reason> --json",
+            f"Use `{cli_prefix} selftest commands --json` and the operation contract to discover the current SDK surface before declaring that an operation is unavailable.",
             "If the SDK lacks a command that would make the requested task cleaner, perform the best supported action and explicitly report the missing SDK capability as a recommended improvement.",
         ],
         "decisions": [
             "Use pending_decisions from the workspace read model.",
             "Only approve/reject explicit pending decision ids after the researcher asks.",
-            "Use `msc campaigns approve <approval_id> --json` or `msc campaigns reject <approval_id> --json`.",
+            f"Use `{cli_prefix} campaigns approve <approval_id> --json` or `{cli_prefix} campaigns reject <approval_id> --json`.",
         ],
         "execution": [
             "OpenClaude should not launch local execution unless the researcher explicitly asks.",
             "There is no `msc campaigns start` command. Do not use it.",
             (
-                f"To start or continue execution, use `msc run --campaign-id {campaign_ref} "
+                f"To start or continue execution, use `{cli_prefix} run --campaign-id {campaign_ref} "
                 "--campaign-root <project_root> --campaign-graph-version 1 --model <model> "
                 "--tier <tier> --budget <usd> --output-format markdown --mode local "
                 "--no-counsel --no-math --no-tree-search <campaign objective>`."
@@ -255,12 +292,13 @@ def openclaude_campaign_harness(
         "schema": "msc.openclaude.campaign_harness.v1",
         "campaign_ref": campaign_ref,
         "project_root": str(root),
+        "msc_cli": msc_cli_invocation(root),
         "readiness": readiness,
         "skill_path": readiness["skill_path"],
         "capability_profile": "openclaude_v1",
         "operation_contract": public_operation_contract("openclaude_v1"),
         "workspace": workspace,
-        "researcher_workflows": openclaude_researcher_workflows(campaign_ref),
+        "researcher_workflows": openclaude_researcher_workflows(campaign_ref, cli_prefix=msc_cli_invocation(root)["shell_prefix"]),
         "guardrails": {
             "source_of_truth": "campaign workspace read model plus campaign events",
             "do_not_use_as_truth": ["run_status.json", "raw process logs", "SQLite tables", "legacy LangGraph internals"],

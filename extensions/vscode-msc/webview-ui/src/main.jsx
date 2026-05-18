@@ -1248,7 +1248,7 @@ function NewCampaignModal({ onClose }) {
     outputFormat: 'markdown',
     template: 'consortium_scaffold',
     autoStart: true,
-    dryRun: false,
+    dryRun: true,
     model: 'moonshotai/kimi-k2',
     maxRunSeconds: 3600,
     counsel: false,
@@ -1302,8 +1302,8 @@ function NewCampaignModal({ onClose }) {
             <>
               <div className="form-grid">
                 <label>Run mode<select value={draft.dryRun ? 'dry' : 'real'} onChange={(event) => update('dryRun', event.target.value === 'dry')}>
+                  <option value="dry">Dry validation (no spend)</option>
                   <option value="real">Real local execution</option>
-                  <option value="dry">Dry validation</option>
                 </select></label>
                 <label>Model<input value={draft.model} onChange={(event) => update('model', event.target.value)} /></label>
                 <label>Max seconds<input type="number" min="1" value={draft.maxRunSeconds} onChange={(event) => update('maxRunSeconds', event.target.value)} /></label>

@@ -8,6 +8,18 @@ Use public `msc` commands as the only campaign authority. You may act
 autonomously on the researcher's campaign intent through those commands, but
 you must not mutate product truth by editing files directly.
 
+`msc` may not be installed globally. If bare `msc` is not on PATH, do not stop.
+Use the repo-local command prefix provided by the harness in
+`msc_cli.shell_prefix`, usually one of:
+
+```bash
+.venv/bin/msc --no-banner
+.venv/bin/python -m consortium.cli.main --no-banner
+PYTHONPATH=<project-root> python -m consortium.cli.main --no-banner
+```
+
+Run these commands from the project root.
+
 ## Product Model
 
 Use this mental model:
@@ -77,7 +89,6 @@ Answer researcher questions such as:
 - Which planned outputs are still missing?
 - Why is the system asking for a human decision?
 - What feedback has already been given?
-- What are safe next actions?
 - Should we rerun, rewrite, rewind, reroute, or continue?
 
 Ground answers in command output. Mention stage ids, artifact paths, decision

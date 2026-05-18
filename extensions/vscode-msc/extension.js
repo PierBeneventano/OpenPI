@@ -494,7 +494,7 @@ async function createCampaignDraftForSession(session, draft) {
   await refresh(session);
   await selectCampaign(session, created.campaign_id || created.path || created.name);
   if (draft.autoStart !== false) {
-    await startCampaignExecution(session, {
+    const started = await startCampaignExecution(session, {
       task: objective,
       dryRun: draft.dryRun !== false,
       tier,
@@ -508,6 +508,9 @@ async function createCampaignDraftForSession(session, draft) {
       allowSpend: Boolean(draft.allowSpend),
       confirmation: String(draft.confirmation || '').trim()
     });
+    if (!started && !session.state.actionError) {
+      setActionError(session, 'Campaign was created, but automatic execution did not start.');
+    }
   }
 }
 
@@ -1272,7 +1275,7 @@ function runMsc(root, args) {
 async function startCampaignExecution(session, message) {
   if (session.activeProcess) {
     setActionError(session, 'Campaign execution is already active in this dashboard.');
-    return;
+    return false;
   }
 
   const options = normalizeRunOptions(message);
@@ -1283,7 +1286,7 @@ async function startCampaignExecution(session, message) {
   const validationError = validateRunOptions(options);
   if (validationError) {
     setActionError(session, validationError);
-    return;
+    return false;
   }
 
   const commandSpec = resolveMscCommand(session.root);
@@ -1329,6 +1332,7 @@ async function startCampaignExecution(session, message) {
     appendRunLog(session, 'system', `Process exited with code ${code == null ? 'null' : code}${signal ? ` (${signal})` : ''}.`);
     await refresh(session);
   });
+  return true;
 }
 
 function normalizeRunOptions(message) {
@@ -1868,6 +1872,9 @@ async function loadOpenClaudeContextPack(session, model) {
 function buildOpenClaudePrompt(session, userText, contextPack) {
   const contextJson = JSON.stringify(compactOpenClaudeContext(contextPack), null, 2);
   const history = chatHistoryForPrompt(session.state.openClaude?.transcript || [], userText);
+  const root = session.root || process.cwd();
+  const commandSpec = resolveMscCommand(root);
+  const cliPrefix = commandSpec.shellPrefix || commandSpec.label;
   return [
     `Campaign: ${session.state.selectedCampaign}`,
     `Researcher message: ${userText}`,
@@ -1875,7 +1882,8 @@ function buildOpenClaudePrompt(session, userText, contextPack) {
     'Recent chat history:',
     history || 'No prior chat history for this campaign.',
     '',
-    'Use the MSc SDK/CLI as the campaign authority. You may autonomously inspect and mutate campaign state through public `msc` commands, including feedback, context links, reruns, reroutes, approvals, and campaign continuation. Do not edit product truth directly, delete campaigns/artifacts, edit repo code, scrape SQLite, or bypass budget limits.',
+    `Use the MSc SDK/CLI as the campaign authority. Run commands from ${root} with this repo-local prefix: ${cliPrefix}. Do not assume bare msc is on PATH.`,
+    'You may autonomously inspect and mutate campaign state through public SDK commands, including feedback, context links, reruns, reroutes, approvals, and campaign continuation. Do not edit product truth directly, delete campaigns/artifacts, edit repo code, scrape SQLite, or bypass budget limits.',
     '',
     'Current compact campaign context:',
     contextJson
@@ -2150,7 +2158,7 @@ function resolveMscCommand(root) {
     ? path.join(root, '.venv', 'Scripts', 'msc.exe')
     : path.join(root, '.venv', 'bin', 'msc');
   if (fs.existsSync(local)) {
-    return { bin: local, prefixArgs: ['--no-banner'], label: local };
+    return { bin: local, prefixArgs: ['--no-banner'], label: local, shellPrefix: `${local} --no-banner` };
   }
 
   const localPython = process.platform === 'win32'
@@ -2160,7 +2168,8 @@ function resolveMscCommand(root) {
     return {
       bin: localPython,
       prefixArgs: ['-m', 'consortium.cli.main', '--no-banner'],
-      label: `${localPython} -m consortium.cli.main`
+      label: `${localPython} -m consortium.cli.main`,
+      shellPrefix: `${localPython} -m consortium.cli.main --no-banner`
     };
   }
 
@@ -2169,11 +2178,12 @@ function resolveMscCommand(root) {
     return {
       bin: python,
       prefixArgs: ['-m', 'consortium.cli.main', '--no-banner'],
-      label: `${python} -m consortium.cli.main`
+      label: `${python} -m consortium.cli.main`,
+      shellPrefix: `${python} -m consortium.cli.main --no-banner`
     };
   }
 
-  return { bin: 'msc', prefixArgs: ['--no-banner'], label: 'msc' };
+  return { bin: 'msc', prefixArgs: ['--no-banner'], label: 'msc', shellPrefix: 'msc --no-banner' };
 }
 
 function openRouterConfigured(openclaude) {

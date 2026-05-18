@@ -118,6 +118,8 @@ def test_openclaude_campaign_harness_exposes_workspace_and_guardrails(tmp_path: 
     assert data["readiness"]["openrouter_configured"] is True
     assert data["operation_contract"]["profile"] == "openclaude_v1"
     assert data["context_pack"]["schema"] == "msc.openclaude.context_pack.v1"
+    assert data["msc_cli"]["shell_prefix"]
+    assert data["context_pack"]["msc_cli"]["shell_prefix"] == data["msc_cli"]["shell_prefix"]
     assert data["model_options"]["custom_model_allowed"] is True
     assert "hard_stops" in data["guardrails"]
     assert any(
@@ -126,11 +128,11 @@ def test_openclaude_campaign_harness_exposes_workspace_and_guardrails(tmp_path: 
     )
     execution_guidance = "\n".join(data["researcher_workflows"]["execution"])
     steering_guidance = "\n".join(data["researcher_workflows"]["feedback_and_steering"])
-    assert "msc campaigns rewind harness-demo" in steering_guidance
+    assert "campaigns rewind harness-demo" in steering_guidance
     assert "missing SDK capability" in steering_guidance
     assert "msc campaigns start" in execution_guidance
     assert "Do not use it" in execution_guidance
-    assert "msc run --campaign-id harness-demo" in execution_guidance
+    assert "run --campaign-id harness-demo" in execution_guidance
     assert "run_status.json" in data["guardrails"]["do_not_use_as_truth"]
     assert "not-a-real-openrouter-key" not in result.output
 
@@ -204,6 +206,7 @@ def test_openclaude_skill_preserves_kernel_guardrails():
     skill = Path("integrations/openclaude/MSC_SKILL.md").read_text()
 
     assert "Use public `msc` commands" in skill
+    assert "msc_cli.shell_prefix" in skill
     assert "Do not directly edit" in skill
     assert "consortium/prompts/" in skill
     assert "confirmation" in skill.lower()
