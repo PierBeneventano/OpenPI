@@ -85,9 +85,9 @@ not research quality.
 
 ## Remaining Product Notes
 
-- `inspect-budget` confirms the `$5` cap and tier posture, but does not yet show
-  spend/remaining because the current SDK-native smoke adapters do not charge
-  model/tool usage.
+- The later Research IR migration adds SDK-native model-policy checks and tiny
+  budget charges through `RuntimeContext` so spend appears in campaign events
+  before model/tool invocation.
 - Optional PDF/TEX editorial artifacts remain declared but unproduced in markdown
   runs. This is acceptable, but the UI should keep them visually secondary.
 - The experiment still writes an optional "failure report" saying no failure was

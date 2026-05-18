@@ -24,12 +24,14 @@ from .kernel import (
     EventRecord,
     EvidenceLink,
     GraphSpec,
+    ModelPolicy,
     RunCheckpoint,
     RunSpec,
     StageSpec,
     build_kernel_native_research_kernel,
 )
 from .kernel.models import stable_id
+from .research_tiers import TARGET_MODEL_DEFAULTS, tier_policy
 from .stage_contracts import compile_kernel_graph
 
 
@@ -358,6 +360,8 @@ class NativeCampaignExecutor:
             graph,
             math_enabled=bool(metadata.get("math_enabled")),
             human_gates=bool(metadata.get("human_gates", True)),
+            tier=str(metadata.get("tier") or campaign.get("tier") or "lean"),
+            counsel_enabled=bool(metadata.get("counsel_enabled")),
         )
         run = RunSpec(
             id=run_id,
@@ -443,7 +447,15 @@ class NativeCampaignExecutor:
         return {}
 
 
-def _apply_native_policy(graph: GraphSpec, *, math_enabled: bool, human_gates: bool) -> GraphSpec:
+def _apply_native_policy(
+    graph: GraphSpec,
+    *,
+    math_enabled: bool,
+    human_gates: bool,
+    tier: str,
+    counsel_enabled: bool,
+) -> GraphSpec:
+    tier_config = tier_policy(tier)
     stages: list[StageSpec] = []
     for stage in graph.stages:
         routes = list(stage.routes)
@@ -457,19 +469,96 @@ def _apply_native_policy(graph: GraphSpec, *, math_enabled: bool, human_gates: b
         if human_gates:
             pause_after = stage.id == "milestone_goals"
             pause_before = stage.id == "resource_preparation_agent"
+        model_policy = _model_policy_for_stage(
+            stage,
+            tier=tier_config.id,
+            counsel_enabled=counsel_enabled,
+        )
         stages.append(
             replace(
                 stage,
                 routes=tuple(routes),
                 pause_before=pause_before,
                 pause_after=pause_after,
+                model_policy=model_policy,
                 adapter_id=f"{NATIVE_RUNTIME}.{stage.id}",
-                metadata={**dict(stage.metadata), "adapter": NATIVE_RUNTIME, "native_runtime": True},
+                metadata={
+                    **dict(stage.metadata),
+                    "adapter": NATIVE_RUNTIME,
+                    "native_runtime": True,
+                    "tier": tier_config.id,
+                    "execution_model_policy": {
+                        "allowed_model_ids": list(model_policy.allowed_model_ids),
+                        "max_input_tokens": model_policy.max_input_tokens,
+                        "max_output_tokens": model_policy.max_output_tokens,
+                        "structured_output_required": model_policy.structured_output_required,
+                    },
+                },
             )
         )
     native = GraphSpec(id=graph.id, stages=tuple(stages), entry_stage_id=graph.entry_stage_id)
     native.validate()
     return native
+
+
+def _model_policy_for_stage(
+    stage: StageSpec,
+    *,
+    tier: str,
+    counsel_enabled: bool,
+) -> ModelPolicy:
+    if tier == "scaffold":
+        return ModelPolicy()
+
+    if tier == "lean":
+        return ModelPolicy(
+            allowed_model_ids=("deepseek-chat",),
+            max_input_tokens=16_000,
+            max_output_tokens=2_000,
+        )
+
+    if stage.id == "persona_council":
+        persona = TARGET_MODEL_DEFAULTS["persona"]
+        model_ids = (
+            str(persona["practical_compass"]),
+            str(persona["rigor_novelty"]),
+            str(persona["narrative_architect"]),
+        )
+        if tier == "ultra":
+            model_ids = (*model_ids, str(persona["empirical_grounding"]))
+        return ModelPolicy(allowed_model_ids=_unique_models(model_ids), max_input_tokens=32_000, max_output_tokens=4_000)
+
+    if stage.id == "duality_check":
+        return ModelPolicy(
+            allowed_model_ids=(str(TARGET_MODEL_DEFAULTS["duality_check"]),),
+            max_input_tokens=32_000,
+            max_output_tokens=4_000,
+            structured_output_required=True,
+        )
+
+    if counsel_enabled and stage.council_policy.kind == "model_council":
+        council = TARGET_MODEL_DEFAULTS["model_council"]
+        return ModelPolicy(
+            allowed_model_ids=tuple(str(model_id) for model_id in council["members"]),
+            max_input_tokens=32_000,
+            max_output_tokens=4_000,
+        )
+
+    if tier in {"serious", "ultra"}:
+        return ModelPolicy(allowed_model_ids=("claude-sonnet-4-6",), max_input_tokens=32_000, max_output_tokens=4_000)
+
+    return ModelPolicy(allowed_model_ids=("deepseek-chat",), max_input_tokens=16_000, max_output_tokens=2_000)
+
+
+def _unique_models(model_ids: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for model_id in model_ids:
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        ordered.append(model_id)
+    return tuple(ordered)
 
 
 def _checkpoint_from_payload(payload: dict[str, Any]) -> RunCheckpoint:

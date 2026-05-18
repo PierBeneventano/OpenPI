@@ -9,9 +9,13 @@ from ..research_tiers import TARGET_WORKFLOW_STAGE_IDS
 
 from .engine import ResearchKernel
 from .models import (
+    ArtifactSpec,
+    EvidenceLink,
     GraphSpec,
     HumanDecisionRequiredError,
+    ModelRegistry,
     RuntimeContext,
+    SchemaRegistry,
     StageAdapterRegistry,
     ToolRegistry,
     ValidationResult,
@@ -56,10 +60,16 @@ def build_kernel_native_research_kernel(graph: GraphSpec) -> ResearchKernel:
     register_declared_pass_validators(validators, graph)
     tools = ToolRegistry()
     register_declared_noop_tools(tools, graph)
+    schemas = SchemaRegistry()
+    register_declared_schemas(schemas, graph)
+    models = ModelRegistry()
+    register_declared_noop_models(models, graph)
     return ResearchKernel(
         adapter_registry=adapters,
         validators=validators,
         tool_registry=tools,
+        schema_registry=schemas,
+        model_registry=models,
     )
 
 
@@ -110,14 +120,55 @@ def register_declared_noop_tools(registry: ToolRegistry, graph: GraphSpec) -> No
         registry.register(tool_id, lambda **kwargs: {"ok": True, "arguments": kwargs})
 
 
+def register_declared_noop_models(registry: ModelRegistry, graph: GraphSpec) -> None:
+    for model_id in _unique(stage.model_policy.allowed_model_ids for stage in graph.stages):
+        registry.register(model_id, lambda **kwargs: {"ok": True, "arguments": kwargs})
+
+
+def register_declared_schemas(registry: SchemaRegistry, graph: GraphSpec) -> None:
+    schema_ids = _unique(
+        tuple(artifact.schema_id for artifact in stage.outputs if artifact.schema_id)
+        for stage in graph.stages
+    )
+    for schema_id in schema_ids:
+        registry.register(schema_id, _schema_validator(schema_id))
+
+
+def _invoke_stage_model(
+    context: RuntimeContext,
+    *,
+    response_schema: str | None = None,
+    amount_usd: float = 0.0001,
+) -> None:
+    if context.stage.kind in {"router", "validator", "control", "approval"}:
+        return
+    model_ids = context.stage.model_policy.allowed_model_ids
+    if not model_ids:
+        return
+    model_id = model_ids[0]
+    context.charge_budget(amount_usd, reason="stage_model_invocation", metadata={"model_id": model_id})
+    kwargs = {
+        "prompt": context.stage.purpose,
+        "input_tokens": min(context.stage.model_policy.max_input_tokens or 512, 512),
+        "max_output_tokens": min(context.stage.model_policy.max_output_tokens or 256, 256),
+    }
+    if response_schema:
+        kwargs["response_schema"] = response_schema
+    context.use_model(model_id, **kwargs)
+
+
 def _persona_council(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     context.run_council(
         prompt=context.run.objective,
-        member_outputs={
-            "claude-opus-4-6": "Practical compass accepts the direction.",
-            "gpt-5.4": "Rigor and novelty lens accepts with measurable goals.",
-            "gemini-3.1-pro-preview": "Narrative lens accepts the framing.",
-        },
+        member_outputs=_member_outputs_for_policy(
+            context,
+            (
+                "Practical compass accepts the direction.",
+                "Rigor and novelty lens accepts with measurable goals.",
+                "Narrative lens accepts the framing.",
+            ),
+        ),
         verdict="accept",
         passed=True,
         metadata={"adapter": "kernel_native"},
@@ -135,6 +186,7 @@ def _persona_council(context: RuntimeContext) -> None:
 
 
 def _literature_review(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/literature_matrix.md",
@@ -148,6 +200,7 @@ def _literature_review(context: RuntimeContext) -> None:
 
 
 def _literature_gate(context: RuntimeContext) -> dict[str, list[str]]:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/lit_review_gate_decision.json",
@@ -157,6 +210,7 @@ def _literature_gate(context: RuntimeContext) -> dict[str, list[str]]:
 
 
 def _brainstorm(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/brainstorm.md",
@@ -170,6 +224,7 @@ def _brainstorm(context: RuntimeContext) -> None:
 
 
 def _brainstorm_gate(context: RuntimeContext) -> dict[str, list[str]]:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/brainstorm_gate_decision.json",
@@ -179,6 +234,7 @@ def _brainstorm_gate(context: RuntimeContext) -> dict[str, list[str]]:
 
 
 def _formalize_goals_entry(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/formalize_goals_entry.json",
@@ -187,6 +243,7 @@ def _formalize_goals_entry(context: RuntimeContext) -> None:
 
 
 def _formalize_goals(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/research_goals.json",
@@ -200,6 +257,7 @@ def _formalize_goals(context: RuntimeContext) -> None:
 
 
 def _research_plan(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/research_plan.md",
@@ -215,6 +273,7 @@ def _research_plan(context: RuntimeContext) -> None:
 
 
 def _track_decomposition_gate(context: RuntimeContext) -> dict[str, list[str]]:
+    _invoke_stage_model(context)
     math_enabled = bool(context.run.metadata.get("math_enabled", True))
     _write_if_declared(
         context,
@@ -233,6 +292,7 @@ def _track_decomposition_gate(context: RuntimeContext) -> dict[str, list[str]]:
 
 
 def _milestone_goals(context: RuntimeContext) -> dict[str, list[str]]:
+    _invoke_stage_model(context)
     math_enabled = bool(context.run.metadata.get("math_enabled", True))
     _write_if_declared(
         context,
@@ -251,6 +311,7 @@ def _milestone_goals(context: RuntimeContext) -> dict[str, list[str]]:
 
 
 def _theory_track(context: RuntimeContext) -> dict[str, list[str]]:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/theory_track_summary.md",
@@ -264,6 +325,7 @@ def _theory_track(context: RuntimeContext) -> dict[str, list[str]]:
 
 
 def _experiment_track(context: RuntimeContext) -> dict[str, list[str]]:
+    _invoke_stage_model(context)
     results = _toy_spectral_norm_results()
     _write_if_declared(
         context,
@@ -294,6 +356,7 @@ def _experiment_track(context: RuntimeContext) -> dict[str, list[str]]:
 
 
 def _track_merge(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/track_merge_summary.md",
@@ -306,6 +369,7 @@ def _track_merge(context: RuntimeContext) -> None:
 
 
 def _verify_completion(context: RuntimeContext) -> dict[str, list[str]]:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/completion_verification.json",
@@ -320,8 +384,27 @@ def _verify_completion(context: RuntimeContext) -> dict[str, list[str]]:
 
 
 def _formalize_results(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     results = _toy_spectral_norm_results()
     delta = round(results["without_batch_norm"][-1] - results["with_batch_norm"][-1], 3)
+    claim_link = EvidenceLink(
+        claim_id="C1",
+        evidence_path="experiment_track:artifacts/experiment_track_summary.md",
+        relationship="supports",
+        note="Deterministic toy smoke trajectory.",
+    )
+    context.record_claim(
+        claim_id="C1",
+        text="Batch normalization slowed spectral norm growth in the deterministic toy smoke run.",
+        status="qualified",
+        strength="smoke_test_only",
+        limitations=(
+            "Synthetic deterministic smoke data are not scientific evidence.",
+            "No hyperparameter sweep or statistical uncertainty estimate was run.",
+        ),
+        evidence_links=(claim_link,),
+        metadata={"objective_role": "toy_empirical_comparison"},
+    )
     _write_if_declared(
         context,
         "artifacts/formalized_results.md",
@@ -354,6 +437,7 @@ def _formalize_results(context: RuntimeContext) -> None:
 
 
 def _duality_check(context: RuntimeContext) -> None:
+    _invoke_stage_model(context, response_schema="msc.duality_check.v1")
     force_fail = bool(context.run.metadata.get("force_duality_fail"))
     passed = not force_fail
     verdict = "pass" if passed else "fail"
@@ -363,10 +447,13 @@ def _duality_check(context: RuntimeContext) -> None:
     ]
     context.run_council(
         prompt="Check practical meaning and technical defensibility before writeup.",
-        member_outputs={
-            "duality-practical": "The result is useful for product validation when labeled as smoke data.",
-            "duality-technical": "The comparison is technically coherent but scientifically weak.",
-        },
+        member_outputs=_member_outputs_for_policy(
+            context,
+            (
+                "The result is useful for product validation when labeled as smoke data.",
+                "The comparison is technically coherent but scientifically weak.",
+            ),
+        ),
         verdict=verdict,
         passed=passed,
         metadata={
@@ -393,24 +480,43 @@ def _duality_check(context: RuntimeContext) -> None:
 
 
 def _duality_gate(context: RuntimeContext) -> dict[str, list[str]]:
+    _invoke_stage_model(context)
     passed = not bool(context.run.metadata.get("force_duality_fail"))
     route = "pass" if passed else "needs_human_scientific_decision"
+    failed_lenses = [] if passed else ["scientific_strength", "external_validity"]
+    objections = [] if passed else [
+        "The smoke result should not be promoted to a scientific claim without more evidence.",
+    ]
     payload = {
         "decision": route,
         "passed": passed,
         "safe_actions": [] if passed else _duality_safe_actions(),
     }
     _write_if_declared(context, "artifacts/duality_gate_decision.json", payload)
+    context.record_gate_verdict(
+        gate_id="duality_gate",
+        passed=passed,
+        verdict="pass" if passed else "fail",
+        failed_lenses=failed_lenses,
+        objections=objections,
+        evidence=("artifacts/duality_check.json", "artifacts/duality_gate_decision.json"),
+        safe_next_actions=() if passed else _duality_safe_actions(),
+    )
     if not passed:
+        for lens, text in zip(failed_lenses, objections * len(failed_lenses), strict=False):
+            context.record_objection(
+                claim_id="C1",
+                lens=lens,
+                severity="major",
+                text=text,
+            )
         raise HumanDecisionRequiredError(
             reason="duality_failed",
             safe_next_actions=_duality_safe_actions(),
             metadata={
                 "evidence": ["artifacts/duality_check.json", "artifacts/duality_gate_decision.json"],
-                "failed_lenses": ["scientific_strength", "external_validity"],
-                "objections": [
-                    "The smoke result should not be promoted to a scientific claim without more evidence.",
-                ],
+                "failed_lenses": failed_lenses,
+                "objections": objections,
                 "safe_actions": _duality_safe_actions(),
             },
         )
@@ -418,6 +524,7 @@ def _duality_gate(context: RuntimeContext) -> dict[str, list[str]]:
 
 
 def _followup_lit_review(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/followup_lit_review.md",
@@ -426,6 +533,7 @@ def _followup_lit_review(context: RuntimeContext) -> None:
 
 
 def _resource_preparation(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/resource_manifest.json",
@@ -443,6 +551,7 @@ def _resource_preparation(context: RuntimeContext) -> None:
 
 
 def _paper_contract(context: RuntimeContext) -> None:
+    _invoke_stage_model(context, response_schema="msc.paper_contract.v1")
     _write_if_declared(
         context,
         "artifacts/paper_contract.json",
@@ -456,6 +565,7 @@ def _paper_contract(context: RuntimeContext) -> None:
 
 
 def _writeup(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     results = _toy_spectral_norm_results()
     _write_if_declared(
         context,
@@ -480,6 +590,7 @@ def _writeup(context: RuntimeContext) -> None:
 
 
 def _writeup_gate(context: RuntimeContext) -> dict[str, list[str]]:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/writeup_gate_decision.json",
@@ -489,6 +600,7 @@ def _writeup_gate(context: RuntimeContext) -> dict[str, list[str]]:
 
 
 def _proofreading_entry(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/proofreading_entry.json",
@@ -497,6 +609,7 @@ def _proofreading_entry(context: RuntimeContext) -> None:
 
 
 def _proofreading(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/copyedit_report.md",
@@ -505,6 +618,7 @@ def _proofreading(context: RuntimeContext) -> None:
 
 
 def _proofread_gate(context: RuntimeContext) -> dict[str, list[str]]:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/proofread_gate_decision.json",
@@ -514,6 +628,7 @@ def _proofread_gate(context: RuntimeContext) -> dict[str, list[str]]:
 
 
 def _reviewer(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/review_report.md",
@@ -527,6 +642,7 @@ def _reviewer(context: RuntimeContext) -> None:
 
 
 def _review_gate(context: RuntimeContext) -> dict[str, list[str]]:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/review_gate_decision.json",
@@ -536,6 +652,7 @@ def _review_gate(context: RuntimeContext) -> dict[str, list[str]]:
 
 
 def _milestone_review(context: RuntimeContext) -> None:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/final_review_approval.json",
@@ -544,6 +661,7 @@ def _milestone_review(context: RuntimeContext) -> None:
 
 
 def _validation_gate(context: RuntimeContext) -> dict[str, list[str]]:
+    _invoke_stage_model(context)
     _write_if_declared(
         context,
         "artifacts/final_validation.json",
@@ -560,10 +678,11 @@ def _validation_gate(context: RuntimeContext) -> dict[str, list[str]]:
 
 def _generic_stage(stage_id: str):
     def run(context: RuntimeContext) -> dict[str, list[str]] | None:
+        _invoke_stage_model(context)
         if context.stage.council_policy.kind in {"model_council", "duality_check"}:
             context.run_council(
                 prompt=f"Evaluate {context.stage.title}.",
-                member_outputs=_council_member_outputs(context.stage.council_policy.kind),
+                member_outputs=_council_member_outputs(context),
                 verdict="pass",
                 passed=True,
                 metadata={"adapter": "kernel_native"},
@@ -578,19 +697,29 @@ def _generic_stage(stage_id: str):
     return run
 
 
-def _council_member_outputs(kind: str) -> dict[str, str]:
+def _council_member_outputs(context: RuntimeContext) -> dict[str, str]:
+    kind = context.stage.council_policy.kind
     if kind == "duality_check":
-        return {
-            "claude-opus-4-6": "Practical meaning and technical defensibility both pass.",
-        }
+        return _member_outputs_for_policy(
+            context,
+            ("Practical meaning and technical defensibility both pass.",),
+        )
     if kind == "model_council":
-        return {
-            "claude-opus-4-6": "Strong specialist result.",
-            "gpt-5.4": "Independent critique agrees.",
-        }
-    if kind == "deterministic_gate":
-        return {}
+        return _member_outputs_for_policy(
+            context,
+            ("Strong specialist result.", "Independent critique agrees."),
+        )
     return {}
+
+
+def _member_outputs_for_policy(context: RuntimeContext, outputs: tuple[str, ...]) -> dict[str, str]:
+    model_ids = context.stage.model_policy.allowed_model_ids or context.stage.council_policy.model_ids
+    if not model_ids:
+        return {}
+    return {
+        model_id: outputs[index % len(outputs)]
+        for index, model_id in enumerate(model_ids)
+    }
 
 
 def _artifact_content(stage_id: str, path: str, kind: str) -> object:
@@ -686,12 +815,28 @@ def _semantic_validator(validator_id: str):
             checks["contains_bn_comparison"] = passed
         elif validator_id == "duality_verdict_present":
             payload = _artifact_json(context, "artifacts/duality_check.json")
-            passed = str(payload.get("verdict") or "") in {"pass", "fail"} and "passed" in payload
+            verdict = str(payload.get("verdict") or "")
+            passed_field = payload.get("passed")
+            passed = (
+                verdict in {"pass", "fail"}
+                and isinstance(passed_field, bool)
+                and ((verdict == "pass") == passed_field)
+            )
             checks["verdict"] = payload.get("verdict")
+            checks["passed"] = passed_field
         elif validator_id == "duality_route_present":
             payload = _artifact_json(context, "artifacts/duality_gate_decision.json")
-            passed = bool(payload.get("decision"))
+            decision = str(payload.get("decision") or "")
+            passed_field = payload.get("passed")
+            pass_like = decision in {"pass", "passed", "approve", "approved"}
+            failed_like = decision in {"fail", "failed", "reject", "rejected", "blocked", "needs_human_scientific_decision"}
+            passed = bool(decision) and (
+                not isinstance(passed_field, bool)
+                or (pass_like and passed_field)
+                or (failed_like and not passed_field)
+            )
             checks["decision"] = payload.get("decision")
+            checks["passed"] = passed_field
         elif validator_id in {"required_sections_present", "paper_contract_terms_present"}:
             text = _artifact_text(context, "artifacts/final_paper.md")
             passed = all(section in text for section in ("## Abstract", "## Setup", "## Results", "## Limitations"))
@@ -717,6 +862,73 @@ def _semantic_validator(validator_id: str):
             validator_id=validator_id,
             passed=passed,
             message=message if passed else f"{validator_id} failed SDK-native semantic contract",
+            details=checks,
+        )
+
+    return validate
+
+
+def _schema_validator(schema_id: str):
+    def validate(payload: object, artifact: ArtifactSpec) -> ValidationResult:
+        data = payload if isinstance(payload, dict) else {}
+        checks: dict[str, object] = {"path": artifact.path, "schema_id": schema_id}
+        passed = bool(data)
+        message = f"{schema_id} passed"
+
+        if schema_id == "msc.duality_check.v1":
+            verdict = str(data.get("verdict") or "")
+            passed_field = data.get("passed")
+            passed = (
+                verdict in {"pass", "fail"}
+                and isinstance(passed_field, bool)
+                and ((verdict == "pass") == passed_field)
+                and isinstance(data.get("lenses"), dict)
+            )
+            checks.update({"verdict": verdict, "passed": passed_field})
+        elif schema_id == "msc.gate_decision.v1":
+            decision = str(data.get("decision") or "")
+            passed_field = data.get("passed")
+            pass_like = decision in {"pass", "passed", "approve", "approved", "valid", "complete", "finished"}
+            fail_like = decision in {
+                "fail",
+                "failed",
+                "reject",
+                "rejected",
+                "blocked",
+                "invalid",
+                "needs_human_scientific_decision",
+            }
+            passed = bool(decision) and (
+                not isinstance(passed_field, bool)
+                or (pass_like and passed_field)
+                or (fail_like and not passed_field)
+                or (not pass_like and not fail_like)
+            )
+            checks.update({"decision": decision, "passed": passed_field})
+        elif schema_id == "msc.claims_and_limitations.v1":
+            claims = data.get("claims")
+            passed = isinstance(claims, list) and bool(claims) and all(
+                isinstance(claim, dict) and claim.get("id") and claim.get("text")
+                for claim in claims
+            )
+            checks["claim_count"] = len(claims) if isinstance(claims, list) else 0
+        elif schema_id == "msc.paper_contract.v1":
+            sections = data.get("required_sections")
+            passed = bool(data.get("format")) and isinstance(sections, list) and bool(sections)
+            checks["format"] = data.get("format")
+            checks["required_sections"] = sections if isinstance(sections, list) else []
+        elif schema_id == "msc.writeup_gate_decision.v1":
+            decision = str(data.get("decision") or "")
+            missing = data.get("missing") or []
+            passed = bool(decision) and not bool(missing)
+            checks.update({"decision": decision, "missing": missing})
+
+        if not passed:
+            message = f"{schema_id} failed structured research schema"
+        return ValidationResult(
+            validator_id=f"schema:{schema_id}",
+            passed=passed,
+            message=message,
             details=checks,
         )
 

@@ -196,10 +196,15 @@ def test_openclaude_context_pack_prefers_linked_deliverables(tmp_path: Path, mon
     pack = openclaude_context_pack("context-demo", project_root=repo)
 
     assert pack["schema"] == "msc.openclaude.context_pack.v1"
+    assert pack["aim"]["objective"] == "Use linked artifacts as durable chat context."
+    assert "graph" in pack["map"]
+    assert "claims" in pack["evidence"]
+    assert "pending" in pack["decisions"]
     assert pack["active_context_links"][0]["target"]["artifact_path"] == "artifacts/literature_matrix.md"
     assert pack["recent_feedback"][0]["target"]["scope"] == "artifact"
     assert pack["selected_artifacts"][0]["path"] == "artifacts/literature_matrix.md"
     assert "prompt" in pack["context_policy"]["excluded_by_default"]
+    assert pack["context_policy"]["legacy_runtime"] == "diagnostics only; never product gate or completion authority"
 
 
 def test_openclaude_skill_preserves_kernel_guardrails():

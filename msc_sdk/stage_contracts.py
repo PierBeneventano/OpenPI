@@ -14,12 +14,17 @@ from typing import Any, Iterable
 from .kernel import (
     ArtifactSpec,
     BudgetPolicy as KernelBudgetPolicy,
+    CompletionPolicy as KernelCompletionPolicy,
     CouncilPolicy,
     FailurePolicy,
+    GatePolicy as KernelGatePolicy,
     GraphSpec,
     InputSpec,
+    ModelPolicy,
     RouteSpec,
+    RetryPolicy,
     StageSpec,
+    TimeoutPolicy,
 )
 from .feedback_graph import (
     state_field_contracts_for_stage,
@@ -305,6 +310,9 @@ def _stage_spec_from_contract(
         "failure_policy": contract.failure_policy,
         "council_policy": _council_policy_for_contract(contract),
         "budget_policy": contract.budget_policy.to_dict(tier="kernel", budget_share_usd=budget_share),
+        "completion_policy": _completion_policy_for_contract(contract).to_dict(),
+        "gate_policy": _gate_policy_for_contract(contract).to_dict(),
+        "timeout_policy": TimeoutPolicy().to_dict(),
         "required_artifact_contracts": [
             _artifact_contract_dict(_artifact_spec(artifact, required=True))
             for artifact in contract.required_artifacts
@@ -362,9 +370,14 @@ def _stage_spec_from_contract(
         validator_ids=tuple(contract.validators),
         tool_ids=tuple(contract.tool_families),
         council_policy=CouncilPolicy(kind=_council_policy_for_contract(contract)),
+        model_policy=ModelPolicy(),
         adapter_id=f"sdk_native.{contract.id}",
         budget=KernelBudgetPolicy(max_usd=budget_share, spend_allowed=contract.budget_policy.spend),
         failure=FailurePolicy(mode="stop_for_human"),
+        completion_policy=_completion_policy_for_contract(contract),
+        gate_policy=_gate_policy_for_contract(contract),
+        retry_policy=_retry_policy_for_contract(contract),
+        timeout_policy=TimeoutPolicy(),
         routes=routes,
         pause_before=any(policy.startswith("before_") for policy in contract.human_pause_policy),
         pause_after=any(policy.startswith("after_") for policy in contract.human_pause_policy),
@@ -387,8 +400,64 @@ def _artifact_spec(artifact: ArtifactContract, *, required: bool) -> ArtifactSpe
         kind=artifact.kind,
         required=required,
         role="deliverable" if required else "evidence",
+        schema_id=_schema_id_for_artifact(artifact.path, artifact.kind),
         description=artifact.description,
     )
+
+
+def _schema_id_for_artifact(path: str, kind: str) -> str | None:
+    if kind != "json":
+        return None
+    name = Path(path).name
+    return {
+        "duality_check.json": "msc.duality_check.v1",
+        "duality_gate_decision.json": "msc.gate_decision.v1",
+        "claims_and_limitations.json": "msc.claims_and_limitations.v1",
+        "paper_contract.json": "msc.paper_contract.v1",
+        "writeup_gate_decision.json": "msc.writeup_gate_decision.v1",
+    }.get(name)
+
+
+def _completion_policy_for_contract(contract: StageContract) -> KernelCompletionPolicy:
+    required = tuple(artifact.path for artifact in contract.required_artifacts)
+    required_by_format: dict[str, tuple[str, ...]] = {}
+    optional_paths = {artifact.path for artifact in contract.optional_artifacts}
+    if contract.id == "writeup_agent":
+        required_by_format = {
+            "latex": tuple(path for path in ("artifacts/final_paper.tex",) if path in optional_paths),
+            "pdf": tuple(path for path in ("artifacts/final_paper.pdf",) if path in optional_paths),
+        }
+    return KernelCompletionPolicy(
+        required_artifacts=required,
+        required_artifacts_by_output_format=required_by_format,
+        optional_artifacts_by_output_format={
+            "markdown": tuple(path for path in optional_paths if path.endswith((".pdf", ".tex"))),
+        },
+        validators=tuple(contract.validators),
+    )
+
+
+def _gate_policy_for_contract(contract: StageContract) -> KernelGatePolicy:
+    if contract.id == "duality_gate":
+        return KernelGatePolicy(
+            required=True,
+            verdict_schema_id="msc.gate_decision.v1",
+            blocks_stages=tuple(stage_id for stage_id in TARGET_WORKFLOW_STAGE_IDS if _requires_duality_pass(stage_id)),
+            safe_next_actions=("revise-goals", "rerun-literature", "rerun-experiment-track", "reroute", "stop-campaign"),
+            metadata={"gate": "duality"},
+        )
+    if contract.kind in {"gate", "router", "validator"}:
+        return KernelGatePolicy(required=True, safe_next_actions=("rewrite-stage", "rerun-stage", "abort"))
+    return KernelGatePolicy()
+
+
+def _retry_policy_for_contract(contract: StageContract) -> RetryPolicy:
+    attempts = [
+        int(route.metadata.get("retry", {}).get("max_attempts"))
+        for route in contract.allowed_routes
+        if isinstance(route.metadata.get("retry"), dict) and route.metadata.get("retry", {}).get("max_attempts") is not None
+    ]
+    return RetryPolicy(max_attempts=max(attempts) if attempts else None)
 
 
 def _council_policy_for_contract(contract: StageContract) -> str:
@@ -518,6 +587,11 @@ def _stage_node(
             "humanPausePolicy": list(metadata.get("human_pause_policy") or []),
             "failurePolicy": metadata.get("failure_policy") or stage.failure.mode,
             "councilPolicy": stage.council_policy.to_dict(),
+            "completionPolicy": stage.completion_policy.to_dict(),
+            "gatePolicy": stage.gate_policy.to_dict(),
+            "retryPolicy": stage.retry_policy.to_dict(),
+            "timeoutPolicy": stage.timeout_policy.to_dict(),
+            "executionModelPolicy": asdict(stage.model_policy),
             "tierPolicy": template_metadata(template, tier)["tierPolicy"],
             "modelPolicy": template_metadata(template, tier)["modelPolicy"],
             "dualityRequired": bool(metadata.get("duality_required") or stage.id == "duality_check"),
@@ -589,5 +663,7 @@ def _artifact_contract_dict(artifact: ArtifactSpec) -> dict[str, Any]:
         "path": artifact.path,
         "kind": artifact.kind,
         "required": artifact.required,
+        "schema_id": artifact.schema_id,
+        "schemaId": artifact.schema_id,
         "description": artifact.description,
     }

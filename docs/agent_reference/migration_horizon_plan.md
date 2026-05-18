@@ -7,7 +7,9 @@ the snapshot as the authoritative V0 graph-shape reference and representing it
 through product-facing SDK abstractions.
 
 See [`legacy_pruning_boundary.md`](legacy_pruning_boundary.md) for the current
-line between SDK-native product truth and archived adapter code.
+line between SDK-native product truth and archived adapter code. See
+[`research_ir_migration.md`](research_ir_migration.md) for the current
+research-native event/read-model surface.
 
 ## Target State
 
@@ -18,9 +20,9 @@ CampaignGoal -> ResearchGraphTemplate -> GraphSpec -> StageSpec
   -> RuntimeContext -> EventRecord -> ReadModel
 ```
 
-The researcher sees a campaign, a graph, decisions, deliverables, OpenClaude
-steering, and diagnostics on request. Internal process/session IDs are
-diagnostics only; they are not the product center.
+The researcher sees a campaign through Aim, Map, Evidence, Decisions, and
+Diagnostics aisles. Internal process/session IDs are diagnostics only; they are
+not the product center.
 
 ## Cutover Order
 
@@ -60,8 +62,10 @@ diagnostics only; they are not the product center.
 - No product read model depends on old run/session events, status JSON, PID
   liveness, or runner HTTP gates.
 - The workspace read model includes council summaries, duality status, pending
-  decisions, safe next actions, deliverables, diagnostics, and model/tier
-  policy.
+  decisions, safe next actions, claims, evidence, objections, gate verdicts,
+  deliverables, diagnostics, and model/tier policy.
+- Legacy live-run attempts appear under diagnostics only and cannot set product
+  execution status or gate/completion truth.
 - OpenClaude can inspect, steer, request evidence, propose repair, and change
   tier/model policy only through typed SDK/CLI operations.
 - OpenClaw remains read-only or wrapper-only.

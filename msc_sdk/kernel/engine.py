@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import time
 from typing import Any
 
 from .models import (
@@ -342,7 +343,40 @@ class ResearchKernel:
         self.event_bus.emit("StageStarted", run=run, payload={"stage_id": stage.id})
 
         try:
+            started = time.monotonic()
             handler_result = handler(context)
+            elapsed_seconds = time.monotonic() - started
+            if stage.timeout_policy.max_seconds is not None and elapsed_seconds > stage.timeout_policy.max_seconds:
+                self.event_bus.emit(
+                    "StageTimeoutReached",
+                    run=run,
+                    payload={
+                        "stage_id": stage.id,
+                        "elapsed_seconds": elapsed_seconds,
+                        "max_seconds": stage.timeout_policy.max_seconds,
+                    },
+                )
+                result = ValidationResult(
+                    validator_id="timeout_policy",
+                    passed=False,
+                    message=(
+                        f"stage exceeded timeout: {elapsed_seconds:.3f}s > "
+                        f"{stage.timeout_policy.max_seconds:.3f}s"
+                    ),
+                )
+                self._request_decision(
+                    run=run,
+                    stage_id=stage.id,
+                    reason="stage_timeout_reached",
+                    safe_next_actions=list(stage.timeout_policy.safe_next_actions),
+                    metadata={"validation": [result.__dict__]},
+                )
+                return StageOutcome(
+                    stage_id=stage.id,
+                    validation=(result,),
+                    status="human_decision_required",
+                    route_conditions=self._route_conditions(None),
+                )
         except BudgetExceededError as exc:
             result = ValidationResult(
                 validator_id="budget_policy",
@@ -447,6 +481,17 @@ class ResearchKernel:
         validation = self._validate_completion(context, artifacts)
         route_conditions = self._route_conditions(handler_result)
         failed = [result for result in validation if not result.passed]
+        completion_status = "human_decision_required" if failed else "complete"
+        self.event_bus.emit(
+            "StageCompletionEvaluated",
+            run=run,
+            payload={
+                "stage_id": stage.id,
+                "status": completion_status,
+                "complete": not failed,
+                "validation": [result.__dict__ for result in validation],
+            },
+        )
         if failed:
             self.event_bus.emit(
                 "ValidationFailed",
@@ -525,13 +570,14 @@ class ResearchKernel:
         return tuple(records)
 
     def _validate_completion(self, context: RuntimeContext, artifacts: tuple[ArtifactRecord, ...]) -> list[ValidationResult]:
-        present_required = {
+        present_outputs = {
             artifact.path for artifact in artifacts
-            if artifact.required and artifact.size_bytes > 0
+            if artifact.size_bytes > 0
         }
+        required_outputs = self._required_output_paths(context)
         missing = [
-            artifact.path for artifact in context.stage.required_outputs
-            if artifact.path not in present_required
+            path for path in required_outputs
+            if path not in present_outputs
         ]
         results = [
             ValidationResult(
@@ -544,6 +590,24 @@ class ResearchKernel:
         for validator_id in context.stage.validator_ids:
             results.append(self.validators.run(validator_id, context, context.stage, artifacts))
         return results
+
+    @staticmethod
+    def _required_output_paths(context: RuntimeContext) -> tuple[str, ...]:
+        policy = context.stage.completion_policy
+        required = list(policy.required_artifacts) if policy.required_artifacts else [
+            artifact.path for artifact in context.stage.required_outputs
+        ]
+        output_format = str(context.run.metadata.get("output_format") or "")
+        required.extend(policy.required_artifacts_by_output_format.get(output_format, ()))
+        if context.run.metadata.get("require_pdf"):
+            required.extend(policy.required_artifacts_by_output_format.get("pdf", ()))
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for path in required:
+            if path not in seen:
+                seen.add(path)
+                ordered.append(path)
+        return tuple(ordered)
 
     def _validate_adapters(self, run: RunSpec) -> None:
         adapter_ids = [
@@ -753,6 +817,17 @@ class ResearchKernel:
                     blocked = True
                     continue
                 self._select_route(run, stage.id, route.target, route.kind, route.condition)
+                self.event_bus.emit(
+                    "StageRetryScheduled",
+                    run=run,
+                    payload={
+                        "source_stage_id": stage.id,
+                        "target_stage_id": route.target,
+                        "condition": route.condition,
+                        "visit_count": visit_counts.get(route.target, 0),
+                        "max_visits": max_visits,
+                    },
+                )
                 self._enqueue(queue, route.target, scheduled, allow_completed=True)
                 continue
             if route.kind == "join":

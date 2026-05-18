@@ -228,9 +228,10 @@ def test_campaign_workspace_model_uses_campaign_execution_and_deliverables(tmp_p
 
     assert workspace["schema"] == "msc.campaign.workspace.v1"
     assert workspace["campaign"]["objective"] == "Expose one campaign workspace read model."
-    assert workspace["execution"]["status"] == "running"
-    assert workspace["execution"]["latest_attempt"]["execution_id"] == run["run_id"]
-    assert workspace["safe_next_actions"] == ["pause-campaign", "record-feedback"]
+    assert workspace["execution"]["status"] == "not_started"
+    assert workspace["execution"]["latest_attempt"] is None
+    assert workspace["diagnostics"]["legacy_attempts"][0]["execution_id"] == run["run_id"]
+    assert workspace["safe_next_actions"] == ["start-campaign"]
     assert workspace["graph"]["metadata"]["source"] == "kernel_graph_projection"
     assert [artifact["path"] for artifact in workspace["deliverables"]] == ["artifacts/literature_matrix.md"]
     assert all(artifact["audience"] in {"deliverable", "evidence"} for artifact in workspace["deliverables"])
@@ -294,15 +295,12 @@ def test_failure_recovery_decision_is_researcher_readable(tmp_path: Path):
     )
 
     workspace = store.workspace_read_model("failure-ux-demo")
-    decision = workspace["pending_decisions"][0]
-
-    assert workspace["execution"]["status"] == "human_decision_required"
-    assert workspace["execution"]["current_stage_id"] != run["run_id"]
-    assert decision["target_type"] == "failure_recovery"
-    assert decision["target_label"] == "latest failed execution"
-    assert decision["title"] == "Campaign execution reached graph transition limit"
-    assert "used more graph transitions than the runtime allowed" in decision["summary"]
-    assert decision["reason"] == "Recursion limit of 25 reached without hitting a stop condition."
+    assert workspace["execution"]["status"] == "not_started"
+    assert workspace["pending_decisions"] == []
+    assert workspace["diagnostics"]["legacy_attempts"][0]["status"] == "failed"
+    assert workspace["diagnostics"]["legacy_attempts"][0]["metadata"]["error"] == (
+        "Recursion limit of 25 reached without hitting a stop condition."
+    )
 
 
 def test_dry_run_passed_is_not_projected_as_execution_failure(tmp_path: Path):
@@ -322,10 +320,11 @@ def test_dry_run_passed_is_not_projected_as_execution_failure(tmp_path: Path):
     assert result["approval"] is None
     assert "CampaignExecutionCompleted" in events
     assert "CampaignExecutionFailed" not in events
-    assert workspace["campaign"]["status"] == "approved"
-    assert workspace["execution"]["status"] == "dry_run_passed"
+    assert workspace["campaign"]["status"] == "draft"
+    assert workspace["execution"]["status"] == "not_started"
+    assert workspace["diagnostics"]["legacy_attempts"][0]["status"] == "dry_run_passed"
     assert workspace["pending_decisions"] == []
-    assert workspace["safe_next_actions"] == ["review-deliverables", "record-feedback", "rerun-stage"]
+    assert workspace["safe_next_actions"] == ["start-campaign"]
 
 
 def test_spurious_dry_run_failure_recovery_is_hidden(tmp_path: Path):
@@ -361,10 +360,11 @@ def test_spurious_dry_run_failure_recovery_is_hidden(tmp_path: Path):
 
     workspace = store.workspace_read_model("spurious-dry-run-bug-demo")
 
-    assert workspace["campaign"]["status"] == "approved"
-    assert workspace["execution"]["status"] == "dry_run_passed"
+    assert workspace["campaign"]["status"] == "draft"
+    assert workspace["execution"]["status"] == "not_started"
+    assert workspace["diagnostics"]["legacy_attempts"][0]["status"] == "dry_run_passed"
     assert workspace["pending_decisions"] == []
-    assert workspace["safe_next_actions"] == ["review-deliverables", "record-feedback", "rerun-stage"]
+    assert workspace["safe_next_actions"] == ["start-campaign"]
 
 
 def test_campaign_event_projector_is_independent_of_store(tmp_path: Path):

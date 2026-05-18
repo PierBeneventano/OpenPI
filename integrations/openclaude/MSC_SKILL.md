@@ -46,6 +46,7 @@ This returns:
 
 - readiness and redacted OpenRouter/OpenClaude setup state,
 - the campaign workspace read model,
+- Aim, Map, Evidence, Decisions, and Diagnostics aisles,
 - graph, current execution state, pending decisions, feedback, deliverables,
 - safe operation contracts,
 - the commands you should use for researcher workflows.
@@ -75,7 +76,8 @@ msc capabilities --profile openclaude_v1 current --json
 
 Only open raw files after a read model points you to a produced deliverable or
 diagnostic. Never treat `run_status.json`, raw process logs, or SQLite tables as
-product truth.
+product truth. Legacy runtime attempts may appear in Diagnostics, but they do
+not define product execution status, gate truth, or completion.
 
 ## What You Can Help With
 

@@ -27,6 +27,8 @@ EVENT_LOG = Path(".msc") / "events" / "campaigns.jsonl"
 DB_PATH = Path(".msc") / "campaigns.db"
 
 TEMPLATE_NAMES = template_names()
+SDK_NATIVE_RUNTIME = "sdk_native"
+DIAGNOSTIC_LEGACY_RUNTIME = "diagnostic_legacy_runtime"
 
 
 def now_iso() -> str:
@@ -672,11 +674,16 @@ class CampaignStore:
 
     def inspect_budget(self, campaign_ref: str | Path) -> dict[str, Any]:
         workspace = self.workspace_read_model(campaign_ref)
+        cap = workspace["campaign"].get("budget_cap_usd")
+        spent = (workspace.get("aim") or {}).get("budget", {}).get("spent_usd") or 0.0
         return {
             "ok": True,
             "campaign": workspace["campaign"]["id"],
-            "budget_cap_usd": workspace["campaign"].get("budget_cap_usd"),
+            "budget_cap_usd": cap,
+            "spent_usd": spent,
+            "remaining_usd": round(float(cap) - float(spent), 8) if cap is not None else None,
             "tier": workspace["campaign"].get("tier"),
+            "model_posture": (workspace.get("aim") or {}).get("model_posture"),
             "execution": {
                 "status": workspace["execution"]["status"],
                 "attempts": workspace["execution"]["attempts"],
@@ -821,9 +828,70 @@ class CampaignStore:
             pending_decisions=pending_decisions,
             graph=graph,
         )
+        claims = self._payload_records(events, "ClaimRecorded")
+        evidence_records = self._payload_records(events, "EvidenceRecorded")
+        objections = self._payload_records(events, "ObjectionRecorded")
+        gate_verdicts = self._payload_records(events, "GateVerdictRecorded")
+        completion_evaluations = self._payload_records(events, "StageCompletionEvaluated")
+        model_policy_violations = self._payload_records(events, "ModelPolicyViolation")
+        legacy_attempts = self._legacy_execution_attempts(events)
+        aim = {
+            "objective": campaign["objective"],
+            "constraints": {
+                "tier": campaign["tier"],
+                "budget_cap_usd": campaign["budget_cap_usd"],
+                "output_format": campaign["output_format"],
+            },
+            "tier": campaign["tier"],
+            "budget": {
+                "cap_usd": campaign["budget_cap_usd"],
+                "spent_usd": execution.get("budget_spent_usd"),
+            },
+            "model_posture": graph.get("metadata", {}).get("modelPolicy"),
+            "tier_policy": graph.get("metadata", {}).get("tierPolicy"),
+        }
+        map_aisle = {
+            "graph": graph,
+            "execution_status": execution["status"],
+            "current_stage_id": execution.get("current_stage_id"),
+            "routes": graph.get("edges") or [],
+            "gates": [
+                node for node in graph.get("nodes") or []
+                if ((node.get("metadata") or {}).get("gatePolicy") or {}).get("required")
+            ],
+            "skipped_paths": self._skipped_graph_paths(graph, artifacts),
+        }
+        evidence_aisle = {
+            "claims": claims,
+            "evidence": evidence_records,
+            "objections": objections,
+            "artifacts": deliverables,
+            "limitations": self._claim_limitations(claims),
+        }
+        decisions_aisle = {
+            "pending": pending_decisions,
+            "all": decisions,
+            "gate_verdicts": gate_verdicts,
+            "objections": objections,
+            "feedback": feedback,
+            "safe_next_actions": safe_next_actions,
+        }
+        diagnostics_aisle = {
+            "artifacts": diagnostics,
+            "events": events,
+            "legacy_attempts": legacy_attempts,
+            "completion_evaluations": completion_evaluations,
+            "model_policy_violations": model_policy_violations,
+        }
         return {
             "ok": True,
             "schema": "msc.campaign.workspace.v1",
+            "aisle_schema": "msc.campaign.research_aisles.v1",
+            "aim": aim,
+            "map": map_aisle,
+            "evidence": evidence_aisle,
+            "decisions": decisions_aisle,
+            "diagnostics_aisle": diagnostics_aisle,
             "campaign": {
                 "id": campaign["id"],
                 "title": campaign["title"],
@@ -844,7 +912,7 @@ class CampaignStore:
             "model_policy": graph.get("metadata", {}).get("modelPolicy"),
             "safe_next_actions": safe_next_actions,
             "graph": graph,
-            "decisions": decisions,
+            "decision_records": decisions,
             "pending_decisions": pending_decisions,
             "feedback": feedback,
             "context": {
@@ -856,6 +924,9 @@ class CampaignStore:
             "diagnostics": {
                 "artifacts": diagnostics,
                 "events": events,
+                "legacy_attempts": legacy_attempts,
+                "completion_evaluations": completion_evaluations,
+                "model_policy_violations": model_policy_violations,
             },
             "provenance": {
                 "source": EVENT_PROJECTION_SOURCE,
@@ -913,7 +984,119 @@ class CampaignStore:
                         "metadata": dict(event["payload"].get("metadata") or {}),
                     }
                 )
+            elif event["type"] == "GateVerdictRecorded":
+                payload = event["payload"]
+                if str(payload.get("gate_id") or payload.get("stage_id") or "") != "duality_gate":
+                    continue
+                result.update(
+                    {
+                        "status": "passed" if payload.get("passed") else "failed",
+                        "stage_id": payload.get("stage_id"),
+                        "gate_id": payload.get("gate_id"),
+                        "completed_at": event["created_at"],
+                        "verdict": payload.get("verdict"),
+                        "failed_lenses": list(payload.get("failed_lenses") or []),
+                        "objections": list(payload.get("objections") or []),
+                        "evidence": list(payload.get("evidence") or []),
+                        "safe_next_actions": list(payload.get("safe_next_actions") or []),
+                        "metadata": dict(payload.get("metadata") or {}),
+                    }
+                )
         return result
+
+    @staticmethod
+    def _payload_records(events: list[dict[str, Any]], event_type: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "event_id": event["id"],
+                "created_at": event["created_at"],
+                "actor": event["actor"],
+                **dict(event["payload"] or {}),
+            }
+            for event in events
+            if event["type"] == event_type
+        ]
+
+    @staticmethod
+    def _claim_limitations(claims: list[dict[str, Any]]) -> list[str]:
+        limitations: list[str] = []
+        for claim in claims:
+            for limitation in claim.get("limitations") or []:
+                value = str(limitation)
+                if value and value not in limitations:
+                    limitations.append(value)
+        return limitations
+
+    @staticmethod
+    def _skipped_graph_paths(graph: dict[str, Any], artifacts: dict[str, Any]) -> list[dict[str, Any]]:
+        artifact_stages = {str(stage.get("stage_id") or ""): stage for stage in artifacts.get("stages") or []}
+        skipped: list[dict[str, Any]] = []
+        for node in graph.get("nodes") or []:
+            node_id = str(node.get("id") or "")
+            if node.get("status") == "skipped":
+                skipped.append({"stage_id": node_id, "reason": "node_status_skipped"})
+                continue
+            stage_artifacts = artifact_stages.get(node_id) or {}
+            declared = [
+                *list(stage_artifacts.get("required_artifacts") or []),
+                *list(stage_artifacts.get("optional_artifacts") or []),
+            ]
+            if node.get("status") == "approved" and declared and all(not artifact.get("exists") for artifact in declared):
+                skipped.append({"stage_id": node_id, "reason": "approved_unvisited"})
+        return skipped
+
+    @staticmethod
+    def _event_runtime(event: dict[str, Any]) -> str:
+        payload = dict(event.get("payload") or {})
+        metadata = dict(payload.get("metadata") or {})
+        return str(payload.get("runtime") or metadata.get("runtime") or "")
+
+    @classmethod
+    def _is_sdk_native_event(cls, event: dict[str, Any]) -> bool:
+        return cls._event_runtime(event) == SDK_NATIVE_RUNTIME or str(event.get("actor") or "") == SDK_NATIVE_RUNTIME
+
+    @classmethod
+    def _legacy_execution_attempts(cls, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        attempts: dict[str, dict[str, Any]] = {}
+        for event in events:
+            if event["type"] not in {"CampaignExecutionStarted", "CampaignExecutionCompleted", "CampaignExecutionFailed"}:
+                continue
+            if cls._is_sdk_native_event(event):
+                continue
+            payload = event["payload"]
+            execution_id = str(payload.get("execution_id") or payload.get("run_id") or event["id"])
+            row = attempts.setdefault(
+                execution_id,
+                {
+                    "execution_id": execution_id,
+                    "run_id": payload.get("run_id"),
+                    "runtime": DIAGNOSTIC_LEGACY_RUNTIME,
+                    "status": "unknown",
+                    "events": [],
+                },
+            )
+            row["events"].append({"type": event["type"], "created_at": event["created_at"], "actor": event["actor"]})
+            row["updated_at"] = event["created_at"]
+            row["metadata"] = {**dict(row.get("metadata") or {}), **dict(payload.get("metadata") or {})}
+            if event["type"] == "CampaignExecutionStarted":
+                row.update(
+                    {
+                        "status": "running",
+                        "pid": payload.get("pid"),
+                        "command": payload.get("command"),
+                        "graph_version": payload.get("graph_version"),
+                        "started_at": event["created_at"],
+                    }
+                )
+            else:
+                row.update(
+                    {
+                        "status": str(payload.get("status") or ("completed" if payload.get("exit_code") == 0 else "failed")),
+                        "exit_code": payload.get("exit_code"),
+                        "exited_at": event["created_at"],
+                    }
+                )
+        return sorted(attempts.values(), key=lambda item: str(item.get("updated_at") or ""), reverse=True)
 
     def _decision_read_models(self, campaign_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:
@@ -926,6 +1109,8 @@ class CampaignStore:
         for row in rows:
             metadata = json.loads(row["metadata_json"] or "{}")
             target_type = str(row["target_type"])
+            if metadata.get("runtime") == DIAGNOSTIC_LEGACY_RUNTIME and target_type == "failure_recovery":
+                continue
             if (
                 target_type == "failure_recovery"
                 and row["status"] == "pending"
@@ -1118,11 +1303,14 @@ class CampaignStore:
         status = "not_started"
         started_at = None
         updated_at = campaign.get("updated_at")
+        budget_spent_usd = 0.0
         for event in events:
             payload = event["payload"]
             event_type = event["type"]
             updated_at = event["created_at"]
             if event_type == "CampaignExecutionStarted":
+                if not self._is_sdk_native_event(event):
+                    continue
                 execution_id = str(payload.get("execution_id") or payload.get("run_id") or event["id"])
                 attempt = attempts.setdefault(execution_id, {"execution_id": execution_id, "run_id": payload.get("run_id")})
                 attempt.update(
@@ -1139,6 +1327,8 @@ class CampaignStore:
                 status = "running"
                 started_at = started_at or event["created_at"]
             elif event_type in {"CampaignExecutionCompleted", "CampaignExecutionFailed"}:
+                if not self._is_sdk_native_event(event):
+                    continue
                 execution_id = str(payload.get("execution_id") or payload.get("run_id") or event["id"])
                 attempt = attempts.setdefault(execution_id, {"execution_id": execution_id, "run_id": payload.get("run_id")})
                 attempt_status = str(payload.get("status") or ("completed" if payload.get("exit_code") == 0 else "failed"))
@@ -1156,7 +1346,11 @@ class CampaignStore:
                     status = "human_decision_required"
                 else:
                     status = "completed"
+            elif event_type == "BudgetSpent" and self._is_sdk_native_event(event):
+                budget_spent_usd = float(payload.get("run_total_usd") or budget_spent_usd)
             elif event_type == "GraphNodeStatusChanged":
+                if str(event.get("actor") or "") not in {SDK_NATIVE_RUNTIME, "system"}:
+                    continue
                 if payload.get("status") in {"running", "human_decision_required", "failed"}:
                     current_stage_id = str(payload.get("node_id") or current_stage_id or "")
             elif event_type == "ApprovalRequested":
@@ -1170,6 +1364,8 @@ class CampaignStore:
                 if target_id in graph_node_ids:
                     current_stage_id = target_id
             elif event_type == "HumanDecisionRequired":
+                if not self._is_sdk_native_event(event):
+                    continue
                 status = "human_decision_required"
                 target_id = str(payload.get("target_id") or payload.get("stage_id") or "")
                 if target_id in graph_node_ids:
@@ -1190,6 +1386,7 @@ class CampaignStore:
             "started_at": started_at,
             "updated_at": updated_at,
             "current_stage_id": current_stage_id,
+            "budget_spent_usd": budget_spent_usd,
             "pending_decision_count": len(pending_decisions),
             "attempts": sorted(
                 attempts.values(),
@@ -1416,6 +1613,8 @@ class CampaignStore:
         started_at = now_iso()
         run_id = stable_id(campaign_id, "run", str(pid or ""), started_at)
         command_json = command if isinstance(command, dict) else {"argv": command}
+        runtime_metadata = {**(metadata or {})}
+        runtime_metadata.setdefault("runtime", DIAGNOSTIC_LEGACY_RUNTIME)
         with self.connect() as conn:
             conn.execute(
                 """
@@ -1433,10 +1632,10 @@ class CampaignStore:
                     None,
                     None,
                     None,
-                    json_dumps({"graph_version": graph_version, **(metadata or {})}),
+                    json_dumps({"graph_version": graph_version, **runtime_metadata}),
                 ),
             )
-            conn.execute("UPDATE campaigns SET status=?, updated_at=? WHERE id=?", ("running", started_at, campaign_id))
+            conn.execute("UPDATE campaigns SET updated_at=? WHERE id=?", (started_at, campaign_id))
             event = self._append_event(
                 conn,
                 campaign_id=campaign_id,
@@ -1448,7 +1647,8 @@ class CampaignStore:
                     "pid": pid,
                     "command": command_json,
                     "graph_version": graph_version,
-                    "metadata": metadata or {},
+                    "runtime": DIAGNOSTIC_LEGACY_RUNTIME,
+                    "metadata": runtime_metadata,
                 },
             )
         return {"ok": True, "campaign_id": campaign_id, "run_id": run_id, "event": event}
@@ -1466,18 +1666,14 @@ class CampaignStore:
         campaign_id = self.resolve_ref(campaign_ref)
         exited_at = now_iso()
         run_status = status or ("completed" if exit_code == 0 else "failed")
-        if run_status == "completed":
-            campaign_status = "completed"
-        elif run_status == "dry_run_passed":
-            campaign_status = "approved"
-        else:
-            campaign_status = "human_decision_required"
+        runtime_metadata = {**(metadata or {})}
+        runtime_metadata.setdefault("runtime", DIAGNOSTIC_LEGACY_RUNTIME)
         with self.connect() as conn:
             conn.execute(
                 "UPDATE runs SET status=?, exited_at=?, exit_code=? WHERE id=? AND campaign_id=?",
                 (run_status, exited_at, exit_code, run_id, campaign_id),
             )
-            conn.execute("UPDATE campaigns SET status=?, updated_at=? WHERE id=?", (campaign_status, exited_at, campaign_id))
+            conn.execute("UPDATE campaigns SET updated_at=? WHERE id=?", (exited_at, campaign_id))
             execution_completed = run_status in {"completed", "dry_run_passed"}
             event = self._append_event(
                 conn,
@@ -1489,19 +1685,12 @@ class CampaignStore:
                     "run_id": run_id,
                     "status": run_status,
                     "exit_code": exit_code,
-                    **(metadata or {}),
+                    "runtime": DIAGNOSTIC_LEGACY_RUNTIME,
+                    **runtime_metadata,
+                    "metadata": runtime_metadata,
                 },
             )
             approval = None
-            if not execution_completed:
-                approval = self._create_approval(
-                    conn,
-                    campaign_id=campaign_id,
-                    target_type="failure_recovery",
-                    target_id=run_id,
-                    actor=actor,
-                    metadata={"run_id": run_id, "exit_code": exit_code, "reason": (metadata or {}).get("error")},
-                )
         self.refresh_artifact_files(campaign_id)
         return {"ok": True, "campaign_id": campaign_id, "run_id": run_id, "status": run_status, "event": event, "approval": approval}
 

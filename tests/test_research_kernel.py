@@ -71,7 +71,9 @@ def test_kernel_completes_only_when_required_artifacts_and_validators_pass(tmp_p
         "CampaignExecutionStarted",
         "StageStarted",
         "ArtifactWritten",
+        "EvidenceRecorded",
         "ArtifactIndexed",
+        "StageCompletionEvaluated",
         "ValidationPassed",
         "StageCompleted",
         "CampaignExecutionCompleted",
@@ -605,8 +607,10 @@ def test_kernel_denies_undeclared_model_use_and_requests_decision(tmp_path: Path
 
     assert outcomes[0].status == "human_decision_required"
     assert outcomes[0].validation[0].validator_id == "model_policy"
+    assert any(event.type == "ModelPolicyViolation" for event in events.events)
     assert any(event.type == "ModelDenied" for event in events.events)
     assert model.stages["writeup"].failure_reason == "model_policy_failed"
+    assert model.model_policy_violations[0]["model_id"] == "frontier-model"
     assert model.stages["writeup"].safe_next_actions == [
         "rewrite-stage",
         "rerun-stage",
@@ -707,6 +711,83 @@ def test_kernel_validates_artifact_schema_and_records_evidence_links(tmp_path: P
     assert artifact_model.claim_ids == ["claim:optimizer-generalizes"]
     assert artifact_model.evidence_links[0]["relationship"] == "supports"
     assert any(event.type == "SchemaValidationPassed" for event in events.events)
+
+
+def test_kernel_records_research_claim_evidence_objection_and_gate_verdict(tmp_path: Path):
+    stage = StageSpec(
+        id="duality_gate",
+        title="Duality Gate",
+        kind="router",
+        purpose="Evaluate claim readiness.",
+        outputs=(),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    def handler(context):
+        context.record_claim(
+            claim_id="C1",
+            text="A toy comparison produced a coherent result.",
+            status="qualified",
+            limitations=["smoke data only"],
+        )
+        context.record_evidence(
+            evidence_id="E1",
+            artifact_path="artifacts/result.md",
+            summary="Toy result summary.",
+        )
+        context.record_objection(
+            objection_id="O1",
+            claim_id="C1",
+            lens="external_validity",
+            text="No real dataset was tested.",
+        )
+        context.record_gate_verdict(
+            gate_id="duality_gate",
+            passed=True,
+            verdict="pass",
+            evidence=["E1"],
+        )
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"duality_gate": handler})
+    model = project_run(events.events)
+
+    assert outcomes[0].status == "completed"
+    assert model.claims[0]["id"] == "C1"
+    assert model.evidence[0]["id"] == "E1"
+    assert model.objections[0]["id"] == "O1"
+    assert model.gate_verdicts[0]["gate_id"] == "duality_gate"
+    assert model.duality_status["status"] == "passed"
+
+
+def test_contradictory_gate_verdict_requires_human_decision(tmp_path: Path):
+    stage = StageSpec(
+        id="duality_gate",
+        title="Duality Gate",
+        kind="router",
+        purpose="Evaluate claim readiness.",
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    def handler(context):
+        context.record_gate_verdict(
+            gate_id="duality_gate",
+            passed=False,
+            verdict="pass",
+            failed_lenses=["technical_defensibility"],
+            objections=["Payload contradicted itself."],
+            safe_next_actions=["rewrite-stage", "rerun-stage", "abort"],
+        )
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"duality_gate": handler})
+    verdict = next(event for event in events.events if event.type == "GateVerdictRecorded")
+    decision = next(event for event in events.events if event.type == "HumanDecisionRequired")
+
+    assert outcomes[0].status == "human_decision_required"
+    assert verdict.payload["verdict"] == "invalid"
+    assert verdict.payload["metadata"]["contradiction"] is True
+    assert decision.payload["reason"] == "gate_verdict_contradiction"
 
 
 def test_kernel_rejects_invalid_schema_before_artifact_write(tmp_path: Path):

@@ -198,6 +198,15 @@ def openclaude_context_pack(
         "campaign_ref": campaign_ref,
         "msc_cli": msc_cli_invocation(root),
         "campaign": workspace.get("campaign"),
+        "aim": workspace.get("aim") or {},
+        "map": workspace.get("map") or {},
+        "evidence": workspace.get("evidence") or {},
+        "decisions": workspace.get("decisions") or {},
+        "diagnostics_summary": {
+            "legacy_attempt_count": len(((workspace.get("diagnostics") or {}).get("legacy_attempts") or [])),
+            "model_policy_violation_count": len(((workspace.get("diagnostics") or {}).get("model_policy_violations") or [])),
+            "raw_artifacts_hidden_by_default": True,
+        },
         "execution": workspace.get("execution"),
         "graph": _graph_context(workspace),
         "safe_next_actions": workspace.get("safe_next_actions") or [],
@@ -211,10 +220,11 @@ def openclaude_context_pack(
         "recent_feedback": list(workspace.get("feedback") or [])[:max_feedback],
         "selected_artifacts": selected_artifacts[:max_artifacts],
         "context_policy": {
-            "source_of_truth": "campaign workspace read model plus campaign events",
+            "source_of_truth": "campaign workspace research aisles plus campaign events",
             "graph_source_of_truth": "SDK graph template and campaign graph projection",
             "included_artifacts": "produced deliverables/evidence and user-linked artifacts",
             "excluded_by_default": ["prompt", "log", "system_state", "diagnostic"],
+            "legacy_runtime": "diagnostics only; never product gate or completion authority",
         },
     }
 
@@ -336,8 +346,8 @@ def openclaude_campaign_harness(
         "workspace": workspace,
         "researcher_workflows": openclaude_researcher_workflows(campaign_ref, cli_prefix=msc_cli_invocation(root)["shell_prefix"]),
         "guardrails": {
-            "source_of_truth": "campaign workspace read model plus campaign events",
-            "do_not_use_as_truth": ["run_status.json", "raw process logs", "SQLite tables", "legacy LangGraph internals"],
+            "source_of_truth": "campaign workspace research aisles plus campaign events",
+            "do_not_use_as_truth": ["run_status.json", "raw process logs", "SQLite tables", "legacy LangGraph internals", "legacy runtime attempts"],
             "mutation_rule": "OpenClaude may autonomously use public msc campaign commands after researcher intent; never mutate truth by editing files directly",
             "hard_stops": ["do not delete campaigns", "do not delete artifacts", "do not edit repo code", "do not increase budget without an explicit budget command"],
             "secret_rule": "never print API keys or token values",

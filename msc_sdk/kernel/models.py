@@ -20,16 +20,23 @@ EventType = Literal[
     "CampaignExecutionCheckpointed",
     "CampaignExecutionCompleted",
     "CampaignExecutionFailed",
+    "ClaimRecorded",
+    "EvidenceRecorded",
+    "ObjectionRecorded",
+    "GateVerdictRecorded",
     "StageInputResolved",
     "StageInputMissing",
     "StageStarted",
     "RouteSelected",
     "JoinWaiting",
     "LoopLimitReached",
+    "StageRetryScheduled",
+    "StageTimeoutReached",
     "BudgetSpent",
     "BudgetExceeded",
     "ModelInvoked",
     "ModelDenied",
+    "ModelPolicyViolation",
     "CouncilStarted",
     "CouncilMemberCompleted",
     "CouncilVerdictRecorded",
@@ -42,6 +49,7 @@ EventType = Literal[
     "SchemaValidationFailed",
     "ArtifactWritten",
     "ArtifactIndexed",
+    "StageCompletionEvaluated",
     "ValidationPassed",
     "ValidationFailed",
     "StageCompleted",
@@ -70,6 +78,44 @@ class BudgetPolicy:
 class FailurePolicy:
     mode: Literal["stop_for_human", "retry_then_human"] = "stop_for_human"
     max_retries: int = 0
+
+
+@dataclass(frozen=True)
+class TimeoutPolicy:
+    max_seconds: float | None = None
+    safe_next_actions: tuple[str, ...] = ("rerun-stage", "rewrite-stage", "abort")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CompletionPolicy:
+    required_artifacts: tuple[str, ...] = ()
+    required_artifacts_by_output_format: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    optional_artifacts_by_output_format: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    validators: tuple[str, ...] = ()
+    retry: RetryPolicy | None = None
+    timeout: TimeoutPolicy = field(default_factory=TimeoutPolicy)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["retry"] = self.retry.to_dict() if self.retry else None
+        return data
+
+
+@dataclass(frozen=True)
+class GatePolicy:
+    required: bool = False
+    verdict_schema_id: str | None = None
+    pass_verdicts: tuple[str, ...] = ("pass", "passed", "approve", "approved", "valid", "complete", "finished")
+    fail_verdicts: tuple[str, ...] = ("fail", "failed", "reject", "rejected", "blocked", "invalid")
+    blocks_stages: tuple[str, ...] = ()
+    safe_next_actions: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 class BudgetExceededError(RuntimeError):
@@ -512,6 +558,70 @@ class EvidenceLink:
 
 
 @dataclass(frozen=True)
+class ClaimRecord:
+    id: str
+    stage_id: str
+    text: str
+    status: Literal["proposed", "supported", "qualified", "refuted", "withdrawn"] = "proposed"
+    strength: str = ""
+    limitations: tuple[str, ...] = ()
+    evidence_links: tuple[EvidenceLink, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["evidence_links"] = [link.to_dict() for link in self.evidence_links]
+        return data
+
+
+@dataclass(frozen=True)
+class EvidenceRecord:
+    id: str
+    stage_id: str
+    artifact_path: str
+    role: ArtifactRole = "evidence"
+    summary: str = ""
+    claim_links: tuple[EvidenceLink, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["claim_links"] = [link.to_dict() for link in self.claim_links]
+        return data
+
+
+@dataclass(frozen=True)
+class ObjectionRecord:
+    id: str
+    stage_id: str
+    claim_id: str | None
+    lens: str
+    severity: Literal["info", "minor", "major", "critical"] = "major"
+    text: str = ""
+    resolution: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class GateVerdict:
+    gate_id: str
+    stage_id: str
+    passed: bool
+    verdict: str
+    failed_lenses: tuple[str, ...] = ()
+    objections: tuple[str, ...] = ()
+    evidence: tuple[str, ...] = ()
+    safe_next_actions: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class ArtifactSpec:
     path: str
     kind: str
@@ -727,6 +837,10 @@ class StageSpec:
     adapter_id: str | None = None
     budget: BudgetPolicy = field(default_factory=BudgetPolicy)
     failure: FailurePolicy = field(default_factory=FailurePolicy)
+    completion_policy: CompletionPolicy = field(default_factory=CompletionPolicy)
+    gate_policy: GatePolicy = field(default_factory=GatePolicy)
+    retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
+    timeout_policy: TimeoutPolicy = field(default_factory=TimeoutPolicy)
     routes: tuple[RouteSpec, ...] = ()
     pause_before: bool = False
     pause_after: bool = False
@@ -977,6 +1091,14 @@ class RuntimeContext:
             run=self.run,
             payload={"stage_id": self.stage.id, "artifact": record.to_dict()},
         )
+        if artifact.role in {"deliverable", "evidence"}:
+            self.record_evidence(
+                artifact_path=artifact.path,
+                role=artifact.role,
+                summary=artifact.description,
+                claim_links=artifact.evidence_links,
+                metadata={"artifact_id": record.id, "required": artifact.required},
+            )
         return record
 
     def validate_artifact_file(self, artifact: ArtifactSpec, path: Path) -> None:
@@ -1132,6 +1254,16 @@ class RuntimeContext:
         denial = self._model_policy_denial(model_id, kwargs)
         if denial:
             self.event_bus.emit(
+                "ModelPolicyViolation",
+                run=self.run,
+                payload={
+                    "stage_id": self.stage.id,
+                    "model_id": model_id,
+                    "reason": denial,
+                    "allowed_model_ids": list(self.stage.model_policy.allowed_model_ids),
+                },
+            )
+            self.event_bus.emit(
                 "ModelDenied",
                 run=self.run,
                 payload={
@@ -1153,6 +1285,120 @@ class RuntimeContext:
             },
         )
         return result
+
+    def record_claim(
+        self,
+        *,
+        claim_id: str | None = None,
+        text: str,
+        status: Literal["proposed", "supported", "qualified", "refuted", "withdrawn"] = "proposed",
+        strength: str = "",
+        limitations: Iterable[str] = (),
+        evidence_links: Iterable[EvidenceLink] = (),
+        metadata: dict[str, Any] | None = None,
+    ) -> ClaimRecord:
+        claim = ClaimRecord(
+            id=claim_id or stable_id(self.run.id, self.stage.id, "claim", text),
+            stage_id=self.stage.id,
+            text=text,
+            status=status,
+            strength=strength,
+            limitations=tuple(str(item) for item in limitations),
+            evidence_links=tuple(evidence_links),
+            metadata=metadata or {},
+        )
+        self.event_bus.emit("ClaimRecorded", run=self.run, payload=claim.to_dict())
+        return claim
+
+    def record_evidence(
+        self,
+        *,
+        evidence_id: str | None = None,
+        artifact_path: str,
+        role: ArtifactRole = "evidence",
+        summary: str = "",
+        claim_links: Iterable[EvidenceLink] = (),
+        metadata: dict[str, Any] | None = None,
+    ) -> EvidenceRecord:
+        evidence = EvidenceRecord(
+            id=evidence_id or stable_id(self.run.id, self.stage.id, "evidence", artifact_path),
+            stage_id=self.stage.id,
+            artifact_path=artifact_path,
+            role=role,
+            summary=summary,
+            claim_links=tuple(claim_links),
+            metadata=metadata or {},
+        )
+        self.event_bus.emit("EvidenceRecorded", run=self.run, payload=evidence.to_dict())
+        return evidence
+
+    def record_objection(
+        self,
+        *,
+        objection_id: str | None = None,
+        claim_id: str | None = None,
+        lens: str,
+        severity: Literal["info", "minor", "major", "critical"] = "major",
+        text: str = "",
+        resolution: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ObjectionRecord:
+        objection = ObjectionRecord(
+            id=objection_id or stable_id(self.run.id, self.stage.id, "objection", claim_id or "", lens, text),
+            stage_id=self.stage.id,
+            claim_id=claim_id,
+            lens=lens,
+            severity=severity,
+            text=text,
+            resolution=resolution,
+            metadata=metadata or {},
+        )
+        self.event_bus.emit("ObjectionRecorded", run=self.run, payload=objection.to_dict())
+        return objection
+
+    def record_gate_verdict(
+        self,
+        *,
+        gate_id: str | None = None,
+        passed: bool,
+        verdict: str | None = None,
+        failed_lenses: Iterable[str] = (),
+        objections: Iterable[str] = (),
+        evidence: Iterable[str] = (),
+        safe_next_actions: Iterable[str] = (),
+        metadata: dict[str, Any] | None = None,
+    ) -> GateVerdict:
+        verdict_value = str(verdict or ("pass" if passed else "fail")).strip().lower()
+        pass_verdicts = set(self.stage.gate_policy.pass_verdicts)
+        fail_verdicts = set(self.stage.gate_policy.fail_verdicts)
+        contradiction = (
+            (passed and verdict_value in fail_verdicts)
+            or (not passed and verdict_value in pass_verdicts)
+        )
+        gate = GateVerdict(
+            gate_id=gate_id or self.stage.id,
+            stage_id=self.stage.id,
+            passed=bool(passed) and not contradiction,
+            verdict="invalid" if contradiction else verdict_value,
+            failed_lenses=tuple(str(item) for item in failed_lenses),
+            objections=tuple(str(item) for item in objections),
+            evidence=tuple(str(item) for item in evidence),
+            safe_next_actions=tuple(str(item) for item in safe_next_actions),
+            metadata={**(metadata or {}), **({"contradiction": True, "raw_verdict": verdict_value} if contradiction else {})},
+        )
+        self.event_bus.emit("GateVerdictRecorded", run=self.run, payload=gate.to_dict())
+        if contradiction:
+            raise HumanDecisionRequiredError(
+                reason="gate_verdict_contradiction",
+                safe_next_actions=gate.safe_next_actions or ("rewrite-stage", "rerun-stage", "abort"),
+                metadata={
+                    "gate_verdict": gate.to_dict(),
+                    "evidence": list(gate.evidence),
+                    "failed_lenses": list(gate.failed_lenses),
+                    "objections": list(gate.objections),
+                },
+            )
+        return gate
 
     def run_council(
         self,

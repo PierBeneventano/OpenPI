@@ -15,7 +15,16 @@ OpenClaude should read:
 - `msc campaigns inspect-budget <campaign> --json`
 - `msc campaigns diagnose-execution <campaign> --json`
 
-Raw logs and status files are diagnostics only.
+The workspace aisles are the preferred orientation surface:
+
+- `aim`
+- `map`
+- `evidence`
+- `decisions`
+- `diagnostics`
+
+Raw logs, status files, prompts, process IDs, and legacy run attempts are
+diagnostics only.
 
 ## Allowed Mutations
 

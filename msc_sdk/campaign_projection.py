@@ -77,8 +77,12 @@ class CampaignEventProjector:
             elif event_type == "CampaignStopped":
                 status = "stopped"
             elif event_type == "CampaignExecutionStarted":
+                if _event_runtime(event) != "sdk_native":
+                    continue
                 status = "running"
             elif event_type in {"CampaignExecutionCompleted", "CampaignExecutionFailed"}:
+                if _event_runtime(event) != "sdk_native":
+                    continue
                 exit_status = event_payload.get("status")
                 if exit_status == "completed":
                     status = "completed"
@@ -243,3 +247,9 @@ class CampaignEventProjector:
             "checksum": payload.get("checksum"),
             "metadata_json": json_dumps(metadata),
         }
+
+
+def _event_runtime(event: dict[str, Any]) -> str:
+    payload = dict(event.get("payload") or {})
+    metadata = dict(payload.get("metadata") or {})
+    return str(payload.get("runtime") or metadata.get("runtime") or "")

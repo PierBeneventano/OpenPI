@@ -49,6 +49,12 @@ class KernelStageReadModel:
     budget_spent_usd: float = 0.0
     started_at: str | None = None
     completed_at: str | None = None
+    completion: dict[str, Any] = field(default_factory=dict)
+    claims: list[dict[str, Any]] = field(default_factory=list)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    objections: list[dict[str, Any]] = field(default_factory=list)
+    gate_verdicts: list[dict[str, Any]] = field(default_factory=list)
+    model_policy_violations: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def deliverables(self) -> list[KernelArtifactReadModel]:
@@ -73,6 +79,12 @@ class KernelRunReadModel:
     completed_stage_ids: list[str] = field(default_factory=list)
     councils: list[dict[str, Any]] = field(default_factory=list)
     duality_status: dict[str, Any] = field(default_factory=dict)
+    claims: list[dict[str, Any]] = field(default_factory=list)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    objections: list[dict[str, Any]] = field(default_factory=list)
+    gate_verdicts: list[dict[str, Any]] = field(default_factory=list)
+    completion_evaluations: list[dict[str, Any]] = field(default_factory=list)
+    model_policy_violations: list[dict[str, Any]] = field(default_factory=list)
 
     def stage_list(self) -> list[KernelStageReadModel]:
         return list(self.stages.values())
@@ -89,6 +101,12 @@ class KernelRunReadModel:
             "completed_stage_ids": list(self.completed_stage_ids),
             "councils": list(self.councils),
             "duality_status": dict(self.duality_status),
+            "claims": list(self.claims),
+            "evidence": list(self.evidence),
+            "objections": list(self.objections),
+            "gate_verdicts": list(self.gate_verdicts),
+            "completion_evaluations": list(self.completion_evaluations),
+            "model_policy_violations": list(self.model_policy_violations),
             "stages": [stage.to_dict() for stage in self.stage_list()],
         }
 
@@ -146,6 +164,49 @@ def project_run(events: Iterable[EventRecord]) -> KernelRunReadModel:
             if artifact is not None:
                 stage = _stage(model, stage_id)
                 _upsert_artifact(stage, artifact)
+        elif event_type == "ClaimRecorded" and stage_id:
+            record = {"created_at": event.created_at, **payload}
+            model.claims.append(record)
+            _stage(model, stage_id).claims.append(record)
+        elif event_type == "EvidenceRecorded" and stage_id:
+            record = {"created_at": event.created_at, **payload}
+            model.evidence.append(record)
+            _stage(model, stage_id).evidence.append(record)
+        elif event_type == "ObjectionRecorded" and stage_id:
+            record = {"created_at": event.created_at, **payload}
+            model.objections.append(record)
+            _stage(model, stage_id).objections.append(record)
+        elif event_type == "GateVerdictRecorded" and stage_id:
+            record = {"created_at": event.created_at, **payload}
+            model.gate_verdicts.append(record)
+            _stage(model, stage_id).gate_verdicts.append(record)
+            if str(payload.get("gate_id") or stage_id) in {"duality_gate", "duality_check"}:
+                model.duality_status = {
+                    **model.duality_status,
+                    "status": "passed" if payload.get("passed") else "failed",
+                    "stage_id": stage_id,
+                    "gate_id": payload.get("gate_id"),
+                    "verdict": payload.get("verdict"),
+                    "failed_lenses": list(payload.get("failed_lenses") or []),
+                    "objections": list(payload.get("objections") or []),
+                    "evidence": list(payload.get("evidence") or []),
+                    "safe_next_actions": list(payload.get("safe_next_actions") or []),
+                    "completed_at": event.created_at,
+                }
+        elif event_type == "StageCompletionEvaluated" and stage_id:
+            record = {"created_at": event.created_at, **payload}
+            model.completion_evaluations.append(record)
+            stage = _stage(model, stage_id)
+            stage.completion = record
+            if not payload.get("complete", False):
+                stage.status = "human_decision_required"
+        elif event_type == "ModelPolicyViolation" and stage_id:
+            record = {"created_at": event.created_at, **payload}
+            model.model_policy_violations.append(record)
+            stage = _stage(model, stage_id)
+            stage.model_policy_violations.append(record)
+            stage.status = "human_decision_required"
+            stage.failure_reason = str(payload.get("reason") or "model_policy_violation")
         elif event_type in {"ValidationPassed", "ValidationFailed"} and stage_id:
             stage = _stage(model, stage_id)
             stage.validation = list(payload.get("validation") or [])
