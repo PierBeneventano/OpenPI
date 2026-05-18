@@ -152,25 +152,16 @@ msc campaigns resume <campaign> --reason "<reason>" --json
 msc campaigns stop <campaign> --reason "<reason>" --json
 ```
 
-Start or continue campaign execution only when requested. There is no
-`msc campaigns start` command; do not use it. Use `msc run` attached to the
-campaign:
+Start or continue campaign execution only when requested. Prefer the SDK-native
+campaign executor:
 
 ```bash
-msc run \
-  --campaign-id <campaign> \
-  --campaign-root <project-root> \
-  --campaign-graph-version 1 \
-  --model <model> \
-  --tier <tier> \
-  --budget <usd> \
-  --output-format markdown \
-  --mode local \
-  --no-counsel \
-  --no-math \
-  --no-tree-search \
-  "<campaign objective>"
+msc campaigns start <campaign> --tier lean --budget <usd> --output-format markdown --no-math --no-counsel --json
+msc campaigns continue <campaign> --json
 ```
+
+`msc run` is a legacy adapter/diagnostic launcher, not the product execution
+authority.
 
 Use the campaign objective from `msc campaigns workspace <campaign> --json`
 unless the researcher provides a replacement task. If the researcher asks for a
