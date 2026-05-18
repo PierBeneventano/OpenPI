@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -210,7 +211,7 @@ def test_campaign_workspace_model_uses_campaign_execution_and_deliverables(tmp_p
         template="literature_only",
         budget=1,
     )
-    run = store.record_run_started("workspace-demo", command=["msc", "run"], pid=321)
+    run = store.record_run_started("workspace-demo", command=["msc", "run"], pid=os.getpid())
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "workspace-demo")
     monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])

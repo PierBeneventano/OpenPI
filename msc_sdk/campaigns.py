@@ -244,6 +244,34 @@ class CampaignClient:
     ) -> dict[str, Any]:
         return self.store.approve_milestone(campaign_ref, feedback=feedback, action=action, actor=actor)
 
+    def start(
+        self,
+        campaign_ref: str | Path,
+        *,
+        tier: str | None = None,
+        budget: float | None = None,
+        output_format: str | None = None,
+        math_enabled: bool = False,
+        counsel_enabled: bool = False,
+        human_gates: bool = True,
+        force_duality_fail: bool = False,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        return self.store.start_native_execution(
+            campaign_ref,
+            tier=tier,
+            budget=budget,
+            output_format=output_format,
+            math_enabled=math_enabled,
+            counsel_enabled=counsel_enabled,
+            human_gates=human_gates,
+            force_duality_fail=force_duality_fail,
+            actor=actor,
+        )
+
+    def continue_execution(self, campaign_ref: str | Path, *, actor: str = "user") -> dict[str, Any]:
+        return self.store.continue_native_execution(campaign_ref, actor=actor)
+
     def propose_repair(
         self,
         campaign_ref: str | Path,

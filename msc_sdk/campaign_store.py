@@ -715,6 +715,43 @@ class CampaignStore:
             "event": event,
         }
 
+    def start_native_execution(
+        self,
+        campaign_ref: str | Path,
+        *,
+        tier: str | None = None,
+        budget: float | None = None,
+        output_format: str | None = None,
+        math_enabled: bool = False,
+        counsel_enabled: bool = False,
+        human_gates: bool = True,
+        force_duality_fail: bool = False,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        from .native_campaign import NativeCampaignExecutor
+
+        return NativeCampaignExecutor(self).start(
+            campaign_ref,
+            tier=tier,
+            budget=budget,
+            output_format=output_format,
+            math_enabled=math_enabled,
+            counsel_enabled=counsel_enabled,
+            human_gates=human_gates,
+            force_duality_fail=force_duality_fail,
+            actor=actor,
+        )
+
+    def continue_native_execution(
+        self,
+        campaign_ref: str | Path,
+        *,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        from .native_campaign import NativeCampaignExecutor
+
+        return NativeCampaignExecutor(self).continue_(campaign_ref, actor=actor)
+
     def propose_repair(
         self,
         campaign_ref: str | Path,
@@ -2645,9 +2682,10 @@ class CampaignStore:
         target_id: str,
         actor: str,
         metadata: dict[str, Any],
+        approval_id: str | None = None,
     ) -> dict[str, Any]:
         created_at = now_iso()
-        approval_id = stable_id(campaign_id, "approval", target_type, target_id, created_at)
+        approval_id = approval_id or stable_id(campaign_id, "approval", target_type, target_id, created_at)
         conn.execute(
             """
             INSERT INTO approvals

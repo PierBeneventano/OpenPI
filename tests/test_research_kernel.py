@@ -12,6 +12,7 @@ from msc_sdk.kernel import (
     InMemoryEventBus,
     KERNEL_NATIVE_SCAFFOLD_STAGE_IDS,
     KERNEL_NATIVE_STAGE_IDS,
+    HumanDecisionRequiredError,
     ModelPolicy,
     ModelRegistry,
     ResearchKernel,
@@ -99,6 +100,42 @@ def test_kernel_turns_missing_artifact_into_human_decision(tmp_path: Path):
     )
     assert "HumanDecisionRequired" in [event.type for event in events.events]
     assert events.events[-1].type == "CampaignExecutionFailed"
+
+
+def test_kernel_stage_can_request_first_class_human_decision(tmp_path: Path):
+    stage = StageSpec(
+        id="duality_gate",
+        title="Duality Gate",
+        kind="router",
+        purpose="Require a human choice when scientific lenses fail.",
+        outputs=(artifact("artifacts/duality_gate_decision.json", "json"),),
+    )
+    events = InMemoryEventBus()
+    kernel = ResearchKernel(event_bus=events)
+
+    def handler(context):
+        context.write_artifact(
+            stage.outputs[0],
+            {"decision": "needs_human_scientific_decision", "passed": False},
+        )
+        raise HumanDecisionRequiredError(
+            reason="duality_failed",
+            safe_next_actions=["revise-goals", "rerun-experiment-track", "stop-campaign"],
+            metadata={"failed_lenses": ["scientific_strength"]},
+        )
+
+    outcomes = kernel.run(_run_spec(tmp_path, stage), {"duality_gate": handler})
+    decision = next(event for event in events.events if event.type == "HumanDecisionRequired")
+
+    assert outcomes[0].status == "human_decision_required"
+    assert outcomes[0].artifacts[0].path == "artifacts/duality_gate_decision.json"
+    assert decision.payload["reason"] == "duality_failed"
+    assert decision.payload["safe_next_actions"] == [
+        "revise-goals",
+        "rerun-experiment-track",
+        "stop-campaign",
+    ]
+    assert decision.payload["failed_lenses"] == ["scientific_strength"]
 
 
 def test_kernel_can_bind_stage_handlers_from_adapter_registry(tmp_path: Path):

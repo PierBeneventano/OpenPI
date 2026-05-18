@@ -283,6 +283,8 @@ def openclaude_researcher_workflows(campaign_ref: str, *, cli_prefix: str = "msc
             f"{cli_prefix} campaigns reroute {campaign_ref} --from <stage_id> --to <stage_id> --reason <reason> --json",
             f"{cli_prefix} campaigns request-evidence {campaign_ref} --question <question> --node <stage_id> --json",
             f"{cli_prefix} campaigns approve-milestone {campaign_ref} --feedback <feedback> --json",
+            f"{cli_prefix} campaigns start {campaign_ref} --tier lean --budget <usd> --output-format markdown --no-math --no-counsel --json",
+            f"{cli_prefix} campaigns continue {campaign_ref} --json",
             f"{cli_prefix} campaigns propose-repair {campaign_ref} --node <stage_id> --reason <reason> --json",
             f"{cli_prefix} campaigns change-tier-model {campaign_ref} --tier <tier> --model <model> --node <stage_id> --json",
             f"Use `{cli_prefix} selftest commands --json` and the operation contract to discover the current SDK surface before declaring that an operation is unavailable.",
@@ -295,13 +297,9 @@ def openclaude_researcher_workflows(campaign_ref: str, *, cli_prefix: str = "msc
         ],
         "execution": [
             "OpenClaude should not launch local execution unless the researcher explicitly asks.",
-            "There is no `msc campaigns start` command. Do not use it.",
-            (
-                f"To start or continue execution, use `{cli_prefix} run --campaign-id {campaign_ref} "
-                "--campaign-root <project_root> --campaign-graph-version 1 --model <model> "
-                "--tier <tier> --budget <usd> --output-format markdown --mode local "
-                "--no-counsel --no-math --no-tree-search <campaign objective>`."
-            ),
+            f"Prefer SDK-native execution with `{cli_prefix} campaigns start {campaign_ref} --json` and `{cli_prefix} campaigns continue {campaign_ref} --json`.",
+            "The canonical command shape is `msc campaigns start <campaign> --json`, followed by `msc campaigns continue <campaign> --json` after approvals.",
+            "`msc run` is now a legacy adapter/diagnostic launcher, not the product execution authority.",
             "Use the campaign objective from the workspace read model as the run task unless the researcher provides a replacement.",
             "When execution is active, treat raw process logs as diagnostics, not product truth.",
         ],

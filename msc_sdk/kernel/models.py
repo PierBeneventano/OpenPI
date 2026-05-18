@@ -97,6 +97,23 @@ class SchemaValidationError(RuntimeError):
         super().__init__(result.message)
 
 
+class HumanDecisionRequiredError(RuntimeError):
+    """Raised by a stage handler when scientific control must pause for a human."""
+
+    def __init__(
+        self,
+        *,
+        reason: str,
+        safe_next_actions: Iterable[str],
+        message: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        self.reason = reason
+        self.safe_next_actions = tuple(str(action) for action in safe_next_actions)
+        self.metadata = metadata or {}
+        super().__init__(message or reason)
+
+
 ToolHandler = Callable[..., Any]
 ModelHandler = Callable[..., Any]
 StageAdapterHandler = Callable[["RuntimeContext"], dict[str, Any] | None]

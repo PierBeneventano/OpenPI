@@ -13,6 +13,7 @@ from .models import (
     CheckpointStore,
     DecisionQueue,
     EvidenceLink,
+    HumanDecisionRequiredError,
     InputSpec,
     InMemoryEventBus,
     ModelPolicyError,
@@ -97,6 +98,7 @@ class ResearchKernel:
                     "objective": run.objective,
                     "graph_id": run.graph.id,
                     "workspace": str(run.workspace),
+                    "metadata": dict(run.metadata),
                 },
             )
         else:
@@ -110,6 +112,7 @@ class ResearchKernel:
                     "blocked_stage_id": checkpoint.blocked_stage_id,
                     "reason": checkpoint.reason,
                     "queue": list(checkpoint.queue),
+                    "metadata": dict(run.metadata),
                 },
             )
 
@@ -134,6 +137,7 @@ class ResearchKernel:
                         "run_id": run.id,
                         "reason": "max_stage_executions_exceeded",
                         "max_stage_executions": self.max_stage_executions,
+                        "metadata": dict(run.metadata),
                     },
                 )
                 return outcomes
@@ -191,6 +195,7 @@ class ResearchKernel:
                         "run_id": run.id,
                         "stage_id": stage.id,
                         "status": "human_decision_required",
+                        "metadata": dict(run.metadata),
                     },
                 )
                 return outcomes
@@ -233,6 +238,7 @@ class ResearchKernel:
                         "run_id": run.id,
                         "stage_id": stage.id,
                         "status": "human_decision_required",
+                        "metadata": dict(run.metadata),
                     },
                 )
                 return outcomes
@@ -292,6 +298,7 @@ class ResearchKernel:
                         "run_id": run.id,
                         "stage_id": stage_id,
                         "status": outcome.status,
+                        "metadata": dict(run.metadata),
                     },
                 )
                 return outcomes
@@ -326,6 +333,7 @@ class ResearchKernel:
                         "run_id": run.id,
                         "stage_id": stage_id,
                         "status": "human_decision_required",
+                        "metadata": dict(run.metadata),
                     },
                 )
                 outcomes[-1] = StageOutcome(
@@ -357,6 +365,7 @@ class ResearchKernel:
                 "run_id": run.id,
                 "status": "completed",
                 "completed_stage_ids": completed_order,
+                "metadata": dict(run.metadata),
             },
         )
         return outcomes
@@ -436,6 +445,24 @@ class ResearchKernel:
             )
         except SchemaValidationError as exc:
             return self._schema_failure_outcome(run=run, stage=stage, exc=exc)
+        except HumanDecisionRequiredError as exc:
+            try:
+                artifacts = self._index_declared_artifacts(context)
+            except SchemaValidationError as schema_exc:
+                return self._schema_failure_outcome(run=run, stage=stage, exc=schema_exc)
+            self._request_decision(
+                run=run,
+                stage_id=stage.id,
+                reason=exc.reason,
+                safe_next_actions=list(exc.safe_next_actions),
+                metadata=exc.metadata,
+            )
+            return StageOutcome(
+                stage_id=stage.id,
+                artifacts=artifacts,
+                status="human_decision_required",
+                route_conditions=self._route_conditions(None),
+            )
         except Exception as exc:
             result = ValidationResult(
                 validator_id="stage_handler",

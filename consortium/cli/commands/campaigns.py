@@ -616,6 +616,59 @@ def campaigns_approve_milestone(
     click.echo(f"{data['campaign_id']}: milestone {data['action']}")
 
 
+@campaigns.command("start")
+@click.argument("campaign_ref")
+@click.option("--tier", default=None, help="Optional tier override for this SDK-native execution.")
+@click.option("--budget", type=float, default=None, help="Optional budget cap override in USD.")
+@click.option("--output-format", default=None, type=click.Choice(["markdown", "latex"]), help="Optional output format override.")
+@click.option("--math/--no-math", "math_enabled", default=False, help="Enable/disable the theory track.")
+@click.option("--counsel/--no-counsel", "counsel_enabled", default=False, help="Enable/disable council-backed stage posture.")
+@click.option("--human-gates/--no-human-gates", default=True, help="Pause at SDK-native scientific gates.")
+@click.option("--force-duality-fail", is_flag=True, help="Test hook: force the duality gate to require a human decision.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_start(
+    ctx: click.Context,
+    campaign_ref: str,
+    tier: str | None,
+    budget: float | None,
+    output_format: str | None,
+    math_enabled: bool,
+    counsel_enabled: bool,
+    human_gates: bool,
+    force_duality_fail: bool,
+    as_json: bool,
+) -> None:
+    """Start a campaign through the SDK-native executor."""
+    data = CampaignClient(ctx.obj["campaign_root"]).start(
+        campaign_ref,
+        tier=tier,
+        budget=budget,
+        output_format=output_format,
+        math_enabled=math_enabled,
+        counsel_enabled=counsel_enabled,
+        human_gates=human_gates,
+        force_duality_fail=force_duality_fail,
+    )
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(f"{data['campaign_id']}: {data['workspace']['execution']['status']}")
+
+
+@campaigns.command("continue")
+@click.argument("campaign_ref")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.pass_context
+def campaigns_continue(ctx: click.Context, campaign_ref: str, as_json: bool) -> None:
+    """Continue a paused SDK-native campaign after decisions are approved."""
+    data = CampaignClient(ctx.obj["campaign_root"]).continue_execution(campaign_ref)
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(f"{data['campaign_id']}: {data['workspace']['execution']['status']}")
+
+
 @campaigns.command("request-evidence")
 @click.argument("campaign_ref")
 @click.option("--question", required=True, help="Evidence question to record.")

@@ -13,6 +13,7 @@ from .campaign_store import CampaignStore
 from .events import EventStore
 from .harness import ActionRequest, OrchestratorHarness
 from .manifest import ManifestImportResult, import_manifest, read_manifest, write_manifest
+from .native_campaign import NativeCampaignExecutor
 from .openclaude import OpenClaudeReadiness
 from .openclaw import OpenClawReadiness
 from .project import ProjectClient, inspect_project, project_readiness
@@ -41,6 +42,7 @@ __all__ = [
     "EventStore",
     "LogReadModel",
     "ManifestImportResult",
+    "NativeCampaignExecutor",
     "OrchestratorHarness",
     "OpenClaudeReadiness",
     "OpenClawReadiness",

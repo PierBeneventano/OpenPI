@@ -131,8 +131,8 @@ def test_openclaude_campaign_harness_exposes_workspace_and_guardrails(tmp_path: 
     assert "campaigns rewind harness-demo" in steering_guidance
     assert "missing SDK capability" in steering_guidance
     assert "msc campaigns start" in execution_guidance
-    assert "Do not use it" in execution_guidance
-    assert "run --campaign-id harness-demo" in execution_guidance
+    assert "legacy adapter/diagnostic launcher" in execution_guidance
+    assert "run --campaign-id harness-demo" not in execution_guidance
     assert "run_status.json" in data["guardrails"]["do_not_use_as_truth"]
     assert "not-a-real-openrouter-key" not in result.output
 
