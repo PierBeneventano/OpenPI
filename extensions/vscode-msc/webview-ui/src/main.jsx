@@ -1203,7 +1203,12 @@ function PreviewPanel({ preview }) {
 
 function DiagnosticsModal({ state }) {
   const settings = state.settings || {};
-  const commands = state.diagnostics?.commands || [];
+  const checks = [
+    ['Campaigns', Boolean(state.campaigns)],
+    ['Project readiness', Boolean(state.diagnostics?.readiness)],
+    ['OpenClaude readiness', Boolean(state.diagnostics?.openclaude)],
+    ['OpenClaude models', Boolean(state.diagnostics?.openclaudeModels)]
+  ];
   return (
     <div className="modal-backdrop">
       <section className="modal">
@@ -1221,12 +1226,14 @@ function DiagnosticsModal({ state }) {
           <dt>Default tier</dt><dd>{settings.defaultTier}</dd>
           <dt>Default output</dt><dd>{settings.defaultOutput}</dd>
         </dl>
-        <h3>Budget</h3>
-        <pre>{settings.budgetSummary || 'No budget summary available.'}</pre>
-        <h3>Config</h3>
-        <pre>{settings.configList || 'No config output available.'}</pre>
-        <h3>Diagnostics</h3>
-        <p className="subtle">{commands.length} CLI commands detected.</p>
+        <h3>Dashboard Checks</h3>
+        <dl className="definition-list">
+          {checks.map(([label, ok]) => (
+            <React.Fragment key={label}>
+              <dt>{label}</dt><dd>{ok ? 'loaded' : 'not loaded'}</dd>
+            </React.Fragment>
+          ))}
+        </dl>
       </section>
     </div>
   );

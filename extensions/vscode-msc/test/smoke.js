@@ -66,9 +66,7 @@ for (const expected of [
   "message.type === 'updateContextLink'",
   "['campaigns', '--root', root, 'workspace'",
   "['project', 'readiness', '--json']",
-  "['selftest', 'commands', '--json']",
   "['openclaude', 'readiness', '--json']",
-  "['openclaude', 'env', '--json']",
   "['openclaude', 'models', '--json']",
   "'context',",
   "'link',"
@@ -116,6 +114,9 @@ assert(uiSource.includes('HumanFeedbackForm'));
 assert(uiSource.includes('Record Feedback'));
 assert(uiSource.includes('No local process is attached to this dashboard.'));
 assert(uiSource.includes('Assistant readiness'));
+assert(uiSource.includes('Dashboard Checks'));
+assert(!uiSource.includes('No budget summary available.'));
+assert(!uiSource.includes('No config output available.'));
 assert(uiSource.includes("useState('existing')"));
 assert(uiSource.includes("useState('deliverables')"));
 assert(uiSource.includes('No produced deliverables found for the current filters.'));
@@ -194,6 +195,12 @@ assert(!extension.chatHistoryForPrompt([{ role: 'user', text: 'Current' }], 'Cur
 assert(extension.openClaudeChatPath('/tmp/project', 'campaign/name').includes('openclaude_chats'));
 const repoRoot = path.resolve(root, '..', '..');
 assert.strictEqual(extension.findProjectRoot(path.dirname(repoRoot)), repoRoot);
+assert.strictEqual(extension.findProjectRoot(path.dirname(path.dirname(repoRoot))), repoRoot);
+assert.strictEqual(extension.findProjectRoot(path.join(repoRoot, 'extensions', 'vscode-msc'), path.join(repoRoot, 'extensions', 'vscode-msc')), repoRoot);
+
+const mscCommand = extension.resolveMscCommand(repoRoot);
+assert(mscCommand.bin.endsWith('/msc') || mscCommand.prefixArgs.includes('consortium.cli.main'));
+assert(mscCommand.prefixArgs.includes('--no-banner'));
 
 const args = extension.buildRunArgs({
   task: 'Smoke task',
@@ -205,7 +212,7 @@ const args = extension.buildRunArgs({
   math: false,
   treeSearch: false
 });
-assert.deepStrictEqual(args.slice(0, 2), ['--no-banner', 'run']);
+assert.strictEqual(args[0], 'run');
 assert(args.includes('--dry-run'));
 assert(args.includes('--tier') && args.includes('budget'));
 assert(args.includes('--output-format') && args.includes('markdown'));

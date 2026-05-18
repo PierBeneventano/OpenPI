@@ -15,7 +15,7 @@ const TEXT_PREVIEW_BYTES = 256 * 1024;
 
 function activate(context) {
   const disposable = vscode.commands.registerCommand('mscDashboard.open', () => {
-    const root = getWorkspaceRoot();
+    const root = getWorkspaceRoot(context);
     const panel = vscode.window.createWebviewPanel(
       'mscDashboard',
       'MSc Campaigns',
@@ -148,21 +148,28 @@ function cleanupSession(session) {
   }
 }
 
-function getWorkspaceRoot() {
+function getWorkspaceRoot(context) {
   const folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
-  return findProjectRoot(folder ? folder.uri.fsPath : process.cwd());
+  return findProjectRoot(folder ? folder.uri.fsPath : process.cwd(), context && context.extensionPath);
 }
 
-function findProjectRoot(startPath) {
+function findProjectRoot(startPath, extensionPath) {
   const start = path.resolve(startPath || process.cwd());
   const candidates = [
     start,
     path.join(start, 'PoggioAI_MSc'),
+    path.join(start, 'MSc', 'PoggioAI_MSc'),
     path.dirname(start)
   ];
+  if (extensionPath) {
+    const extensionRoot = path.resolve(extensionPath);
+    candidates.unshift(extensionRoot, path.dirname(path.dirname(extensionRoot)));
+  }
   let current = start;
   for (let index = 0; index < 5; index += 1) {
     candidates.push(current);
+    candidates.push(path.join(current, 'PoggioAI_MSc'));
+    candidates.push(path.join(current, 'MSc', 'PoggioAI_MSc'));
     const parent = path.dirname(current);
     if (parent === current) break;
     current = parent;
@@ -234,14 +241,13 @@ function defaultOpenClaudeState() {
 function defaultSettings(root) {
   return {
     workspaceRoot: root,
-    cliPath: resolveMscBin(root),
+    cliPath: resolveMscCommand(root).label,
     openRouterConfigured: Boolean(process.env.OPENROUTER_API_KEY),
     defaultBudget: 20,
     defaultTier: 'budget',
     defaultOutput: 'markdown',
     localDbPath: path.join(root, '.msc', 'campaigns.db'),
-    bundleExportRoot: path.join(root, 'campaigns'),
-    budgetSummary: null
+    bundleExportRoot: path.join(root, 'campaigns')
   };
 }
 
@@ -290,35 +296,23 @@ async function collectDashboardData(root) {
   state.campaigns = await enrichCampaigns(root, unwrap(campaigns, 'campaigns').campaigns || []);
 
   const readiness = await runJson(root, ['project', 'readiness', '--json']);
-  const commands = await runJson(root, ['selftest', 'commands', '--json']);
-  const config = await runText(root, ['config', 'list']);
-  const budget = await runText(root, ['budget']);
   const openclaude = await runJson(root, ['openclaude', 'readiness', '--json']);
-  const openclaudeEnv = await runJson(root, ['openclaude', 'env', '--json']);
   const openclaudeModels = await runJson(root, ['openclaude', 'models', '--json']);
 
   state.settings = {
     ...defaultSettings(root),
-    openRouterConfigured: openRouterConfigured(openclaude, openclaudeEnv),
-    budgetSummary: budget.stdout || budget.stderr || null,
-    configList: config.stdout || config.stderr || null,
+    openRouterConfigured: openRouterConfigured(openclaude),
     readiness: unwrap(readiness, 'readiness')
   };
   state.diagnostics = {
     readiness: unwrap(readiness, 'readiness'),
-    commands: unwrap(commands, 'commands').commands || [],
     openclaude: unwrap(openclaude, 'openclaude'),
-    openclaudeEnv: unwrap(openclaudeEnv, 'openclaudeEnv'),
     openclaudeModels: unwrap(openclaudeModels, 'openclaudeModels')
   };
   state.errors = [
     ...campaigns.errors,
     ...readiness.errors,
-    ...commands.errors,
-    ...config.errors,
-    ...budget.errors,
     ...openclaude.errors,
-    ...openclaudeEnv.errors,
     ...openclaudeModels.errors
   ];
   state.openClaude = {
@@ -1251,25 +1245,25 @@ async function runText(root, args) {
 
 function commandError(args, result) {
   return {
-    command: ['msc', ...args].join(' '),
+    command: [result.label || 'msc', ...args].join(' '),
     message: result.error || result.stderr || 'Command failed',
     code: result.code || null
   };
 }
 
 function runMsc(root, args) {
-  const bin = resolveMscBin(root);
+  const command = resolveMscCommand(root);
   return new Promise((resolve) => {
     childProcess.execFile(
-      bin,
-      ['--no-banner', ...args],
+      command.bin,
+      [...command.prefixArgs, ...args],
       { cwd: root, timeout: 15000, maxBuffer: 1024 * 1024, env: runtimeEnv(root) },
       (error, stdout, stderr) => {
         if (error) {
-          resolve({ ok: false, code: error.code, error: error.message, stdout: stdout || '', stderr: stderr || '' });
+          resolve({ ok: false, code: error.code, error: error.message, stdout: stdout || '', stderr: stderr || '', label: command.label });
           return;
         }
-        resolve({ ok: true, stdout: stdout || '', stderr: stderr || '' });
+        resolve({ ok: true, stdout: stdout || '', stderr: stderr || '', label: command.label });
       }
     );
   });
@@ -1292,9 +1286,9 @@ async function startCampaignExecution(session, message) {
     return;
   }
 
-  const bin = resolveMscBin(session.root);
+  const commandSpec = resolveMscCommand(session.root);
   const args = buildRunArgs(options, session.root);
-  const command = [bin, ...args].join(' ');
+  const command = [commandSpec.label, ...args].join(' ');
   session.state.activeRun = {
     status: 'running',
     startedAt: new Date().toISOString(),
@@ -1309,7 +1303,7 @@ async function startCampaignExecution(session, message) {
   session.state.actionError = null;
   appendRunLog(session, 'system', '$ ' + command);
 
-  const proc = childProcess.spawn(bin, args, { cwd: session.root, env: runEnv(session.root, options), shell: false });
+  const proc = childProcess.spawn(commandSpec.bin, [...commandSpec.prefixArgs, ...args], { cwd: session.root, env: runEnv(session.root, options), shell: false });
   session.activeProcess = proc;
   session.state.activeRun.pid = proc.pid || null;
   postState(session);
@@ -1371,7 +1365,6 @@ function validateRunOptions(options) {
 
 function buildRunArgs(options, root) {
   const args = [
-    '--no-banner',
     'run',
     '--mode',
     'local',
@@ -1705,7 +1698,6 @@ async function sendOpenClaudeMessage(session, message) {
 
   const prompt = buildOpenClaudePrompt(session, text, contextPack);
   const args = [
-    '--no-banner',
     'openclaude',
     '--model',
     model,
@@ -1723,8 +1715,9 @@ async function sendOpenClaudeMessage(session, message) {
     '--include-partial-messages',
     prompt
   ];
-  appendOpenClaudeAction(session, { kind: 'command', status: 'started', text: `msc ${args.join(' ')}`, timestamp: new Date().toISOString() });
-  const proc = childProcess.spawn(resolveMscBin(session.root), args, { cwd: session.root, env: runtimeEnv(session.root), shell: false });
+  const commandSpec = resolveMscCommand(session.root);
+  appendOpenClaudeAction(session, { kind: 'command', status: 'started', text: `${commandSpec.label} ${args.join(' ')}`, timestamp: new Date().toISOString() });
+  const proc = childProcess.spawn(commandSpec.bin, [...commandSpec.prefixArgs, ...args], { cwd: session.root, env: runtimeEnv(session.root), shell: false });
   session.openClaudeProcess = proc;
   let stdoutBuffer = '';
   let stderrBuffer = '';
@@ -2149,16 +2142,43 @@ function openRouterModelForEnv(model) {
 }
 
 function resolveMscBin(root) {
+  return resolveMscCommand(root).bin;
+}
+
+function resolveMscCommand(root) {
   const local = process.platform === 'win32'
     ? path.join(root, '.venv', 'Scripts', 'msc.exe')
     : path.join(root, '.venv', 'bin', 'msc');
-  return fs.existsSync(local) ? local : 'msc';
+  if (fs.existsSync(local)) {
+    return { bin: local, prefixArgs: ['--no-banner'], label: local };
+  }
+
+  const localPython = process.platform === 'win32'
+    ? path.join(root, '.venv', 'Scripts', 'python.exe')
+    : path.join(root, '.venv', 'bin', 'python');
+  if (fs.existsSync(localPython)) {
+    return {
+      bin: localPython,
+      prefixArgs: ['-m', 'consortium.cli.main', '--no-banner'],
+      label: `${localPython} -m consortium.cli.main`
+    };
+  }
+
+  if (isMscProjectRoot(root)) {
+    const python = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+    return {
+      bin: python,
+      prefixArgs: ['-m', 'consortium.cli.main', '--no-banner'],
+      label: `${python} -m consortium.cli.main`
+    };
+  }
+
+  return { bin: 'msc', prefixArgs: ['--no-banner'], label: 'msc' };
 }
 
-function openRouterConfigured(openclaude, openclaudeEnv) {
+function openRouterConfigured(openclaude) {
   const readiness = unwrap(openclaude, 'openclaude');
-  const env = unwrap(openclaudeEnv, 'openclaudeEnv');
-  return Boolean(process.env.OPENROUTER_API_KEY || readiness.openrouter_configured || (env.env && env.env.OPENROUTER_API_KEY));
+  return Boolean(process.env.OPENROUTER_API_KEY || readiness.openrouter_configured);
 }
 
 function oneOf(value, allowed, fallback) {
@@ -2234,5 +2254,6 @@ module.exports = {
   normalizeRunOptions,
   safeResolveArtifactPath,
   validateRunOptions,
-  resolveMscBin
+  resolveMscBin,
+  resolveMscCommand
 };
