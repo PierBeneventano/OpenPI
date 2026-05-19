@@ -152,8 +152,10 @@ def project_run(events: Iterable[EventRecord]) -> KernelRunReadModel:
             stage.started_at = event.created_at
         elif event_type == "BudgetSpent" and stage_id:
             stage = _stage(model, stage_id)
-            stage.budget_spent_usd = float(payload.get("stage_total_usd") or stage.budget_spent_usd)
-            model.budget_spent_usd = float(payload.get("run_total_usd") or model.budget_spent_usd)
+            spend = dict(payload.get("spend") or {})
+            amount = float(spend.get("amount_usd") or 0.0)
+            stage.budget_spent_usd = round(stage.budget_spent_usd + amount, 8)
+            model.budget_spent_usd = round(model.budget_spent_usd + amount, 8)
         elif event_type == "BudgetExceeded" and stage_id:
             stage = _stage(model, stage_id)
             stage.status = "human_decision_required"

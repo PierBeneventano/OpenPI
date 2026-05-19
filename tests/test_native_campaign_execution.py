@@ -49,6 +49,8 @@ def test_sdk_native_campaign_completes_lean_smoke_path(tmp_path: Path):
     assert first["workspace"]["pending_decisions"][0]["target_type"] == "kernel_decision"
     assert first["workspace"]["pending_decisions"][0]["reason"] == "pause_after_stage"
     assert "approve" in first["workspace"]["safe_next_actions"]
+    first_spend = first["workspace"]["aim"]["budget"]["spent_usd"]
+    assert first_spend > 0
     with client.store.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
 
@@ -59,6 +61,8 @@ def test_sdk_native_campaign_completes_lean_smoke_path(tmp_path: Path):
     assert second["workspace"]["execution"]["current_stage_id"] == "resource_preparation_agent"
     assert second["workspace"]["duality"]["status"] == "passed"
     assert second["workspace"]["pending_decisions"][0]["reason"] == "pause_before_stage"
+    second_spend = second["workspace"]["aim"]["budget"]["spent_usd"]
+    assert second_spend >= first_spend
 
     _approve_all(client, second["workspace"])
     completed = client.continue_execution(campaign_id)
@@ -83,6 +87,7 @@ def test_sdk_native_campaign_completes_lean_smoke_path(tmp_path: Path):
     artifact_summary = client.summarize_artifacts(campaign_id)
     budget = client.inspect_budget(campaign_id)
     assert budget["spent_usd"] > 0
+    assert budget["spent_usd"] >= second_spend
     assert budget["remaining_usd"] < 25
     assert artifact_summary["missing_required"] == 0
     assert artifact_summary["by_stage"]["writeup_agent"]["missing_required"] == 0

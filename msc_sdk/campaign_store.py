@@ -1366,7 +1366,11 @@ class CampaignStore:
                 else:
                     status = "completed"
             elif event_type == "BudgetSpent" and self._is_sdk_native_event(event):
-                budget_spent_usd = float(payload.get("run_total_usd") or budget_spent_usd)
+                spend = dict(payload.get("spend") or {})
+                budget_spent_usd = round(
+                    budget_spent_usd + float(spend.get("amount_usd") or 0.0),
+                    8,
+                )
             elif event_type == "GraphNodeStatusChanged":
                 if str(event.get("actor") or "") not in {SDK_NATIVE_RUNTIME, "system"}:
                     continue

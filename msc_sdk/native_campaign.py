@@ -17,6 +17,7 @@ from typing import Any
 from .campaign_store import CampaignStore, file_checksum, json_dumps, now_iso, path_is_inside
 from .kernel import (
     ArtifactRecord,
+    BudgetLedger,
     BudgetPolicy,
     CheckpointStore,
     DecisionQueue,
@@ -27,6 +28,7 @@ from .kernel import (
     ModelPolicy,
     RunCheckpoint,
     RunSpec,
+    SpendRecord,
     StageSpec,
     build_kernel_native_research_kernel,
 )
@@ -374,6 +376,7 @@ class NativeCampaignExecutor:
         )
         kernel = build_kernel_native_research_kernel(graph)
         kernel.event_bus = StoreBackedKernelEventBus(self.store)
+        kernel.budget_ledger = self._budget_ledger(campaign_id, run_id)
         kernel.decision_queue = self._approved_decision_queue(campaign_id, run_id)
         kernel.checkpoint_store = CheckpointStore()
         outcomes = kernel.run(run, checkpoint=checkpoint)
@@ -425,6 +428,27 @@ class NativeCampaignExecutor:
                 metadata=metadata,
             )
         return queue
+
+    def _budget_ledger(self, campaign_id: str, run_id: str) -> BudgetLedger:
+        ledger = BudgetLedger()
+        for event in self.store.events(campaign_id)["events"]:
+            if event["type"] != "BudgetSpent":
+                continue
+            payload = event["payload"]
+            if str(payload.get("run_id") or payload.get("execution_id") or "") not in {"", run_id}:
+                continue
+            spend = dict(payload.get("spend") or {})
+            if not spend:
+                continue
+            ledger.records.append(
+                SpendRecord(
+                    stage_id=str(spend.get("stage_id") or payload.get("stage_id") or ""),
+                    amount_usd=float(spend.get("amount_usd") or 0.0),
+                    reason=str(spend.get("reason") or ""),
+                    metadata=dict(spend.get("metadata") or {}),
+                )
+            )
+        return ledger
 
     def _latest_checkpoint(self, campaign_id: str) -> RunCheckpoint:
         checkpoints = [
