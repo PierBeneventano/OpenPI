@@ -282,6 +282,11 @@ class NativeCampaignExecutor:
         graph = self.store.graph(campaign_id)
         if graph.get("state") != "approved":
             raise RuntimeError("Campaign graph must be approved before SDK-native start.")
+        execution_status = self.store.workspace_read_model(campaign_id)["execution"]["status"]
+        if execution_status != "not_started":
+            raise RuntimeError(
+                f"Campaign execution is already {execution_status}; use continue for paused work or rerun/rewind actions after completion."
+            )
         campaign = self.store.get_campaign(campaign_id)
         graph_version = int(graph.get("version") or 1)
         metadata = {
@@ -321,8 +326,14 @@ class NativeCampaignExecutor:
         actor: str = "user",
     ) -> dict[str, Any]:
         campaign_id = self.store.resolve_ref(campaign_ref)
+        workspace = self.store.workspace_read_model(campaign_id)
+        execution_status = workspace["execution"]["status"]
+        if execution_status in {"completed", "dry_run_passed"}:
+            raise RuntimeError("Campaign execution is already completed; use rerun/rewind actions for follow-up work.")
+        if execution_status == "not_started":
+            raise RuntimeError("Campaign execution has not started; use start before continue.")
         pending = [
-            decision for decision in self.store.workspace_read_model(campaign_id)["pending_decisions"]
+            decision for decision in workspace["pending_decisions"]
             if decision.get("target_type") == "kernel_decision"
         ]
         if pending:

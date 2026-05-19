@@ -519,6 +519,8 @@ function CampaignExecutionPanel({ state, onStart }) {
   const latestRun = summary.latestRun || null;
   const execution = state.campaignExecution || {};
   const pendingCount = Number(execution.pending_decision_count || (state.campaignDecisions || []).length || 0);
+  const executionStatus = String(execution.status || latestRun?.status || 'not_started').toLowerCase();
+  const completed = ['completed', 'dry_run_passed'].includes(executionStatus);
   if (!run && !logs.length) {
     return (
       <section className="run-strip idle">
@@ -530,7 +532,11 @@ function CampaignExecutionPanel({ state, onStart }) {
               : 'The graph is ready for this campaign goal.'}
           </span>
         </div>
-        <button className="primary" onClick={onStart}>{latestRun ? 'Continue Campaign' : 'Start Campaign'}</button>
+        {completed ? (
+          <button disabled>Completed</button>
+        ) : (
+          <button className="primary" onClick={onStart}>{latestRun ? 'Continue Campaign' : 'Start Campaign'}</button>
+        )}
       </section>
     );
   }
@@ -546,6 +552,8 @@ function CampaignExecutionPanel({ state, onStart }) {
       <div className="run-actions">
         {run && ['running', 'stopping'].includes(run.status) ? (
           <button className="danger" onClick={() => vscode.postMessage({ type: 'stopCampaign' })}>Stop</button>
+        ) : completed ? (
+          <button disabled>Completed</button>
         ) : (
           <button onClick={onStart}>Continue Campaign</button>
         )}
@@ -577,13 +585,13 @@ function StartCampaignModal({ state, onClose }) {
 
   function submit(event) {
     event.preventDefault();
-    const budget = Number.parseInt(String(run.budget), 10);
+    const budget = Number.parseFloat(String(run.budget));
     if (!run.task.trim()) {
       setFormError('The campaign goal is required before starting execution.');
       return;
     }
-    if (!Number.isInteger(budget) || budget < 1 || budget > 10000) {
-      setFormError('Budget must be an integer between 1 and 10000.');
+    if (!Number.isFinite(budget) || budget <= 0 || budget > 10000) {
+      setFormError('Budget must be a number between 0 and 10000 USD.');
       return;
     }
     if (!run.dryRun && (!run.allowSpend || run.confirmation !== 'RUN LOCAL')) {
@@ -617,7 +625,7 @@ function StartCampaignModal({ state, onClose }) {
             <option value="serious">Serious</option>
             <option value="ultra">Ultra</option>
           </select></label>
-          <label>Budget cap<input type="number" min="1" value={run.budget} onChange={(event) => update('budget', event.target.value)} /></label>
+          <label>Budget cap<input type="number" min="0.01" step="0.01" value={run.budget} onChange={(event) => update('budget', event.target.value)} /></label>
           <label>Output<select value={run.outputFormat} onChange={(event) => update('outputFormat', event.target.value)}>
             <option value="markdown">Markdown</option>
             <option value="latex">LaTeX</option>
@@ -1286,7 +1294,7 @@ function NewCampaignModal({ onClose }) {
         <label>Title<input value={draft.title} onChange={(event) => update('title', event.target.value)} required /></label>
         <label>Research objective<textarea value={draft.objective} onChange={(event) => update('objective', event.target.value)} required /></label>
         <div className="form-grid">
-          <label>Budget cap<input type="number" min="1" value={draft.budgetCap} onChange={(event) => update('budgetCap', event.target.value)} /></label>
+          <label>Budget cap<input type="number" min="0.01" step="0.01" value={draft.budgetCap} onChange={(event) => update('budgetCap', event.target.value)} /></label>
           <label>Tier<select value={draft.tier} onChange={(event) => update('tier', event.target.value)}>
             {['scaffold', 'lean', 'standard', 'serious', 'ultra'].map((tier) => <option key={tier} value={tier}>{tier}</option>)}
           </select></label>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from consortium.cli.main import cli
@@ -51,6 +52,8 @@ def test_sdk_native_campaign_completes_lean_smoke_path(tmp_path: Path):
     assert "approve" in first["workspace"]["safe_next_actions"]
     first_spend = first["workspace"]["aim"]["budget"]["spent_usd"]
     assert first_spend > 0
+    with pytest.raises(RuntimeError, match="already human_decision_required"):
+        client.start(campaign_id)
     with client.store.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
 
@@ -101,6 +104,10 @@ def test_sdk_native_campaign_completes_lean_smoke_path(tmp_path: Path):
     assert "CampaignExecutionPrepared" in event_types
     assert "CampaignExecutionCompleted" in event_types
     assert "DualityCheckCompleted" in event_types
+    with pytest.raises(RuntimeError, match="already completed"):
+        client.start(campaign_id)
+    with pytest.raises(RuntimeError, match="already completed"):
+        client.continue_execution(campaign_id)
 
 
 def test_sdk_native_duality_failure_blocks_writeup_with_safe_actions(tmp_path: Path):
@@ -208,6 +215,23 @@ def test_campaigns_start_and_continue_cli_use_sdk_native_executor(tmp_path: Path
 
     assert continued.exit_code == 0
     assert client.workspace(campaign_id)["execution"]["current_stage_id"] == "resource_preparation_agent"
+    duplicate_start = runner.invoke(
+        cli,
+        [
+            "--no-banner",
+            "campaigns",
+            "--root",
+            str(tmp_path),
+            "start",
+            campaign_id,
+            "--json",
+        ],
+        catch_exceptions=False,
+    )
+    assert duplicate_start.exit_code == 1
+    duplicate_payload = json.loads(duplicate_start.output)
+    assert duplicate_payload["ok"] is False
+    assert "already human_decision_required" in duplicate_payload["error"]
 
     workspace_json = runner.invoke(
         cli,

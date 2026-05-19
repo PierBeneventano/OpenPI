@@ -1283,8 +1283,13 @@ function runMsc(root, args) {
 
 async function startCampaignExecution(session, message) {
   if (session.activeProcess) {
-    setActionError(session, 'Campaign execution is already active in this dashboard.');
-    return false;
+    if (processHasFinished(session.activeProcess)) {
+      session.activeProcess = null;
+      stopSteeringPolling(session);
+    } else {
+      setActionError(session, 'Campaign execution is already active in this dashboard.');
+      return false;
+    }
   }
 
   const options = normalizeRunOptions(message);
@@ -1298,8 +1303,20 @@ async function startCampaignExecution(session, message) {
     return false;
   }
 
+  const executionStatus = String(session.state.campaignExecution?.status || 'not_started');
+  if (options.campaignId && completedExecutionStatus(executionStatus)) {
+    setActionError(session, 'Campaign execution is already completed. Review deliverables, record feedback, or use a typed rerun/rewind action.');
+    return false;
+  }
+  if (options.campaignId && executionStatus === 'running') {
+    setActionError(session, 'The campaign read model already reports a running execution. Refresh diagnostics before launching another process.');
+    return false;
+  }
+
   const commandSpec = resolveMscCommand(session.root);
-  const args = buildRunArgs(options, session.root);
+  const args = options.campaignId
+    ? buildCampaignExecutionArgs(options, session.root, executionStatus)
+    : buildRunArgs(options, session.root);
   const command = [commandSpec.label, ...args].join(' ');
   session.state.activeRun = {
     status: 'running',
@@ -1323,7 +1340,22 @@ async function startCampaignExecution(session, message) {
 
   proc.stdout.on('data', (chunk) => appendRunLog(session, 'stdout', chunk.toString()));
   proc.stderr.on('data', (chunk) => appendRunLog(session, 'stderr', chunk.toString()));
-  proc.on('error', (error) => appendRunLog(session, 'stderr', error.message || String(error)));
+  proc.on('error', (error) => {
+    appendRunLog(session, 'stderr', error.message || String(error));
+    if (session.activeProcess === proc) {
+      session.activeProcess = null;
+    }
+    stopSteeringPolling(session);
+    session.state.activeRun = {
+      ...session.state.activeRun,
+      status: 'failed',
+      exitedAt: new Date().toISOString(),
+      exitCode: null,
+      signal: null
+    };
+    session.state.actionError = `Campaign execution command failed to launch: ${error.message || String(error)}`;
+    postState(session);
+  });
   proc.on('exit', async (code, signal) => {
     session.activeProcess = null;
     if (session.stopTimer) {
@@ -1367,16 +1399,34 @@ function normalizeRunOptions(message) {
 }
 
 function validateRunOptions(options) {
-  if (!options.task) {
+  if (!options.task && !options.campaignId) {
     return 'The campaign goal is required before starting execution.';
   }
-  if (!Number.isInteger(options.budget) || options.budget < 1 || options.budget > 10000) {
-    return 'Budget must be an integer between 1 and 10000.';
+  if (!Number.isFinite(options.budget) || options.budget <= 0 || options.budget > 10000) {
+    return 'Budget must be a number between 0 and 10000 USD.';
   }
   if (!options.dryRun && (!options.allowSpend || options.confirmation !== RUN_CONFIRMATION)) {
     return `Real local execution requires allow spend plus confirmation text ${RUN_CONFIRMATION}.`;
   }
   return null;
+}
+
+function buildCampaignExecutionArgs(options, root, executionStatus = 'not_started') {
+  if (!options.campaignId) {
+    throw new Error('Campaign id is required for SDK-native campaign execution.');
+  }
+  const command = executionStatus === 'not_started' ? 'start' : 'continue';
+  const args = ['campaigns', '--root', root, command, String(options.campaignId)];
+  if (command === 'start') {
+    args.push('--tier', options.tier);
+    args.push('--budget', String(options.budget));
+    args.push('--output-format', options.outputFormat);
+    args.push(options.math ? '--math' : '--no-math');
+    args.push(options.counsel ? '--counsel' : '--no-counsel');
+    args.push('--human-gates');
+  }
+  args.push('--json');
+  return args;
 }
 
 function buildRunArgs(options, root) {
@@ -1414,6 +1464,14 @@ function buildRunArgs(options, root) {
   }
   args.push(options.task);
   return args;
+}
+
+function processHasFinished(proc) {
+  return Boolean(proc && (proc.exitCode !== null || proc.signalCode !== null || proc.killed));
+}
+
+function completedExecutionStatus(status) {
+  return ['completed', 'dry_run_passed'].includes(String(status || '').toLowerCase());
 }
 
 function stopCampaignExecution(session) {
@@ -2208,7 +2266,7 @@ function oneOf(value, allowed, fallback) {
 }
 
 function normalizeBudget(value) {
-  const parsed = Number.parseInt(String(value == null ? '20' : value), 10);
+  const parsed = Number.parseFloat(String(value == null ? '20' : value));
   return Number.isFinite(parsed) ? parsed : 20;
 }
 
@@ -2262,6 +2320,7 @@ function renderMissingBundleHtml(webview) {
 module.exports = {
   activate,
   artifactAllowedRoots,
+  buildCampaignExecutionArgs,
   buildRunArgs,
   buildOpenClaudePrompt,
   chatHistoryForPrompt,
@@ -2276,6 +2335,7 @@ module.exports = {
   normalizeRunOptions,
   safeResolveArtifactPath,
   validateRunOptions,
+  completedExecutionStatus,
   resolveMscBin,
   resolveMscCommand
 };

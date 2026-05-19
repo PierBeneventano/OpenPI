@@ -13,6 +13,13 @@ def _emit_json(data: object) -> None:
     click.echo(json.dumps(data, indent=2, sort_keys=True))
 
 
+def _fail_json_or_click(*, as_json: bool, operation: str, campaign_ref: str, error: Exception) -> None:
+    if as_json:
+        _emit_json({"ok": False, "operation": operation, "campaign": campaign_ref, "error": str(error)})
+        raise click.exceptions.Exit(1)
+    raise click.ClickException(str(error))
+
+
 @click.group()
 @click.option("--root", type=click.Path(), default=".", help="Directory used to resolve campaign refs.")
 @click.pass_context
@@ -631,16 +638,19 @@ def campaigns_start(
     as_json: bool,
 ) -> None:
     """Start a campaign through the SDK-native executor."""
-    data = CampaignClient(ctx.obj["campaign_root"]).start(
-        campaign_ref,
-        tier=tier,
-        budget=budget,
-        output_format=output_format,
-        math_enabled=math_enabled,
-        counsel_enabled=counsel_enabled,
-        human_gates=human_gates,
-        force_duality_fail=force_duality_fail,
-    )
+    try:
+        data = CampaignClient(ctx.obj["campaign_root"]).start(
+            campaign_ref,
+            tier=tier,
+            budget=budget,
+            output_format=output_format,
+            math_enabled=math_enabled,
+            counsel_enabled=counsel_enabled,
+            human_gates=human_gates,
+            force_duality_fail=force_duality_fail,
+        )
+    except RuntimeError as exc:
+        _fail_json_or_click(as_json=as_json, operation="campaigns.start", campaign_ref=campaign_ref, error=exc)
     if as_json:
         _emit_json(data)
         return
@@ -653,7 +663,10 @@ def campaigns_start(
 @click.pass_context
 def campaigns_continue(ctx: click.Context, campaign_ref: str, as_json: bool) -> None:
     """Continue a paused SDK-native campaign after decisions are approved."""
-    data = CampaignClient(ctx.obj["campaign_root"]).continue_execution(campaign_ref)
+    try:
+        data = CampaignClient(ctx.obj["campaign_root"]).continue_execution(campaign_ref)
+    except RuntimeError as exc:
+        _fail_json_or_click(as_json=as_json, operation="campaigns.continue", campaign_ref=campaign_ref, error=exc)
     if as_json:
         _emit_json(data)
         return

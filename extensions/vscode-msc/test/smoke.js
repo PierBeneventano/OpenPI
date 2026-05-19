@@ -106,6 +106,7 @@ assert(uiSource.includes('DashboardLoadingState'));
 assert(uiSource.includes('state.loading && !state.loaded'));
 assert(uiSource.includes('CampaignExecutionPanel'));
 assert(uiSource.includes('Continue Campaign'));
+assert(uiSource.includes('Completed'));
 assert(uiSource.includes('diagnostic log lines'));
 assert(uiSource.includes('Process Log'));
 assert(uiSource.includes('RUN LOCAL'));
@@ -260,10 +261,40 @@ assert.strictEqual(scaffoldOptions.tier, 'scaffold');
 assert.strictEqual(scaffoldOptions.model, 'gpt-5-mini');
 assert.strictEqual(scaffoldOptions.maxRunSeconds, 3600);
 assert.strictEqual(extension.validateRunOptions(scaffoldOptions), null);
+const fiftyCentOptions = extension.normalizeRunOptions({
+  task: 'Fifty cent smoke',
+  dryRun: true,
+  tier: 'lean',
+  outputFormat: 'markdown',
+  budget: 0.5
+});
+assert.strictEqual(fiftyCentOptions.budget, 0.5);
+assert.strictEqual(extension.validateRunOptions(fiftyCentOptions), null);
 assert.strictEqual(
   extension.validateRunOptions({ task: 'Spend', dryRun: false, budget: 20, allowSpend: false, confirmation: '' }),
   'Real local execution requires allow spend plus confirmation text RUN LOCAL.'
 );
+assert.strictEqual(extension.completedExecutionStatus('completed'), true);
+assert.strictEqual(extension.completedExecutionStatus('human_decision_required'), false);
+const nativeStartArgs = extension.buildCampaignExecutionArgs({
+  campaignId: 'demo-campaign',
+  tier: 'lean',
+  outputFormat: 'markdown',
+  budget: 0.5,
+  counsel: false,
+  math: false
+}, repoRoot, 'not_started');
+assert.deepStrictEqual(nativeStartArgs.slice(0, 5), ['campaigns', '--root', repoRoot, 'start', 'demo-campaign']);
+assert(nativeStartArgs.includes('--budget') && nativeStartArgs.includes('0.5'));
+assert(nativeStartArgs.includes('--human-gates'));
+assert(nativeStartArgs.includes('--json'));
+const nativeContinueArgs = extension.buildCampaignExecutionArgs({
+  campaignId: 'demo-campaign',
+  tier: 'lean',
+  outputFormat: 'markdown',
+  budget: 0.5
+}, repoRoot, 'human_decision_required');
+assert.deepStrictEqual(nativeContinueArgs, ['campaigns', '--root', repoRoot, 'continue', 'demo-campaign', '--json']);
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'msc-extension-'));
 try {
