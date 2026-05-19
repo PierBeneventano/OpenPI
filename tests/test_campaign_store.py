@@ -230,6 +230,11 @@ def test_campaign_workspace_model_uses_campaign_execution_and_deliverables(tmp_p
     assert workspace["campaign"]["objective"] == "Expose one campaign workspace read model."
     assert workspace["execution"]["status"] == "not_started"
     assert workspace["execution"]["latest_attempt"] is None
+    assert workspace["map"]["graph"]["ref"] == "graph"
+    assert "nodes" not in workspace["map"]["graph"]
+    assert workspace["diagnostics"]["events"] == []
+    assert workspace["diagnostics"]["event_count"] > 0
+    assert workspace["diagnostics"]["events_truncated"] is True
     assert workspace["diagnostics"]["legacy_attempts"][0]["execution_id"] == run["run_id"]
     assert workspace["safe_next_actions"] == ["start-campaign"]
     assert workspace["graph"]["metadata"]["source"] == "kernel_graph_projection"
@@ -242,6 +247,10 @@ def test_campaign_workspace_model_uses_campaign_execution_and_deliverables(tmp_p
     assert not any(event_type.startswith("Run") for event_type in events)
     assert "CampaignExecutionStarted" in events
     assert "HumanFeedbackRecorded" in events
+
+    full_workspace = store.workspace_read_model("workspace-demo", include_diagnostic_events=True)
+    assert len(full_workspace["diagnostics"]["events"]) == full_workspace["diagnostics"]["event_count"]
+    assert full_workspace["diagnostics"]["events_truncated"] is False
 
 
 def test_campaign_context_links_are_events_and_workspace_memory(tmp_path: Path):

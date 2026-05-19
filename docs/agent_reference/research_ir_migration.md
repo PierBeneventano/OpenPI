@@ -57,3 +57,9 @@ OpenClaude should prefer the five aisle fields from
 `msc campaigns workspace <campaign> --json` and the context pack. Raw files,
 status JSON, logs, prompts, process IDs, and legacy runtime attempts are
 diagnostics only.
+
+Default workspace reads are cockpit-safe: raw campaign events are summarized by
+count and command pointer, not embedded. Use
+`msc campaigns workspace <campaign> --include-events --json` or
+`msc campaigns events <campaign> --limit 200 --json` when a researcher asks for
+raw diagnostic event detail.

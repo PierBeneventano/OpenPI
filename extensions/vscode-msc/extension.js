@@ -384,8 +384,13 @@ async function selectCampaign(session, campaignRef) {
 async function loadCampaignWorkspace(root, campaignRef) {
   const workspaceResult = await runJson(root, ['campaigns', '--root', root, 'workspace', campaignRef, '--json']);
   const workspace = unwrap(workspaceResult, 'campaignWorkspace');
+  const eventsResult = workspaceResult.ok
+    ? await runJson(root, ['campaigns', '--root', root, 'events', campaignRef, '--limit', '200', '--json'])
+    : { ok: false, data: { events: [] }, errors: [] };
   const diagnostics = workspace.diagnostics || {};
-  const campaignEvents = Array.isArray(diagnostics.events) ? diagnostics.events : [];
+  const campaignEvents = Array.isArray(eventsResult.data?.events)
+    ? eventsResult.data.events
+    : (Array.isArray(diagnostics.events) ? diagnostics.events : []);
   const deliverables = Array.isArray(workspace.deliverables) ? workspace.deliverables : [];
   const plannedOutputs = Array.isArray(workspace.planned_outputs) ? workspace.planned_outputs : [];
   const diagnosticArtifacts = Array.isArray(diagnostics.artifacts) ? diagnostics.artifacts : [];
@@ -405,7 +410,7 @@ async function loadCampaignWorkspace(root, campaignRef) {
     campaignEvents,
     campaignRunSummary: summarizeCampaignWorkspace(workspace, campaignEvents),
     openClaudeContextLinks: contextLinks,
-    errors: workspaceResult.errors || []
+    errors: [...(workspaceResult.errors || []), ...(eventsResult.errors || [])]
   };
 }
 
@@ -1264,7 +1269,7 @@ function runMsc(root, args) {
     childProcess.execFile(
       command.bin,
       [...command.prefixArgs, ...args],
-      { cwd: root, timeout: 15000, maxBuffer: 1024 * 1024, env: runtimeEnv(root) },
+      { cwd: root, timeout: 15000, maxBuffer: 4 * 1024 * 1024, env: runtimeEnv(root) },
       (error, stdout, stderr) => {
         if (error) {
           resolve({ ok: false, code: error.code, error: error.message, stdout: stdout || '', stderr: stderr || '', label: command.label });

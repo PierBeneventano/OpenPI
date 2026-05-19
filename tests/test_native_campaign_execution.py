@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -202,3 +203,44 @@ def test_campaigns_start_and_continue_cli_use_sdk_native_executor(tmp_path: Path
 
     assert continued.exit_code == 0
     assert client.workspace(campaign_id)["execution"]["current_stage_id"] == "resource_preparation_agent"
+
+    workspace_json = runner.invoke(
+        cli,
+        [
+            "--no-banner",
+            "campaigns",
+            "--root",
+            str(tmp_path),
+            "workspace",
+            campaign_id,
+            "--json",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert workspace_json.exit_code == 0
+    assert len(workspace_json.output.encode("utf-8")) < 1024 * 1024
+    workspace_payload = json.loads(workspace_json.output)
+    assert workspace_payload["diagnostics"]["events"] == []
+    assert workspace_payload["diagnostics"]["event_count"] > 0
+    assert workspace_payload["diagnostics"]["events_truncated"] is True
+
+    full_workspace_json = runner.invoke(
+        cli,
+        [
+            "--no-banner",
+            "campaigns",
+            "--root",
+            str(tmp_path),
+            "workspace",
+            campaign_id,
+            "--include-events",
+            "--json",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert full_workspace_json.exit_code == 0
+    full_workspace_payload = json.loads(full_workspace_json.output)
+    assert len(full_workspace_payload["diagnostics"]["events"]) == full_workspace_payload["diagnostics"]["event_count"]
+    assert full_workspace_payload["diagnostics"]["events_truncated"] is False

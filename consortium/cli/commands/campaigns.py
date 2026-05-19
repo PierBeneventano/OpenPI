@@ -305,11 +305,15 @@ def campaigns_status(ctx: click.Context, campaign_ref: str, as_json: bool) -> No
 
 @campaigns.command("workspace")
 @click.argument("campaign_ref")
+@click.option("--include-events", is_flag=True, help="Include raw diagnostic campaign events in the workspace payload.")
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
 @click.pass_context
-def campaigns_workspace(ctx: click.Context, campaign_ref: str, as_json: bool) -> None:
+def campaigns_workspace(ctx: click.Context, campaign_ref: str, include_events: bool, as_json: bool) -> None:
     """Return the campaign workspace read model for product UIs."""
-    data = CampaignClient(ctx.obj["campaign_root"]).workspace(campaign_ref)
+    data = CampaignClient(ctx.obj["campaign_root"]).workspace(
+        campaign_ref,
+        include_diagnostic_events=include_events,
+    )
     if as_json:
         _emit_json(data)
         return

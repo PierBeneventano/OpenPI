@@ -782,7 +782,12 @@ class CampaignStore:
             actor=actor,
         )
 
-    def workspace_read_model(self, campaign_ref: str | Path) -> dict[str, Any]:
+    def workspace_read_model(
+        self,
+        campaign_ref: str | Path,
+        *,
+        include_diagnostic_events: bool = False,
+    ) -> dict[str, Any]:
         """Return the product-facing campaign workspace model.
 
         This is the canonical read surface for UIs and steering layers. The
@@ -850,8 +855,17 @@ class CampaignStore:
             "model_posture": graph.get("metadata", {}).get("modelPolicy"),
             "tier_policy": graph.get("metadata", {}).get("tierPolicy"),
         }
+        event_count = len(events)
         map_aisle = {
-            "graph": graph,
+            "graph": {
+                "id": graph.get("metadata", {}).get("kernelGraphId"),
+                "version": graph.get("version"),
+                "state": graph.get("state"),
+                "template": graph.get("metadata", {}).get("template"),
+                "node_count": len(graph.get("nodes") or []),
+                "edge_count": len(graph.get("edges") or []),
+                "ref": "graph",
+            },
             "execution_status": execution["status"],
             "current_stage_id": execution.get("current_stage_id"),
             "routes": graph.get("edges") or [],
@@ -878,7 +892,10 @@ class CampaignStore:
         }
         diagnostics_aisle = {
             "artifacts": diagnostics,
-            "events": events,
+            "events": events if include_diagnostic_events else [],
+            "event_count": event_count,
+            "events_truncated": not include_diagnostic_events and event_count > 0,
+            "events_command": f"msc campaigns events {campaign_id} --limit 200 --json",
             "legacy_attempts": legacy_attempts,
             "completion_evaluations": completion_evaluations,
             "model_policy_violations": model_policy_violations,
@@ -891,7 +908,6 @@ class CampaignStore:
             "map": map_aisle,
             "evidence": evidence_aisle,
             "decisions": decisions_aisle,
-            "diagnostics_aisle": diagnostics_aisle,
             "campaign": {
                 "id": campaign["id"],
                 "title": campaign["title"],
@@ -923,7 +939,10 @@ class CampaignStore:
             "planned_outputs": planned_outputs,
             "diagnostics": {
                 "artifacts": diagnostics,
-                "events": events,
+                "events": events if include_diagnostic_events else [],
+                "event_count": event_count,
+                "events_truncated": not include_diagnostic_events and event_count > 0,
+                "events_command": f"msc campaigns events {campaign_id} --limit 200 --json",
                 "legacy_attempts": legacy_attempts,
                 "completion_evaluations": completion_evaluations,
                 "model_policy_violations": model_policy_violations,
