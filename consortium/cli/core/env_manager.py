@@ -174,6 +174,38 @@ def save_env_file(
     return env_path
 
 
+def upsert_env_var(
+    name: str,
+    value: str,
+    *,
+    config_dir_override: str | None = None,
+) -> Path:
+    """Write a single env var to ~/.msc/.env, preserving the rest.
+
+    Canonical entry point for both the CLI and the VSCode extension when a
+    user updates one credential. Wraps `save_env_file` so file formatting,
+    grouping, and `chmod 600` stay in one place.
+    """
+    if not name:
+        raise ValueError("env var name is required")
+    existing = load_env_vars(config_dir_override)
+    existing[name] = value
+    return save_env_file(existing, config_dir_override)
+
+
+def clear_env_var(
+    name: str,
+    *,
+    config_dir_override: str | None = None,
+) -> Path:
+    """Remove a single env var from ~/.msc/.env, preserving the rest."""
+    if not name:
+        raise ValueError("env var name is required")
+    existing = load_env_vars(config_dir_override)
+    existing.pop(name, None)
+    return save_env_file(existing, config_dir_override)
+
+
 def _should_use_repo_env(
     repo_root: str | Path | None,
     allow_repo_env: bool | None,

@@ -42,16 +42,25 @@ python -m pip install -e ".[dev]"
 
 If you do not need dev extras, `python -m pip install -e .` is also supported.
 
-### 2. Run the setup wizard
+### 2. Configure your API keys
+
+Pick one surface — both write to the same `~/.msc/.env` (mode 600) and use the same SDK underneath. There is no separate "VSCode key store" to keep in sync.
+
+**Terminal:** run the full tier-first wizard, which also writes `~/.msc/config.yaml` for CLI defaults.
 
 ```bash
 msc setup
 ```
 
-This writes:
+**VSCode extension:** open the dashboard (`MSc: Open Dashboard`) or run `MSc: Configure API Keys` from the command palette. On first launch with no OpenRouter key configured, the extension prompts you with a notification and an onboarding panel.
 
-- `~/.msc/config.yaml` for CLI defaults
-- `~/.msc/.env` for API credentials
+Once a key is set, you can manage it from either surface:
+
+```bash
+msc config keys list                          # who's set, and from where
+echo "sk-or-..." | msc config keys set OPENROUTER_API_KEY --stdin
+msc config keys unset OPENROUTER_API_KEY
+```
 
 The setup flow is tier-first. Your default tier defines the default model, budget, output mode, and rigor settings unless you explicitly override them.
 

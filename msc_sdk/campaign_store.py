@@ -692,6 +692,45 @@ class CampaignStore:
             actor=actor,
         )
 
+    _WORKSPACE_PAYLOAD_HEAVY_FIELDS = {
+        "CouncilMemberCompleted": ("output",),
+        "CouncilSynthesisRecorded": ("synthesis",),
+        "CouncilStarted": ("prompt",),
+        "DualityCheckStarted": ("prompt",),
+    }
+    _WORKSPACE_PREVIEW_CHARS = 200
+
+    @classmethod
+    def _compact_event_for_workspace(cls, event: dict[str, Any]) -> dict[str, Any]:
+        # The workspace read model is consumed by UIs (e.g. the VSCode extension)
+        # that only render identifiers, timestamps and event type. Council member
+        # outputs and synthesis text can each be tens of KB, blowing past the
+        # extension's stdout maxBuffer. Trim them here while preserving the
+        # event-stream shape; full text remains available via
+        # `campaigns events <slug> --json`.
+        heavy_fields = cls._WORKSPACE_PAYLOAD_HEAVY_FIELDS.get(event.get("type"))
+        if not heavy_fields:
+            return event
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            return event
+        new_payload = dict(payload)
+        trimmed = False
+        for field in heavy_fields:
+            if field not in new_payload:
+                continue
+            raw = new_payload.pop(field)
+            text = "" if raw is None else str(raw)
+            new_payload[f"{field}_length"] = len(text)
+            new_payload[f"{field}_preview"] = text[: cls._WORKSPACE_PREVIEW_CHARS]
+            new_payload[f"{field}_truncated"] = len(text) > cls._WORKSPACE_PREVIEW_CHARS
+            trimmed = True
+        if not trimmed:
+            return event
+        new_event = dict(event)
+        new_event["payload"] = new_payload
+        return new_event
+
     def workspace_read_model(self, campaign_ref: str | Path) -> dict[str, Any]:
         """Return the product-facing campaign workspace model.
 
@@ -773,7 +812,7 @@ class CampaignStore:
             "planned_outputs": planned_outputs,
             "diagnostics": {
                 "artifacts": diagnostics,
-                "events": events,
+                "events": [self._compact_event_for_workspace(event) for event in events],
                 "legacy_attempts": execution["attempts"],
             },
             "provenance": {
@@ -807,9 +846,21 @@ class CampaignStore:
             )
             row["updated_at"] = event["created_at"]
             if event["type"] == "CouncilMemberCompleted":
-                row["members"].append({"model_id": payload.get("model_id"), "output": payload.get("output")})
+                # Drop full LLM output (often tens of KB) from the workspace
+                # read model. Full text is reachable via `campaigns events`.
+                output_text = "" if payload.get("output") is None else str(payload.get("output"))
+                row["members"].append({
+                    "model_id": payload.get("model_id"),
+                    "output_length": len(output_text),
+                    "output_preview": output_text[:200],
+                    "output_truncated": len(output_text) > 200,
+                })
             elif event["type"] == "CouncilSynthesisRecorded":
-                row["synthesis"] = payload.get("synthesis")
+                synthesis_text = "" if payload.get("synthesis") is None else str(payload.get("synthesis"))
+                row["synthesis_length"] = len(synthesis_text)
+                row["synthesis_preview"] = synthesis_text[:200]
+                row["synthesis_truncated"] = len(synthesis_text) > 200
+                row["synthesis"] = None
             elif event["type"] == "CouncilVerdictRecorded":
                 row["status"] = "completed"
                 row["verdict"] = payload.get("verdict")

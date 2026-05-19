@@ -11,7 +11,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:mscDashboard.open"
+    "onStartupFinished"
   ],
   "main": "./extension.js",
   "contributes": {
@@ -19,6 +19,10 @@
       {
         "command": "mscDashboard.open",
         "title": "MSc: Open Dashboard"
+      },
+      {
+        "command": "mscDashboard.setKeys",
+        "title": "MSc: Configure API Keys"
       }
     ]
   },

@@ -13,37 +13,94 @@ const RUN_CONFIRMATION = 'RUN LOCAL';
 const STEERING_URL = 'http://127.0.0.1:5002';
 const TEXT_PREVIEW_BYTES = 256 * 1024;
 
+const activeDashboards = new Set();
+
+function openDashboard(context, options = {}) {
+  const root = getWorkspaceRoot(context);
+  const panel = vscode.window.createWebviewPanel(
+    'mscDashboard',
+    'MSc Campaigns',
+    vscode.ViewColumn.One,
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+      localResourceRoots: [
+        vscode.Uri.file(path.join(context.extensionPath, 'webview-ui', 'dist')),
+        vscode.Uri.file(root)
+      ]
+    }
+  );
+
+  const session = createDashboardSession(panel, root);
+  if (options.openOnboarding) {
+    session.state.onboardingOpen = true;
+  }
+  panel.webview.html = renderHtml(context, panel.webview);
+
+  panel.webview.onDidReceiveMessage(async (message) => {
+    if (!message || !message.type) {
+      return;
+    }
+    await handleMessage(session, message);
+  }, undefined, context.subscriptions);
+
+  panel.onDidDispose(() => {
+    activeDashboards.delete(session);
+    cleanupSession(session);
+  }, undefined, context.subscriptions);
+
+  activeDashboards.add(session);
+  return session;
+}
+
+let keyNudgeShown = false;
+
 function activate(context) {
-  const disposable = vscode.commands.registerCommand('mscDashboard.open', () => {
-    const root = getWorkspaceRoot(context);
-    const panel = vscode.window.createWebviewPanel(
-      'mscDashboard',
-      'MSc Campaigns',
-      vscode.ViewColumn.One,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: [
-          vscode.Uri.file(path.join(context.extensionPath, 'webview-ui', 'dist')),
-          vscode.Uri.file(root)
-        ]
-      }
-    );
-
-    const session = createDashboardSession(panel, root);
-    panel.webview.html = renderHtml(context, panel.webview);
-
-    panel.webview.onDidReceiveMessage(async (message) => {
-      if (!message || !message.type) {
-        return;
-      }
-      await handleMessage(session, message);
-    }, undefined, context.subscriptions);
-
-    panel.onDidDispose(() => cleanupSession(session), undefined, context.subscriptions);
+  const openCmd = vscode.commands.registerCommand('mscDashboard.open', () => {
+    openDashboard(context);
   });
 
-  context.subscriptions.push(disposable);
+  const setKeysCmd = vscode.commands.registerCommand('mscDashboard.setKeys', () => {
+    // Surface the onboarding panel even when the dashboard isn't open yet.
+    for (const existing of activeDashboards) {
+      existing.state.onboardingOpen = true;
+      postState(existing);
+      existing.panel.reveal();
+      return;
+    }
+    openDashboard(context, { openOnboarding: true });
+  });
+
+  context.subscriptions.push(openCmd, setKeysCmd);
+
+  // Intentionally NOT spawning the CLI here. The activation event is
+  // onStartupFinished and VSCode is still bringing up extension hosts;
+  // adding our own python3 spawn into that window reliably reproduces
+  // spawn EAGAIN on shared HPC nodes. The key-missing nudge runs the
+  // first time the dashboard is opened instead.
+}
+
+async function maybeNudgeForKeys(session) {
+  if (keyNudgeShown) return;
+  keyNudgeShown = true;
+  try {
+    const result = await runJson(session.root, ['config', 'keys', 'list', '--json']);
+    if (!result.ok || !result.data) return;
+    const openrouter = (result.data.keys || []).find((entry) => entry.env_var === 'OPENROUTER_API_KEY');
+    if (!openrouter || openrouter.configured) return;
+    const choice = await vscode.window.showWarningMessage(
+      'MSc: OpenRouter API key is not configured. The dashboard cannot run campaigns until it is set.',
+      'Configure API Keys',
+      'Later'
+    );
+    if (choice === 'Configure API Keys') {
+      session.state.onboardingOpen = true;
+      postState(session);
+      await refreshKeyStatus(session);
+    }
+  } catch (_) {
+    // Silent — the dashboard's own readiness checks will surface the problem.
+  }
 }
 
 function deactivate() {}
@@ -51,6 +108,9 @@ function deactivate() {}
 async function handleMessage(session, message) {
   if (message.type === 'ready' || message.type === 'refresh') {
     await refresh(session);
+    if (message.type === 'ready') {
+      maybeNudgeForKeys(session).catch(() => {});
+    }
   } else if (message.type === 'selectCampaign') {
     await selectCampaign(session, message.campaign);
   } else if (message.type === 'backToCampaigns') {
@@ -83,6 +143,20 @@ async function handleMessage(session, message) {
   } else if (message.type === 'closeSettings') {
     session.state.settingsOpen = false;
     postState(session);
+  } else if (message.type === 'openOnboarding') {
+    session.state.onboardingOpen = true;
+    session.state.settingsOpen = false;
+    postState(session);
+    await refreshKeyStatus(session);
+  } else if (message.type === 'closeOnboarding') {
+    session.state.onboardingOpen = false;
+    postState(session);
+  } else if (message.type === 'refreshKeyStatus') {
+    await refreshKeyStatus(session);
+  } else if (message.type === 'setApiKey') {
+    await setApiKey(session, message);
+  } else if (message.type === 'unsetApiKey') {
+    await unsetApiKey(session, message);
   } else if (message.type === 'refreshCampaign') {
     await selectCampaign(session, session.state.selectedCampaign);
   } else if (message.type === 'selectGraphNode') {
@@ -211,6 +285,8 @@ function initialState(root) {
     selectedGraphNode: null,
     artifactPreview: null,
     settingsOpen: false,
+    onboardingOpen: false,
+    keyStatus: null,
     settings: defaultSettings(root),
     diagnostics: {},
     activeRun: null,
@@ -382,7 +458,14 @@ async function selectCampaign(session, campaignRef) {
 }
 
 async function loadCampaignWorkspace(root, campaignRef) {
-  const workspaceResult = await runJson(root, ['campaigns', '--root', root, 'workspace', campaignRef, '--json']);
+  // Workspace JSON includes the full event projection, so it can legitimately
+  // run to several MB on mature campaigns. Give it a generous ceiling; other
+  // CLI calls keep the 4MB default.
+  const workspaceResult = await runJson(
+    root,
+    ['campaigns', '--root', root, 'workspace', campaignRef, '--json'],
+    { maxBuffer: 32 * 1024 * 1024 }
+  );
   const workspace = unwrap(workspaceResult, 'campaignWorkspace');
   const diagnostics = workspace.diagnostics || {};
   const campaignEvents = Array.isArray(diagnostics.events) ? diagnostics.events : [];
@@ -1230,8 +1313,8 @@ function unwrap(result, label) {
   return { ok: false, label, error: result.error, stdout: result.stdout, stderr: result.stderr };
 }
 
-async function runJson(root, args) {
-  const result = await runMsc(root, args);
+async function runJson(root, args, opts = {}) {
+  const result = await runMsc(root, args, opts);
   if (!result.ok) {
     return { ...result, errors: [commandError(args, result)] };
   }
@@ -1242,8 +1325,8 @@ async function runJson(root, args) {
   }
 }
 
-async function runText(root, args) {
-  const result = await runMsc(root, args);
+async function runText(root, args, opts = {}) {
+  const result = await runMsc(root, args, opts);
   if (!result.ok) {
     return { ...result, errors: [commandError(args, result)] };
   }
@@ -1258,13 +1341,37 @@ function commandError(args, result) {
   };
 }
 
-function runMsc(root, args) {
-  const command = resolveMscCommand(root);
+const RUN_MSC_DEFAULT_MAX_BUFFER = 4 * 1024 * 1024;
+const RUN_MSC_DEFAULT_TIMEOUT_MS = 15000;
+const SPAWN_TRANSIENT_CODES = new Set(['EAGAIN', 'ENOMEM', 'EMFILE', 'ENFILE']);
+// Backoff schedule for transient spawn failures (EAGAIN under HPC node load).
+// Total worst-case added latency on an unrecoverable transient: ~1.9 s.
+const SPAWN_RETRY_DELAYS_MS = [200, 500, 1200];
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientSpawnFailure(result) {
+  // Spawn-time failures don't produce stdout/stderr; detect them by the
+  // shape of the error rather than parsing the message.
+  if (!result || result.ok) return false;
+  if (result.stdout || result.stderr) return false;
+  const code = result.code;
+  if (typeof code === 'string' && SPAWN_TRANSIENT_CODES.has(code)) return true;
+  const message = String(result.error || '');
+  for (const transient of SPAWN_TRANSIENT_CODES) {
+    if (message.includes(transient)) return true;
+  }
+  return false;
+}
+
+function execFileOnce(command, args, opts) {
   return new Promise((resolve) => {
     childProcess.execFile(
       command.bin,
       [...command.prefixArgs, ...args],
-      { cwd: root, timeout: 15000, maxBuffer: 1024 * 1024, env: runtimeEnv(root) },
+      opts,
       (error, stdout, stderr) => {
         if (error) {
           resolve({ ok: false, code: error.code, error: error.message, stdout: stdout || '', stderr: stderr || '', label: command.label });
@@ -1274,6 +1381,170 @@ function runMsc(root, args) {
       }
     );
   });
+}
+
+async function runMsc(root, args, opts = {}) {
+  const command = resolveMscCommand(root);
+  const maxBuffer = opts.maxBuffer || RUN_MSC_DEFAULT_MAX_BUFFER;
+  const timeout = opts.timeout || RUN_MSC_DEFAULT_TIMEOUT_MS;
+  const execOpts = { cwd: root, timeout, maxBuffer, env: runtimeEnv(root) };
+  let result = await execFileOnce(command, args, execOpts);
+  // On a shared HPC node the extension host can hit EAGAIN when forking
+  // under thread/process pressure; the window often lasts seconds. Step
+  // through SPAWN_RETRY_DELAYS_MS and stop early on success or on a real
+  // CLI failure (which surfaces immediately).
+  for (const delay of SPAWN_RETRY_DELAYS_MS) {
+    if (!isTransientSpawnFailure(result)) break;
+    await sleep(delay);
+    result = await execFileOnce(command, args, execOpts);
+  }
+  return result;
+}
+
+function spawnWithStdinOnce(command, args, stdinValue, opts) {
+  const timeout = opts.timeout || RUN_MSC_DEFAULT_TIMEOUT_MS;
+  return new Promise((resolve) => {
+    let proc;
+    try {
+      proc = childProcess.spawn(command.bin, [...command.prefixArgs, ...args], {
+        cwd: opts.cwd,
+        env: opts.env,
+        shell: false
+      });
+    } catch (error) {
+      resolve({ ok: false, code: error.code, error: error.message || String(error), stdout: '', stderr: '', label: command.label });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    const killTimer = setTimeout(() => {
+      try { proc.kill('SIGTERM'); } catch (_) {}
+      finish({ ok: false, error: `command timed out after ${timeout}ms`, stdout, stderr, label: command.label });
+    }, timeout);
+    proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    proc.on('error', (error) => {
+      clearTimeout(killTimer);
+      finish({ ok: false, code: error.code, error: error.message || String(error), stdout, stderr, label: command.label });
+    });
+    proc.on('exit', (code) => {
+      clearTimeout(killTimer);
+      if (code === 0) {
+        finish({ ok: true, stdout, stderr, label: command.label });
+      } else {
+        finish({ ok: false, code, error: stderr || `exit code ${code}`, stdout, stderr, label: command.label });
+      }
+    });
+    try {
+      proc.stdin.write(String(stdinValue == null ? '' : stdinValue));
+      proc.stdin.end();
+    } catch (error) {
+      clearTimeout(killTimer);
+      finish({ ok: false, error: error.message || String(error), stdout, stderr, label: command.label });
+    }
+  });
+}
+
+async function runMscWithStdin(root, args, stdinValue, opts = {}) {
+  // Used when we need to hand a secret to the CLI without putting it on argv
+  // (which would appear in /proc/<pid>/cmdline on a shared multi-user host).
+  const command = resolveMscCommand(root);
+  const spawnOpts = { cwd: root, env: runtimeEnv(root), timeout: opts.timeout };
+  let result = await spawnWithStdinOnce(command, args, stdinValue, spawnOpts);
+  // Same exponential backoff as runMsc. Transient spawn failures never
+  // reached stdin, so the secret has not been emitted yet — safe to retry
+  // the full spawn.
+  for (const delay of SPAWN_RETRY_DELAYS_MS) {
+    if (!isTransientSpawnFailure(result)) break;
+    await sleep(delay);
+    result = await spawnWithStdinOnce(command, args, stdinValue, spawnOpts);
+  }
+  return result;
+}
+
+async function refreshKeyStatus(session) {
+  const result = await runJson(session.root, ['config', 'keys', 'list', '--json']);
+  if (!result.ok) {
+    session.state.keyStatus = { ok: false, error: result.error || result.stderr || 'Could not load key status.', keys: [] };
+  } else {
+    session.state.keyStatus = {
+      ok: true,
+      config_path: result.data && result.data.config_path,
+      keys: (result.data && result.data.keys) || []
+    };
+  }
+  postState(session);
+}
+
+async function setApiKey(session, message) {
+  const envVar = String(message.env_var || '').trim().toUpperCase();
+  const rawValue = typeof message.value === 'string' ? message.value : '';
+  // Trim trailing whitespace but preserve internal characters of the secret.
+  const value = rawValue.replace(/[\r\n]+$/g, '').trim();
+  if (!envVar) {
+    session.panel.webview.postMessage({ type: 'setApiKeyResult', ok: false, env_var: envVar, error: 'env_var is required' });
+    return;
+  }
+  if (!value) {
+    session.panel.webview.postMessage({ type: 'setApiKeyResult', ok: false, env_var: envVar, error: 'value is required' });
+    return;
+  }
+  const result = await runMscWithStdin(
+    session.root,
+    ['config', 'keys', 'set', envVar, '--stdin', '--json'],
+    `${value}\n`
+  );
+  if (!result.ok) {
+    session.panel.webview.postMessage({
+      type: 'setApiKeyResult',
+      ok: false,
+      env_var: envVar,
+      error: result.error || result.stderr || 'Could not save key.'
+    });
+    return;
+  }
+  let parsed = {};
+  try { parsed = JSON.parse(result.stdout || '{}'); } catch (_) {}
+  session.panel.webview.postMessage({
+    type: 'setApiKeyResult',
+    ok: Boolean(parsed.ok),
+    env_var: envVar,
+    config_path: parsed.config_path || null,
+    preview: parsed.preview || null,
+    error: parsed.ok ? null : (parsed.error || 'Save failed.')
+  });
+  await refreshKeyStatus(session);
+}
+
+async function unsetApiKey(session, message) {
+  const envVar = String(message.env_var || '').trim().toUpperCase();
+  if (!envVar) {
+    session.panel.webview.postMessage({ type: 'unsetApiKeyResult', ok: false, env_var: envVar, error: 'env_var is required' });
+    return;
+  }
+  const result = await runJson(session.root, ['config', 'keys', 'unset', envVar, '--json']);
+  if (!result.ok) {
+    session.panel.webview.postMessage({
+      type: 'unsetApiKeyResult',
+      ok: false,
+      env_var: envVar,
+      error: result.error || result.stderr || 'Could not remove key.'
+    });
+    return;
+  }
+  session.panel.webview.postMessage({
+    type: 'unsetApiKeyResult',
+    ok: Boolean(result.data && result.data.ok),
+    env_var: envVar,
+    config_path: (result.data && result.data.config_path) || null
+  });
+  await refreshKeyStatus(session);
 }
 
 async function startCampaignExecution(session, message) {

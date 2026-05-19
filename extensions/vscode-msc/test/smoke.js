@@ -27,8 +27,12 @@ const extension = require(path.join(root, 'extension.js'));
 Module._load = originalLoad;
 
 assert.strictEqual(pkg.main, './extension.js');
-assert(pkg.activationEvents.includes('onCommand:mscDashboard.open'));
+// VSCode auto-generates onCommand:* activation events from the commands
+// contribution, so we no longer list them explicitly. The setup-on-first-run
+// nudge needs onStartupFinished.
+assert(pkg.activationEvents.includes('onStartupFinished'));
 assert(pkg.contributes.commands.some((command) => command.command === 'mscDashboard.open'));
+assert(pkg.contributes.commands.some((command) => command.command === 'mscDashboard.setKeys'));
 assert(pkg.scripts.build.includes('vite build'));
 
 for (const forbidden of [
@@ -64,10 +68,15 @@ for (const expected of [
   "message.type === 'openClaudeClearHistory'",
   "message.type === 'linkArtifactContext'",
   "message.type === 'updateContextLink'",
+  "message.type === 'openOnboarding'",
+  "message.type === 'refreshKeyStatus'",
+  "message.type === 'setApiKey'",
+  "message.type === 'unsetApiKey'",
   "['campaigns', '--root', root, 'workspace'",
   "['project', 'readiness', '--json']",
   "['openclaude', 'readiness', '--json']",
   "['openclaude', 'models', '--json']",
+  "['config', 'keys', 'list', '--json']",
   "'context',",
   "'link',"
 ]) {
@@ -100,6 +109,10 @@ assert(uiSource.includes('Type DELETE to confirm'));
 assert(!uiSource.includes('window.prompt'));
 assert(uiSource.includes('Start Campaign'));
 assert(uiSource.includes('Diagnostics'));
+assert(uiSource.includes('OnboardingPanel'));
+assert(uiSource.includes('Configure API Keys'));
+assert(uiSource.includes("vscode.postMessage({ type: 'setApiKey'"));
+assert(uiSource.includes("vscode.postMessage({ type: 'unsetApiKey'"));
 assert(uiSource.includes('ErrorSummary'));
 assert(uiSource.includes('LoadingNotice'));
 assert(uiSource.includes('DashboardLoadingState'));

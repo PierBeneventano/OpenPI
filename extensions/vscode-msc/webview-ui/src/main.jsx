@@ -29,6 +29,8 @@ const emptyState = {
   activeRun: null,
   runLog: [],
   steering: {},
+  onboardingOpen: false,
+  keyStatus: null,
   openClaude: { status: 'idle', model: 'openai/gpt-5-mini', models: [], transcript: [], actions: [], contextLinks: [] },
   openClaudeContextLinks: []
 };
@@ -38,11 +40,26 @@ function App() {
   const [newCampaignOpen, setNewCampaignOpen] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState(null);
   const [workspaceTab, setWorkspaceTab] = useState('graph');
+  const [keyOpStatus, setKeyOpStatus] = useState(null);
 
   useEffect(() => {
     const listener = (event) => {
       if (event.data && event.data.type === 'state') {
         setState({ ...emptyState, ...event.data.state });
+      } else if (event.data && event.data.type === 'setApiKeyResult') {
+        setKeyOpStatus({
+          ok: Boolean(event.data.ok),
+          env_var: event.data.env_var,
+          message: event.data.ok ? `Saved ${event.data.env_var}.` : (event.data.error || 'Save failed.'),
+          timestamp: Date.now()
+        });
+      } else if (event.data && event.data.type === 'unsetApiKeyResult') {
+        setKeyOpStatus({
+          ok: Boolean(event.data.ok),
+          env_var: event.data.env_var,
+          message: event.data.ok ? `Removed ${event.data.env_var}.` : (event.data.error || 'Remove failed.'),
+          timestamp: Date.now()
+        });
       } else if (event.data && event.data.type === 'deleteCampaignResult') {
         if (event.data.ok && event.data.status === 'completed') {
           const deletedRef = String(event.data.campaign || '');
@@ -70,6 +87,27 @@ function App() {
     return () => window.removeEventListener('message', listener);
   }, []);
 
+  const onboardingOpen = Boolean(state.onboardingOpen);
+  const keyStatus = state.keyStatus;
+  useEffect(() => {
+    if (onboardingOpen && !keyStatus) {
+      vscode.postMessage({ type: 'refreshKeyStatus' });
+    }
+  }, [onboardingOpen, keyStatus]);
+
+  useEffect(() => {
+    if (!state.loaded || onboardingOpen) return;
+    // Only auto-open onboarding when we have an authoritative answer that
+    // OPENROUTER is missing. Without this guard, a transient spawn failure
+    // (e.g. EAGAIN under HPC node load) makes the warning panel pop up
+    // even though the key is configured in ~/.msc/.env.
+    if (!keyStatus || !keyStatus.ok || !Array.isArray(keyStatus.keys)) return;
+    const openrouterEntry = keyStatus.keys.find((entry) => entry.env_var === 'OPENROUTER_API_KEY');
+    if (openrouterEntry && !openrouterEntry.configured) {
+      vscode.postMessage({ type: 'openOnboarding' });
+    }
+  }, [state.loaded, onboardingOpen, keyStatus]);
+
   useEffect(() => {
     if (!deleteCandidate || !state.loaded) return;
     const exists = (state.campaigns || []).some((campaign) => {
@@ -91,6 +129,7 @@ function App() {
           requestDelete={setDeleteCandidate}
         />
         {deleteCandidate ? <DeleteCampaignModal target={deleteCandidate} state={state} onClose={() => setDeleteCandidate(null)} /> : null}
+        {onboardingOpen ? <OnboardingPanel state={state} opStatus={keyOpStatus} /> : null}
       </>
     );
   }
@@ -104,6 +143,7 @@ function App() {
         requestDelete={setDeleteCandidate}
       />
       {deleteCandidate ? <DeleteCampaignModal target={deleteCandidate} state={state} onClose={() => setDeleteCandidate(null)} /> : null}
+      {onboardingOpen ? <OnboardingPanel state={state} opStatus={keyOpStatus} /> : null}
     </>
   );
 }
@@ -1227,7 +1267,14 @@ function DiagnosticsModal({ state }) {
           <dt>CLI path</dt><dd>{settings.cliPath || 'msc'}</dd>
           <dt>Campaign DB</dt><dd>{settings.localDbPath || '-'}</dd>
           <dt>Bundle exports</dt><dd>{settings.bundleExportRoot || '-'}</dd>
-          <dt>OpenRouter</dt><dd>{settings.openRouterConfigured ? 'configured' : 'missing'}</dd>
+          <dt>
+            OpenRouter
+          </dt>
+          <dd>
+            {settings.openRouterConfigured ? 'configured' : 'missing'}
+            {' '}
+            <button onClick={() => vscode.postMessage({ type: 'openOnboarding' })}>Configure keys</button>
+          </dd>
           <dt>Default budget</dt><dd>{settings.defaultBudget}</dd>
           <dt>Default tier</dt><dd>{settings.defaultTier}</dd>
           <dt>Default output</dt><dd>{settings.defaultOutput}</dd>
@@ -1241,6 +1288,105 @@ function DiagnosticsModal({ state }) {
           ))}
         </dl>
       </section>
+    </div>
+  );
+}
+
+function OnboardingPanel({ state, opStatus }) {
+  const status = state.keyStatus || null;
+  const keys = status && Array.isArray(status.keys) ? status.keys : [];
+  const required = keys.filter((entry) => entry.level === 'required');
+  const optional = keys.filter((entry) => entry.level !== 'required');
+  const allRequiredSet = required.length > 0 && required.every((entry) => entry.configured);
+  return (
+    <div className="modal-backdrop">
+      <section className="modal" style={{ maxWidth: '640px' }}>
+        <div className="modal-head">
+          <h2>Configure API Keys</h2>
+          <button onClick={() => vscode.postMessage({ type: 'closeOnboarding' })}>Close</button>
+        </div>
+        <p className="subtle">
+          One-time setup. Keys are stored in <code>~/.msc/.env</code> with owner-only permissions.
+          The same file is used by the <code>msc</code> CLI — both surfaces share one configuration.
+        </p>
+        <p className="subtle">
+          Don't have an OpenRouter key yet? Sign up at{' '}
+          <a href="https://openrouter.ai/keys">openrouter.ai/keys</a>.
+        </p>
+        {opStatus ? (
+          <div className={`notice ${opStatus.ok ? '' : 'error'}`}>{opStatus.message}</div>
+        ) : null}
+        {!status ? (
+          <p>Loading key status…</p>
+        ) : !status.ok ? (
+          <div className="notice error">
+            <p>Could not reach the MSc CLI to read key status.</p>
+            <p className="subtle" style={{ marginTop: '0.25rem' }}>
+              On shared systems this often clears in a moment. If it persists, run{' '}
+              <code>msc config keys list</code> in a terminal — it uses the same code path.
+            </p>
+            <p className="subtle" style={{ marginTop: '0.25rem' }}>Details: {status.error || 'unknown'}</p>
+            <button onClick={() => vscode.postMessage({ type: 'refreshKeyStatus' })} style={{ marginTop: '0.4rem' }}>
+              Retry
+            </button>
+          </div>
+        ) : (
+          <>
+            <h3>Required</h3>
+            {required.length === 0 ? <p className="subtle">None.</p> : null}
+            {required.map((entry) => <KeyRow key={entry.env_var} entry={entry} />)}
+            <h3>Optional</h3>
+            {optional.length === 0 ? <p className="subtle">None.</p> : null}
+            {optional.map((entry) => <KeyRow key={entry.env_var} entry={entry} />)}
+            {status.config_path ? <p className="subtle" style={{ marginTop: '0.75rem' }}>Config: {status.config_path}</p> : null}
+            {allRequiredSet ? (
+              <div className="notice">All required keys set. You can close this panel and continue.</div>
+            ) : null}
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function KeyRow({ entry }) {
+  const [draft, setDraft] = useState('');
+  const [pending, setPending] = useState(false);
+  const submit = () => {
+    if (!draft.trim() || pending) return;
+    setPending(true);
+    vscode.postMessage({ type: 'setApiKey', env_var: entry.env_var, value: draft });
+    setDraft('');
+    setTimeout(() => setPending(false), 1500);
+  };
+  return (
+    <div className="key-row" style={{ borderTop: '1px solid var(--vscode-panel-border)', padding: '0.6rem 0' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.75rem' }}>
+        <strong>{entry.name}</strong>
+        <span className="subtle">{entry.env_var}</span>
+      </div>
+      <p className="subtle" style={{ margin: '0.25rem 0' }}>{entry.description || ''}</p>
+      {entry.configured ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span>✓ set</span>
+          <span className="subtle">source: {entry.source || '—'}</span>
+          <button onClick={() => vscode.postMessage({ type: 'unsetApiKey', env_var: entry.env_var })}>Remove</button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <input
+            type="password"
+            placeholder={`Paste ${entry.env_var}`}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') submit(); }}
+            style={{ flex: 1 }}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button className="primary" disabled={pending || !draft.trim()} onClick={submit}>Save</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1374,6 +1520,10 @@ function DashboardLoadingState() {
 function ErrorSummary({ errors }) {
   const visible = (errors || []).filter(Boolean);
   if (!visible.length) return null;
+  const anyTransient = visible.some((error) => {
+    const text = String(error.message || error.error || '');
+    return /\b(EAGAIN|ENOMEM|EMFILE|ENFILE)\b/.test(text);
+  });
   return (
     <details className="error-summary">
       <summary>{visible.length} dashboard command {visible.length === 1 ? 'issue' : 'issues'}</summary>
@@ -1384,6 +1534,14 @@ function ErrorSummary({ errors }) {
             <span>{error.message || error.error || 'Command failed'}</span>
           </div>
         ))}
+        {anyTransient ? (
+          <p className="subtle" style={{ margin: '0.4rem 0 0' }}>
+            The node was busy — retrying often clears this.
+          </p>
+        ) : null}
+        <div style={{ marginTop: '0.5rem' }}>
+          <button onClick={() => vscode.postMessage({ type: 'refresh' })}>Retry</button>
+        </div>
       </div>
     </details>
   );
