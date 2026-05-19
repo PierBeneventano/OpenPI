@@ -283,6 +283,7 @@ def openclaude_researcher_workflows(campaign_ref: str, *, cli_prefix: str = "msc
             "Answer from the campaign workspace read model first.",
             "Use graph node purposes, validators, decisions, feedback, and deliverables as evidence.",
             "Open raw files only after the read model points to a produced deliverable or diagnostic.",
+            "Do not inspect global run logs or legacy run workspaces to decide campaign posture unless the campaign workspace diagnostics explicitly references that attempt.",
         ],
         "feedback_and_steering": [
             f"{cli_prefix} campaigns feedback {campaign_ref} --text <feedback> --node <stage_id> --artifact-path <path> --json",
@@ -309,6 +310,7 @@ def openclaude_researcher_workflows(campaign_ref: str, *, cli_prefix: str = "msc
             f"Prefer SDK-native execution with `{cli_prefix} campaigns start {campaign_ref} --json` and `{cli_prefix} campaigns continue {campaign_ref} --json`.",
             "The canonical command shape is `msc campaigns start <campaign> --json`, followed by `msc campaigns continue <campaign> --json` after approvals.",
             "`msc run` is now a legacy adapter/diagnostic launcher, not the product execution authority.",
+            "If workspace.execution.status is not_started and attempts is empty, treat older legacy process logs as stale diagnostics; recommend SDK-native start rather than repairing legacy prerequisites.",
             "Use the campaign objective from the workspace read model as the run task unless the researcher provides a replacement.",
             "When execution is active, treat raw process logs as diagnostics, not product truth.",
         ],

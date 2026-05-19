@@ -26,6 +26,12 @@ The workspace aisles are the preferred orientation surface:
 Raw logs, status files, prompts, process IDs, and legacy run attempts are
 diagnostics only.
 
+If `workspace.execution.status` is `not_started` and the workspace lists no
+SDK-native attempts, older legacy process logs are stale diagnostics. They may
+explain a past dashboard failure, but they should not drive the recommended
+next action. The next action should remain SDK-native campaign start unless the
+current campaign read model says otherwise.
+
 ## Allowed Mutations
 
 OpenClaude may call typed operations after researcher intent is clear:
