@@ -14,14 +14,14 @@ set is intentionally smaller and more product-forward:
   it as product/research intent, not as a binding implementation map.
 - [Core SDK Implementation Plan](core_sdk_implementation_plan.md): plan for
   implementing the SDK around the target model.
-- [Migration Horizon Plan](migration_horizon_plan.md): long-horizon cutover map
-  from legacy execution to the SDK/event/read-model product.
+- [Migration Horizon Plan](migration_horizon_plan.md): long-horizon map for the
+  SDK/event/read-model product.
 - [Target Research Workflow](target_research_workflow.md): faithful SDK
   representation of the feedback graph with product-facing abstractions.
 - [OpenClaude Coworking Contract](openclaude_coworking_contract.md): safe
   operation boundary for the local AI coworker.
 - [Product Boundary Audit](product_boundary_audit.md): migration guardrails for
-  product terms crossing into legacy runtime surfaces.
+  keeping product terms on SDK-native campaign surfaces.
 - [Extension UI Implementation Plan](extension_ui_implementation_plan.md): plan
   for making the VS Code extension follow the target researcher experience.
 - [V1 Product Requirements](v1_product_requirements.md): target user, product
@@ -40,10 +40,9 @@ set is intentionally smaller and more product-forward:
 
 ## Working Rule
 
-The full historical research behavior is preserved for V1, and the graph shape
-described in [feedback.md](feedback.md) is the authoritative V0 target. The
-legacy LangGraph implementation remains an adapter; the SDK graph template is
-the product contract that must be able to express the feedback graph directly:
+The graph shape described in [feedback.md](feedback.md) is the authoritative V0
+target. The SDK graph template is the product contract that must be able to
+express the feedback graph directly:
 persona/model councils, explicit gates, duality checking, revision loops,
 subgraphs, router labels, retry caps, and human steerability.
 

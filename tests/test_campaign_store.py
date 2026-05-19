@@ -9,6 +9,10 @@ from msc_sdk.campaigns import CampaignClient
 from msc_sdk.stage_runtime import StageRunContext, materialize_stage_outputs
 
 
+def _run_id(name: str) -> str:
+    return f"id_{name}"
+
+
 def test_campaign_store_creates_sqlite_jsonl_snapshot_and_declared_outputs(tmp_path: Path):
     store = CampaignStore(tmp_path)
 
@@ -208,10 +212,10 @@ def test_campaign_workspace_model_uses_campaign_execution_and_deliverables(tmp_p
         template="literature_only",
         budget=1,
     )
-    run = store.record_run_started("workspace-demo", command=["msc", "run"], pid=321)
+    run_id = _run_id("workspace_demo")
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "workspace-demo")
-    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run_id)
 
     ctx = StageRunContext.from_env("literature_review_agent")
     assert ctx is not None
@@ -235,7 +239,6 @@ def test_campaign_workspace_model_uses_campaign_execution_and_deliverables(tmp_p
     assert workspace["diagnostics"]["events"] == []
     assert workspace["diagnostics"]["event_count"] > 0
     assert workspace["diagnostics"]["events_truncated"] is True
-    assert workspace["diagnostics"]["legacy_attempts"][0]["execution_id"] == run["run_id"]
     assert workspace["safe_next_actions"] == ["start-campaign"]
     assert workspace["graph"]["metadata"]["source"] == "kernel_graph_projection"
     assert [artifact["path"] for artifact in workspace["deliverables"]] == ["artifacts/literature_matrix.md"]
@@ -245,7 +248,6 @@ def test_campaign_workspace_model_uses_campaign_execution_and_deliverables(tmp_p
 
     events = [event["type"] for event in store.events("workspace-demo")["events"]]
     assert not any(event_type.startswith("Run") for event_type in events)
-    assert "CampaignExecutionStarted" in events
     assert "HumanFeedbackRecorded" in events
 
     full_workspace = store.workspace_read_model("workspace-demo", include_diagnostic_events=True)
@@ -285,95 +287,6 @@ def test_campaign_context_links_are_events_and_workspace_memory(tmp_path: Path):
     event_types = [event["type"] for event in store.events("context-memory-demo")["events"]]
     assert "ContextLinked" in event_types
     assert "ContextLinkUpdated" in event_types
-
-
-def test_failure_recovery_decision_is_researcher_readable(tmp_path: Path):
-    store = CampaignStore(tmp_path)
-    store.create_campaign(
-        title="Failure UX Demo",
-        objective="Expose runtime failures as recovery decisions.",
-        template="literature_only",
-        budget=1,
-    )
-    run = store.record_run_started("failure-ux-demo", command=["msc", "run"], pid=42)
-    store.record_run_exited(
-        "failure-ux-demo",
-        run["run_id"],
-        exit_code=1,
-        metadata={"error": "Recursion limit of 25 reached without hitting a stop condition."},
-    )
-
-    workspace = store.workspace_read_model("failure-ux-demo")
-    assert workspace["execution"]["status"] == "not_started"
-    assert workspace["pending_decisions"] == []
-    assert workspace["diagnostics"]["legacy_attempts"][0]["status"] == "failed"
-    assert workspace["diagnostics"]["legacy_attempts"][0]["metadata"]["error"] == (
-        "Recursion limit of 25 reached without hitting a stop condition."
-    )
-
-
-def test_dry_run_passed_is_not_projected_as_execution_failure(tmp_path: Path):
-    store = CampaignStore(tmp_path)
-    store.create_campaign(
-        title="Dry Run Demo",
-        objective="Validate autostart dry-run projection.",
-        template="target_research",
-        budget=1,
-    )
-    run = store.record_run_started("dry-run-demo", command=["msc", "run", "--dry-run"], pid=43)
-    result = store.record_run_exited("dry-run-demo", run["run_id"], exit_code=0, status="dry_run_passed")
-
-    workspace = store.workspace_read_model("dry-run-demo")
-    events = [event["type"] for event in store.events("dry-run-demo")["events"]]
-
-    assert result["approval"] is None
-    assert "CampaignExecutionCompleted" in events
-    assert "CampaignExecutionFailed" not in events
-    assert workspace["campaign"]["status"] == "draft"
-    assert workspace["execution"]["status"] == "not_started"
-    assert workspace["diagnostics"]["legacy_attempts"][0]["status"] == "dry_run_passed"
-    assert workspace["pending_decisions"] == []
-    assert workspace["safe_next_actions"] == ["start-campaign"]
-
-
-def test_spurious_dry_run_failure_recovery_is_hidden(tmp_path: Path):
-    store = CampaignStore(tmp_path)
-    store.create_campaign(
-        title="Spurious Dry Run Bug Demo",
-        objective="Ignore old dry-run success events that were mislabeled as failures.",
-        template="target_research",
-        budget=1,
-    )
-    run = store.record_run_started("spurious-dry-run-bug-demo", command=["msc", "run", "--dry-run"], pid=44)
-    run_id = run["run_id"]
-    with store.connect() as conn:
-        conn.execute(
-            "UPDATE runs SET status=?, exited_at=?, exit_code=? WHERE id=?",
-            ("dry_run_passed", "2026-05-18T00:00:00Z", 0, run_id),
-        )
-        store._append_event(
-            conn,
-            campaign_id="spurious-dry-run-bug-demo",
-            event_type="CampaignExecutionFailed",
-            actor="runner",
-            payload={"execution_id": run_id, "run_id": run_id, "status": "dry_run_passed", "exit_code": 0},
-        )
-        store._create_approval(
-            conn,
-            campaign_id="spurious-dry-run-bug-demo",
-            target_type="failure_recovery",
-            target_id=run_id,
-            actor="runner",
-            metadata={"run_id": run_id, "exit_code": 0, "reason": None},
-        )
-
-    workspace = store.workspace_read_model("spurious-dry-run-bug-demo")
-
-    assert workspace["campaign"]["status"] == "draft"
-    assert workspace["execution"]["status"] == "not_started"
-    assert workspace["diagnostics"]["legacy_attempts"][0]["status"] == "dry_run_passed"
-    assert workspace["pending_decisions"] == []
-    assert workspace["safe_next_actions"] == ["start-campaign"]
 
 
 def test_campaign_event_projector_is_independent_of_store(tmp_path: Path):
@@ -451,21 +364,21 @@ def test_stage_run_context_writes_run_versioned_contract_artifact(tmp_path: Path
         template="literature_only",
         budget=1,
     )
-    run = store.record_run_started("runtime-demo", command=["msc", "run"], pid=123)
+    run_id = _run_id("runtime_demo")
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "runtime-demo")
-    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run_id)
 
     ctx = StageRunContext.from_env("persona_council")
     assert ctx is not None
     target = ctx.write_required("artifacts/research_proposal.md", "# Proposal")
 
-    assert target == tmp_path / "results" / "runtime-demo" / "runs" / run["run_id"] / "persona_council" / "artifacts" / "research_proposal.md"
+    assert target == tmp_path / "results" / "runtime-demo" / "runs" / run_id / "persona_council" / "artifacts" / "research_proposal.md"
     artifacts = store.artifacts("runtime-demo", "persona_council")["stages"][0]["required_artifacts"]
     proposal = next(artifact for artifact in artifacts if artifact["path"] == "artifacts/research_proposal.md")
     assert proposal["exists"]
     assert proposal["source_role"] == "contract_runtime"
-    assert proposal["workspace"] == str(Path("results") / "runtime-demo" / "runs" / run["run_id"] / "persona_council")
+    assert proposal["workspace"] == str(Path("results") / "runtime-demo" / "runs" / run_id / "persona_council")
 
 
 def test_materialize_brainstorm_outputs_creates_required_contract_artifacts(tmp_path: Path, monkeypatch):
@@ -476,10 +389,10 @@ def test_materialize_brainstorm_outputs_creates_required_contract_artifacts(tmp_
         template="literature_only",
         budget=1,
     )
-    run = store.record_run_started("brainstorm-runtime-demo", command=["msc", "run"], pid=456)
+    run_id = _run_id("brainstorm_runtime_demo")
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "brainstorm-runtime-demo")
-    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run_id)
 
     result = materialize_stage_outputs(
         "brainstorm_agent",
@@ -488,7 +401,7 @@ def test_materialize_brainstorm_outputs_creates_required_contract_artifacts(tmp_
     )
 
     assert "brainstorm" in result["artifacts"]
-    root = tmp_path / "results" / "brainstorm-runtime-demo" / "runs" / run["run_id"] / "brainstorm_agent"
+    root = tmp_path / "results" / "brainstorm-runtime-demo" / "runs" / run_id / "brainstorm_agent"
     assert (root / "artifacts" / "brainstorm.md").exists()
     assert (root / "artifacts" / "approach_menu.json").exists()
     artifacts = store.artifacts("brainstorm-runtime-demo", "brainstorm_agent")["stages"][0]["required_artifacts"]
@@ -506,10 +419,10 @@ def test_materialize_formalize_goals_creates_sdk_goal_contract(tmp_path: Path, m
         template="target_research",
         budget=1,
     )
-    run = store.record_run_started("goal-runtime-demo", command=["msc", "run"], pid=457)
+    run_id = _run_id("goal_runtime_demo")
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "goal-runtime-demo")
-    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run_id)
 
     result = materialize_stage_outputs(
         "formalize_goals_agent",
@@ -518,14 +431,14 @@ def test_materialize_formalize_goals_creates_sdk_goal_contract(tmp_path: Path, m
     )
 
     assert result["research_goals"]["goals"][0]["track"] == "experiment"
-    root = tmp_path / "results" / "goal-runtime-demo" / "runs" / run["run_id"] / "formalize_goals_agent"
+    root = tmp_path / "results" / "goal-runtime-demo" / "runs" / run_id / "formalize_goals_agent"
     assert (root / "artifacts" / "research_goals.json").exists()
     assert (root / "artifacts" / "goal_spec.md").exists()
     completion = store.update_node_status(
         "goal-runtime-demo",
         "formalize_goals_agent",
         "completed",
-        payload={"run_id": run["run_id"]},
+        payload={"run_id": run_id},
     )
     assert completion["status"] == "completed"
     assert completion["completion"]["complete"]
@@ -539,10 +452,10 @@ def test_materialize_control_gate_creates_required_json_artifact(tmp_path: Path,
         template="target_research",
         budget=1,
     )
-    run = store.record_run_started("gate-runtime-demo", command=["msc", "run"], pid=458)
+    run_id = _run_id("gate_runtime_demo")
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "gate-runtime-demo")
-    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run_id)
 
     materialize_stage_outputs(
         "track_decomposition_gate",
@@ -556,14 +469,14 @@ def test_materialize_control_gate_creates_required_json_artifact(tmp_path: Path,
         {},
     )
 
-    root = tmp_path / "results" / "gate-runtime-demo" / "runs" / run["run_id"] / "track_decomposition_gate"
+    root = tmp_path / "results" / "gate-runtime-demo" / "runs" / run_id / "track_decomposition_gate"
     decomposition = json.loads((root / "artifacts" / "track_decomposition.json").read_text())
     assert decomposition["recommended_track"] == "empirical"
     completion = store.update_node_status(
         "gate-runtime-demo",
         "track_decomposition_gate",
         "completed",
-        payload={"run_id": run["run_id"]},
+        payload={"run_id": run_id},
     )
     assert completion["status"] == "completed"
 
@@ -576,10 +489,10 @@ def test_materializer_skips_existing_required_artifacts(tmp_path: Path, monkeypa
         template="target_research",
         budget=1,
     )
-    run = store.record_run_started("skip-existing-demo", command=["msc", "run"], pid=459)
+    run_id = _run_id("skip_existing_demo")
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "skip-existing-demo")
-    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run_id)
 
     ctx = StageRunContext.from_env("persona_council")
     assert ctx is not None
@@ -592,7 +505,7 @@ def test_materializer_skips_existing_required_artifacts(tmp_path: Path, monkeypa
         {"agent_outputs": {"persona_council": "adapter fallback should not overwrite"}},
     )
 
-    root = tmp_path / "results" / "skip-existing-demo" / "runs" / run["run_id"] / "persona_council"
+    root = tmp_path / "results" / "skip-existing-demo" / "runs" / run_id / "persona_council"
     assert (root / "artifacts" / "persona_debate.md").read_text() == "# Native Debate"
     assert (root / "artifacts" / "research_proposal.md").read_text() == "# Native Proposal"
 
@@ -605,12 +518,10 @@ def test_experiment_track_materializer_writes_diagnostic_summary_for_adapter(tmp
         template="target_research",
         budget=1,
     )
-    run = store.record_run_started("experiment-summary-demo", command=["msc", "run"], pid=460)
-    adapter_workspace = tmp_path / "results" / "adapter-run"
+    run_id = _run_id("experiment_summary_demo")
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "experiment-summary-demo")
-    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
-    monkeypatch.setenv("RESULTS_BASE_DIR", str(adapter_workspace))
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run_id)
 
     materialize_stage_outputs(
         "experiment_track",
@@ -618,10 +529,9 @@ def test_experiment_track_materializer_writes_diagnostic_summary_for_adapter(tmp
         {"agent_outputs": {"experiment_track": "Empirical track completed."}},
     )
 
-    summary = json.loads((adapter_workspace / "paper_workspace" / "experiment_track_summary.json").read_text())
-    assert summary["passed"] == ["G1"]
-    assert summary["metrics"]["without_batch_norm"][-1] > summary["metrics"]["with_batch_norm"][-1]
-    assert (adapter_workspace / "paper_workspace" / "experiment_report.tex").exists()
+    root = tmp_path / "results" / "experiment-summary-demo" / "runs" / run_id / "experiment_track"
+    summary = (root / "artifacts" / "experiment_track_summary.md").read_text()
+    assert "Empirical track completed." in summary
 
 
 def test_experimentation_materializer_writes_concrete_toy_results(tmp_path: Path, monkeypatch):
@@ -632,12 +542,10 @@ def test_experimentation_materializer_writes_concrete_toy_results(tmp_path: Path
         template="target_research",
         budget=1,
     )
-    run = store.record_run_started("experiment-results-demo", command=["msc", "run"], pid=461)
-    adapter_workspace = tmp_path / "results" / "adapter-run"
+    run_id = _run_id("experiment_results_demo")
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "experiment-results-demo")
-    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
-    monkeypatch.setenv("RESULTS_BASE_DIR", str(adapter_workspace))
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run_id)
 
     materialize_stage_outputs(
         "experimentation_agent",
@@ -645,11 +553,9 @@ def test_experimentation_materializer_writes_concrete_toy_results(tmp_path: Path
         {"agent_outputs": {"experimentation_agent": "Pseudo-code from adapter model."}},
     )
 
-    root = tmp_path / "results" / "experiment-results-demo" / "runs" / run["run_id"] / "experimentation_agent"
+    root = tmp_path / "results" / "experiment-results-demo" / "runs" / run_id / "experimentation_agent"
     results_md = (root / "artifacts" / "experiment_results.md").read_text()
-    adapter_results = json.loads((adapter_workspace / "paper_workspace" / "experiment_results.json").read_text())
     assert "Without BN" in results_md
-    assert adapter_results["without_batch_norm"][-1] > adapter_results["with_batch_norm"][-1]
 
 
 def test_stage_completion_is_derived_from_required_artifacts(tmp_path: Path, monkeypatch):
@@ -660,8 +566,7 @@ def test_stage_completion_is_derived_from_required_artifacts(tmp_path: Path, mon
         template="literature_only",
         budget=1,
     )
-    run = store.record_run_started("completion-runtime-demo", command=["msc", "run"], pid=789)
-    run_id = run["run_id"]
+    run_id = _run_id("completion_runtime_demo")
 
     incomplete = store.update_node_status(
         "completion-runtime-demo",
@@ -708,10 +613,10 @@ def test_run_scoped_artifacts_are_collapsed_to_researcher_artifact(tmp_path: Pat
         template="literature_only",
         budget=1,
     )
-    run = store.record_run_started("run-scoped-artifact-demo", command=["msc", "run"], pid=790)
+    run_id = _run_id("run_scoped_artifact_demo")
     monkeypatch.setenv("MSC_CAMPAIGN_ROOT", str(tmp_path))
     monkeypatch.setenv("MSC_CAMPAIGN_ID", "run-scoped-artifact-demo")
-    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run["run_id"])
+    monkeypatch.setenv("MSC_CAMPAIGN_RUN_ID", run_id)
 
     ctx = StageRunContext.from_env("literature_review_agent")
     assert ctx is not None
@@ -721,7 +626,7 @@ def test_run_scoped_artifacts_are_collapsed_to_researcher_artifact(tmp_path: Pat
     matrix_rows = [artifact for artifact in artifacts if artifact["path"] == "artifacts/literature_matrix.md"]
     assert len(matrix_rows) == 1
     assert matrix_rows[0]["exists"]
-    assert matrix_rows[0]["metadata"]["run_id"] == run["run_id"]
+    assert matrix_rows[0]["metadata"]["run_id"] == run_id
     assert matrix_rows[0]["audience"] == "deliverable"
 
 

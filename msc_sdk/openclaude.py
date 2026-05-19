@@ -203,7 +203,6 @@ def openclaude_context_pack(
         "evidence": workspace.get("evidence") or {},
         "decisions": workspace.get("decisions") or {},
         "diagnostics_summary": {
-            "legacy_attempt_count": len(((workspace.get("diagnostics") or {}).get("legacy_attempts") or [])),
             "model_policy_violation_count": len(((workspace.get("diagnostics") or {}).get("model_policy_violations") or [])),
             "raw_artifacts_hidden_by_default": True,
         },
@@ -224,7 +223,6 @@ def openclaude_context_pack(
             "graph_source_of_truth": "SDK graph template and campaign graph projection",
             "included_artifacts": "produced deliverables/evidence and user-linked artifacts",
             "excluded_by_default": ["prompt", "log", "system_state", "diagnostic"],
-            "legacy_runtime": "diagnostics only; never product gate or completion authority",
         },
     }
 
@@ -282,8 +280,8 @@ def openclaude_researcher_workflows(campaign_ref: str, *, cli_prefix: str = "msc
         "researcher_questions": [
             "Answer from the campaign workspace read model first.",
             "Use graph node purposes, validators, decisions, feedback, and deliverables as evidence.",
-            "Open raw files only after the read model points to a produced deliverable or diagnostic.",
-            "Do not inspect global run logs or legacy run workspaces to decide campaign posture unless the campaign workspace diagnostics explicitly references that attempt.",
+            "Open raw files only after the read model points to a produced deliverable or diagnostic artifact.",
+            "Do not inspect global run logs or run workspaces to decide campaign posture.",
         ],
         "feedback_and_steering": [
             f"{cli_prefix} campaigns feedback {campaign_ref} --text <feedback> --node <stage_id> --artifact-path <path> --json",
@@ -309,10 +307,9 @@ def openclaude_researcher_workflows(campaign_ref: str, *, cli_prefix: str = "msc
             "OpenClaude should not launch local execution unless the researcher explicitly asks.",
             f"Prefer SDK-native execution with `{cli_prefix} campaigns start {campaign_ref} --json` and `{cli_prefix} campaigns continue {campaign_ref} --json`.",
             "The canonical command shape is `msc campaigns start <campaign> --json`, followed by `msc campaigns continue <campaign> --json` after approvals.",
-            "`msc run` is now a legacy adapter/diagnostic launcher, not the product execution authority.",
-            "If workspace.execution.status is not_started and attempts is empty, treat older legacy process logs as stale diagnostics; recommend SDK-native start rather than repairing legacy prerequisites.",
+            "Do not use any separate run launcher to start, inspect, or repair campaign execution.",
+            "If workspace.execution.status is not_started and attempts is empty, recommend SDK-native start.",
             "Use the campaign objective from the workspace read model as the run task unless the researcher provides a replacement.",
-            "When execution is active, treat raw process logs as diagnostics, not product truth.",
         ],
     }
 
@@ -349,7 +346,7 @@ def openclaude_campaign_harness(
         "researcher_workflows": openclaude_researcher_workflows(campaign_ref, cli_prefix=msc_cli_invocation(root)["shell_prefix"]),
         "guardrails": {
             "source_of_truth": "campaign workspace research aisles plus campaign events",
-            "do_not_use_as_truth": ["run_status.json", "raw process logs", "SQLite tables", "legacy LangGraph internals", "legacy runtime attempts"],
+            "do_not_use_as_truth": ["run_status.json", "raw process logs", "SQLite tables", "LangGraph internals", "run workspaces"],
             "mutation_rule": "OpenClaude may autonomously use public msc campaign commands after researcher intent; never mutate truth by editing files directly",
             "hard_stops": ["do not delete campaigns", "do not delete artifacts", "do not edit repo code", "do not increase budget without an explicit budget command"],
             "secret_rule": "never print API keys or token values",

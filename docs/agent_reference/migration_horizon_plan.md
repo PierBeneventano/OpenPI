@@ -6,9 +6,7 @@ current north star. It folds the researcher intent snapshot in
 the snapshot as the authoritative V0 graph-shape reference and representing it
 through product-facing SDK abstractions.
 
-See [`legacy_pruning_boundary.md`](legacy_pruning_boundary.md) for the current
-line between SDK-native product truth and archived adapter code. See
-[`research_ir_migration.md`](research_ir_migration.md) for the current
+See [`research_ir_migration.md`](research_ir_migration.md) for the current
 research-native event/read-model surface.
 
 ## Target State
@@ -30,9 +28,7 @@ not the product center.
    [`target_research_workflow.md`](target_research_workflow.md) plus
    `msc_sdk.feedback_graph` as the faithful SDK representation of the feedback
    graph.
-2. Make campaign-execution events the only product execution events. Internal
-   adapter indexes may exist, but they must not mint or project legacy run
-   events as truth.
+2. Make campaign-execution events the only product execution events.
 3. Compile the target workflow template into `GraphSpec`/`StageSpec` with all
    29 feedback top-level nodes, nested theory/experiment subgraphs, router
    labels, retry caps, fan-out/fan-in, council policy, tier policy, validators,

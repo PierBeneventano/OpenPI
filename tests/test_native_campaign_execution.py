@@ -55,7 +55,11 @@ def test_sdk_native_campaign_completes_lean_smoke_path(tmp_path: Path):
     with pytest.raises(RuntimeError, match="already human_decision_required"):
         client.start(campaign_id)
     with client.store.connect() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        assert "runs" not in tables
 
     _approve_all(client, first["workspace"])
     second = client.continue_execution(campaign_id)
@@ -80,7 +84,7 @@ def test_sdk_native_campaign_completes_lean_smoke_path(tmp_path: Path):
     assert workspace["evidence"]["claims"][0]["id"] == "C1"
     assert workspace["evidence"]["limitations"]
     assert workspace["decisions"]["gate_verdicts"][0]["gate_id"] == "duality_gate"
-    assert workspace["diagnostics"]["legacy_attempts"] == []
+    assert workspace["diagnostics"]["model_policy_violations"] == []
     assert any(
         artifact["stage_id"] == "writeup_agent"
         and artifact["path"] == "artifacts/final_paper.md"

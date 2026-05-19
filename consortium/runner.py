@@ -100,93 +100,22 @@ def _resolve_project_root() -> Path | None:
         return None
 
 
-def _campaign_root_for_args(args) -> Path:
-    explicit = getattr(args, "campaign_root", None) or os.getenv("MSC_CAMPAIGN_ROOT") or os.getenv("CONSORTIUM_PROJECT_ROOT")
-    if explicit:
-        return Path(explicit).resolve()
-    project_root = _resolve_project_root()
-    return project_root or Path.cwd()
-
-
 def _record_campaign_run_started(args, *, workspace_dir: str | None, command: list[str], dry_run: bool = False) -> str | None:
     campaign_id = getattr(args, "campaign_id", None) or os.getenv("MSC_CAMPAIGN_ID")
     if not campaign_id:
         return None
-    try:
-        from msc_sdk.campaign_store import CampaignStore
-
-        root = _campaign_root_for_args(args)
-        store = CampaignStore(root)
-        callback_host = getattr(args, "callback_host", "127.0.0.1")
-        callback_port = int(getattr(args, "callback_port", 5001))
-        steering = None
-        if not getattr(args, "no_steering", False):
-            http_port = callback_port + 1
-            http_base_url = f"http://{callback_host}:{http_port}"
-            steering = {
-                "host": callback_host,
-                "tcp_port": callback_port,
-                "http_port": http_port,
-                "http_base_url": http_base_url,
-                "status_url": f"{http_base_url}/status",
-                "milestone_status_url": f"{http_base_url}/milestone",
-                "milestone_approval_url": f"{http_base_url}/milestone_response",
-                "human_gates": bool(
-                    getattr(args, "enable_milestone_gates", False)
-                    and not getattr(args, "autonomous_mode", True)
-                ),
-            }
-        record = store.record_run_started(
-            campaign_id,
-            command=command,
-            pid=os.getpid(),
-            graph_version=getattr(args, "campaign_graph_version", None),
-            metadata={
-                "workspace_dir": workspace_dir,
-                "dry_run": dry_run,
-                **({"steering": steering} if steering else {}),
-            },
-        )
-        run_id = record["run_id"]
-        os.environ["MSC_CAMPAIGN_ID"] = campaign_id
-        os.environ["MSC_CAMPAIGN_ROOT"] = str(root)
-        os.environ["MSC_CAMPAIGN_RUN_ID"] = run_id
-        if getattr(args, "campaign_graph_version", None):
-            os.environ["MSC_CAMPAIGN_GRAPH_VERSION"] = str(args.campaign_graph_version)
-        return run_id
-    except Exception:
-        logger.warning("Failed to attach run to campaign %s", campaign_id, exc_info=True)
-        return None
+    logger.warning(
+        "Ignoring --campaign-id for msc run. Campaign execution is owned by `msc campaigns start/continue`."
+    )
+    return None
 
 
 def _record_campaign_run_exited(args, run_id: str | None, *, exit_code: int | None, status: str | None = None, metadata: dict | None = None) -> None:
-    campaign_id = getattr(args, "campaign_id", None) or os.getenv("MSC_CAMPAIGN_ID")
-    if not campaign_id or not run_id:
-        return
-    try:
-        from msc_sdk.campaign_store import CampaignStore
-
-        CampaignStore(_campaign_root_for_args(args)).record_run_exited(
-            campaign_id,
-            run_id,
-            exit_code=exit_code,
-            status=status,
-            metadata=metadata or {},
-        )
-    except Exception:
-        logger.warning("Failed to record campaign run exit for %s", campaign_id, exc_info=True)
+    return
 
 
 def _record_campaign_known_artifacts(args) -> None:
-    campaign_id = getattr(args, "campaign_id", None) or os.getenv("MSC_CAMPAIGN_ID")
-    if not campaign_id:
-        return
-    try:
-        from msc_sdk.campaign_store import CampaignStore
-
-        CampaignStore(_campaign_root_for_args(args)).refresh_artifact_files(campaign_id)
-    except Exception:
-        logger.warning("Failed to refresh campaign artifact index for %s", campaign_id, exc_info=True)
+    return
 
 
 def _resolve_summary_model_id(llm_config: dict | None, model_name: str) -> str:

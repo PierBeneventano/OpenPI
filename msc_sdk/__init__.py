@@ -5,7 +5,7 @@ reads documented artifacts, exposes product read models, and provides stable
 surfaces for CLIs and future UIs.
 """
 
-from .artifacts import inspect_campaign, inspect_run_workspace, list_run_workspaces
+from .artifacts import inspect_campaign
 from .budget import read_budget_workspace
 from .capabilities import CapabilityClient
 from .campaigns import CampaignClient
@@ -21,12 +21,9 @@ from .read_models import (
     ArtifactReadModel,
     BudgetReadModel,
     CampaignReadModel,
-    LogReadModel,
-    RunReadModel,
     StageReadModel,
     campaign_model_from_kernel_run,
 )
-from .runs import RunClient
 from .setup_state import SetupState
 from .stage_contracts import compile_kernel_graph, project_kernel_graph, validate_contract_coverage
 from .validation import ValidationClient
@@ -40,15 +37,12 @@ __all__ = [
     "CampaignStore",
     "CampaignReadModel",
     "EventStore",
-    "LogReadModel",
     "ManifestImportResult",
     "NativeCampaignExecutor",
     "OrchestratorHarness",
     "OpenClaudeReadiness",
     "OpenClawReadiness",
     "ProjectClient",
-    "RunClient",
-    "RunReadModel",
     "SetupState",
     "StageReadModel",
     "ValidationClient",
@@ -57,8 +51,6 @@ __all__ = [
     "import_manifest",
     "inspect_campaign",
     "inspect_project",
-    "inspect_run_workspace",
-    "list_run_workspaces",
     "read_manifest",
     "read_budget_workspace",
     "project_readiness",

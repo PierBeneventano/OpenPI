@@ -137,7 +137,7 @@ assert(uiSource.includes('Purpose'));
 assert(uiSource.includes('Validators'));
 assert(uiSource.includes('Preview'));
 assert(uiSource.includes('target research'));
-assert(uiSource.includes('consortium scaffold'));
+assert(!uiSource.includes('consortium scaffold'));
 assert(uiSource.includes('standard'));
 assert(uiSource.includes('serious'));
 assert(uiSource.includes('consortium_budget'));

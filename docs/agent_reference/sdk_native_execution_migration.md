@@ -15,9 +15,9 @@ msc campaigns start <campaign> --tier lean --budget 25 --output-format markdown 
 msc campaigns continue <campaign> --json
 ```
 
-`msc run` remains available as a legacy adapter/diagnostic launcher, but it is no
-longer the preferred product authority for campaign control flow, gates,
-current stage, artifact completion, or human decisions.
+Campaign control flow, gates, current stage, artifact completion, and human
+decisions now flow only through SDK-native campaign commands and campaign
+events.
 
 ## Implemented V0 Path
 

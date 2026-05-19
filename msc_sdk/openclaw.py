@@ -17,9 +17,7 @@ OPENCLAW_PROFILES = {
         "default": True,
         "capabilities": [
             "read.project",
-            "read.runs",
             "read.campaigns",
-            "read.logs",
             "read.artifacts",
             "read.budget",
             "read.events",

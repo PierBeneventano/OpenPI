@@ -473,7 +473,7 @@ async function createCampaignDraftForSession(session, draft) {
   const outputFormat = oneOf(draft.outputFormat, ['markdown', 'latex'], 'markdown');
   const template = oneOf(
     draft.template,
-    ['target_research', 'consortium_scaffold', 'consortium_budget', 'literature_only', 'experiment_design', 'blank'],
+    ['target_research', 'consortium_budget', 'literature_only', 'experiment_design', 'blank'],
     'target_research',
   );
   const result = await runJson(session.root, [
@@ -1954,8 +1954,8 @@ function buildOpenClaudePrompt(session, userText, contextPack) {
     '',
     `Use the MSc SDK/CLI as the campaign authority. Run commands from ${root} with this repo-local prefix: ${cliPrefix}. Do not assume bare msc is on PATH.`,
     'You may autonomously inspect and mutate campaign state through public SDK commands, including feedback, context links, reruns, reroutes, approvals, and campaign continuation. Do not edit product truth directly, delete campaigns/artifacts, edit repo code, scrape SQLite, or bypass budget limits.',
-    'Use `msc campaigns workspace`, `diagnose-execution`, and campaign events as execution truth. Legacy `msc run` logs, global run workspaces, missing LaTeX tools, status JSON, and raw process logs are diagnostics only unless the campaign read model explicitly attaches them to the current SDK-native execution.',
-    'If a campaign is `not_started` with no SDK-native attempts, the safe next action is SDK-native `msc campaigns start <campaign> --json`, not repairing old legacy launcher prerequisites.',
+    'Use `msc campaigns workspace`, `diagnose-execution`, and campaign events as execution truth. Do not use separate run logs, run workspaces, missing LaTeX tools, status JSON, or raw process logs to decide campaign posture.',
+    'If a campaign is `not_started` with no SDK-native attempts, the safe next action is SDK-native `msc campaigns start <campaign> --json`.',
     '',
     'Current compact campaign context:',
     contextJson

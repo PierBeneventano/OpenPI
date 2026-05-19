@@ -9,9 +9,7 @@ from typing import Any
 READ_CAPABILITIES = {
     "read.project",
     "read.artifacts",
-    "read.runs",
     "read.campaigns",
-    "read.logs",
     "read.budget",
     "read.events",
     "read.capabilities",
@@ -45,9 +43,7 @@ PROFILE_CAPABILITIES = {
 CAPABILITY_DESCRIPTIONS = {
     "read.project": "Inspect project setup and readiness.",
     "read.artifacts": "Inspect raw artifacts and derived manifests.",
-    "read.runs": "List and inspect run workspaces.",
     "read.campaigns": "List and inspect campaign specs and status.",
-    "read.logs": "Read log file metadata and tails.",
     "read.budget": "Read budget state and ledger summaries.",
     "read.events": "Read product-shell event logs.",
     "read.capabilities": "Read capability profiles and explanations.",

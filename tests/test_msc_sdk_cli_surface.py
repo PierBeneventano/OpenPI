@@ -9,7 +9,6 @@ from click.testing import CliRunner
 
 from consortium.cli.main import cli
 from msc_sdk.campaigns import CampaignClient
-from msc_sdk.runs import RunClient
 from msc_sdk.validation import ValidationClient
 
 
@@ -43,36 +42,6 @@ def _make_campaign(tmp_path: Path) -> Path:
     return Path("demo-campaign")
 
 
-def test_run_client_and_cli_list_inspect_budget_logs_match(tmp_path: Path):
-    runner = CliRunner()
-    results_dir = tmp_path / "results"
-    run_dir = _make_run(results_dir)
-
-    sdk_run = RunClient(results_dir).inspect(run_dir.name).to_dict()
-
-    list_result = _invoke(
-        runner, ["runs", "list", "--results-dir", str(results_dir), "--json"]
-    )
-    inspect_result = _invoke(
-        runner, ["runs", "inspect", run_dir.name, "--results-dir", str(results_dir), "--json"]
-    )
-    budget_result = _invoke(
-        runner, ["runs", "budget", run_dir.name, "--results-dir", str(results_dir), "--json"]
-    )
-    logs_result = _invoke(
-        runner, ["runs", "logs", run_dir.name, "--results-dir", str(results_dir), "--json"]
-    )
-
-    assert list_result.exit_code == 0
-    assert inspect_result.exit_code == 0
-    assert budget_result.exit_code == 0
-    assert logs_result.exit_code == 0
-    assert json.loads(list_result.output)["runs"][0]["run_id"] == sdk_run["run_id"]
-    assert json.loads(inspect_result.output)["status"] == "completed"
-    assert json.loads(budget_result.output)["budget"]["total_usd"] == 0.12
-    assert json.loads(logs_result.output)["logs"][0]["path"] == "logs/run.log"
-
-
 def test_artifacts_and_campaigns_cli_emit_dashboard_json(tmp_path: Path):
     runner = CliRunner()
     results_dir = tmp_path / "results"
@@ -103,7 +72,7 @@ def test_campaign_client_and_selftest_expose_parity_contract(tmp_path: Path):
     agent_contract = validation.operation_contract("read_only")
 
     assert graph["nodes"][0]["id"] == "persona_council"
-    assert any(command["operation"] == "runs.inspect" for command in commands)
+    assert not any(command["operation"].startswith("runs.") for command in commands)
     assert any(command["operation"] == "campaigns.graph" for command in commands)
     assert any(command["operation"] == "campaigns.create" for command in commands)
     assert any(command["operation"] == "campaigns.explain_node" for command in commands)

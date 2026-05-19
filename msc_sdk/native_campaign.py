@@ -1,9 +1,7 @@
 """SDK-native campaign execution.
 
-This module is the production path away from legacy LangGraph control truth.
-The legacy runner may still exist as an adapter, but this executor treats the
-SDK graph, kernel events, artifact contracts, and campaign read models as the
-authoritative product surface.
+This executor treats the SDK graph, kernel events, artifact contracts, and
+campaign read models as the authoritative product surface.
 """
 
 from __future__ import annotations

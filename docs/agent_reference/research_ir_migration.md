@@ -15,11 +15,11 @@ made from campaign events and exposed through five research aisles:
 - `decisions`: pending decisions, gate verdicts, objections, feedback, and safe
   next actions.
 - `diagnostics`: raw events, raw/diagnostic artifacts, model policy violations,
-  completion evaluations, and legacy runtime attempts.
+  and completion evaluations.
 
-Legacy live-run attempts are diagnostics only. They may appear under
-`diagnostics.legacy_attempts`, but they cannot mark product execution as
-running, completed, failed, or gate-passed.
+Separate run workspaces and process logs are no longer campaign diagnostics.
+They cannot mark product execution as running, completed, failed, or
+gate-passed.
 
 ## First-Class Research Objects
 
@@ -55,8 +55,8 @@ and pause for human approval.
 
 OpenClaude should prefer the five aisle fields from
 `msc campaigns workspace <campaign> --json` and the context pack. Raw files,
-status JSON, logs, prompts, process IDs, and legacy runtime attempts are
-diagnostics only.
+status JSON, logs, prompts, process IDs, and run workspaces are outside campaign
+truth.
 
 Default workspace reads are cockpit-safe: raw campaign events are summarized by
 count and command pointer, not embedded. Use

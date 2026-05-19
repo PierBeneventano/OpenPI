@@ -1304,7 +1304,6 @@ function NewCampaignModal({ onClose }) {
           </select></label>
           <label>Template<select value={draft.template} onChange={(event) => update('template', event.target.value)}>
             <option value="target_research">target research</option>
-            <option value="consortium_scaffold">consortium scaffold (legacy alias)</option>
             <option value="consortium_budget">consortium budget</option>
             <option value="literature_only">literature only</option>
             <option value="experiment_design">experiment design</option>

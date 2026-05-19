@@ -2,7 +2,7 @@
 
 OpenClaude is the primary AI coworker over the local SDK. It must use campaign
 read models and public SDK/CLI operations; it must not mutate SQLite, status
-JSON, raw artifacts, or LangGraph internals directly.
+JSON, raw artifacts, run workspaces, or graph internals directly.
 
 ## Truth Sources
 
@@ -23,14 +23,11 @@ The workspace aisles are the preferred orientation surface:
 - `decisions`
 - `diagnostics`
 
-Raw logs, status files, prompts, process IDs, and legacy run attempts are
-diagnostics only.
-
-If `workspace.execution.status` is `not_started` and the workspace lists no
-SDK-native attempts, older legacy process logs are stale diagnostics. They may
-explain a past dashboard failure, but they should not drive the recommended
-next action. The next action should remain SDK-native campaign start unless the
-current campaign read model says otherwise.
+Raw logs, status files, prompts, process IDs, and run workspaces are not
+campaign state. If `workspace.execution.status` is `not_started` and the
+workspace lists no SDK-native attempts, the next action should remain
+SDK-native campaign start unless the current campaign read model says
+otherwise.
 
 ## Allowed Mutations
 

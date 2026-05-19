@@ -131,10 +131,9 @@ def test_openclaude_campaign_harness_exposes_workspace_and_guardrails(tmp_path: 
     assert "campaigns rewind harness-demo" in steering_guidance
     assert "missing SDK capability" in steering_guidance
     assert "msc campaigns start" in execution_guidance
-    assert "legacy adapter/diagnostic launcher" in execution_guidance
-    assert "stale diagnostics" in execution_guidance
+    assert "separate run launcher" in execution_guidance
     researcher_guidance = "\n".join(data["researcher_workflows"]["researcher_questions"])
-    assert "global run logs" in researcher_guidance
+    assert "run workspaces" in researcher_guidance
     assert "run --campaign-id harness-demo" not in execution_guidance
     assert "run_status.json" in data["guardrails"]["do_not_use_as_truth"]
     assert "not-a-real-openrouter-key" not in result.output
@@ -174,8 +173,8 @@ def test_openclaude_context_pack_prefers_linked_deliverables(tmp_path: Path, mon
         template="literature_only",
         budget=1,
     )
-    run = store.record_run_started("context-demo", command=["msc", "run"], pid=123)
-    workspace = repo / "results" / "context-demo" / "runs" / run["run_id"] / "literature_review_agent"
+    run_id = "id_context_demo"
+    workspace = repo / "results" / "context-demo" / "runs" / run_id / "literature_review_agent"
     artifact = workspace / "artifacts" / "literature_matrix.md"
     artifact.parent.mkdir(parents=True)
     artifact.write_text("# Matrix\n", encoding="utf-8")
@@ -186,7 +185,7 @@ def test_openclaude_context_pack_prefers_linked_deliverables(tmp_path: Path, mon
         workspace=str(workspace.relative_to(repo)),
         kind="md",
         required=True,
-        run_id=run["run_id"],
+        run_id=run_id,
     )
     store.link_context(
         "context-demo",
@@ -207,7 +206,6 @@ def test_openclaude_context_pack_prefers_linked_deliverables(tmp_path: Path, mon
     assert pack["recent_feedback"][0]["target"]["scope"] == "artifact"
     assert pack["selected_artifacts"][0]["path"] == "artifacts/literature_matrix.md"
     assert "prompt" in pack["context_policy"]["excluded_by_default"]
-    assert pack["context_policy"]["legacy_runtime"] == "diagnostics only; never product gate or completion authority"
 
 
 def test_openclaude_skill_preserves_kernel_guardrails():

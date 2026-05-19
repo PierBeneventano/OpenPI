@@ -1,4 +1,4 @@
-"""Contract-native artifact runtime helpers for campaign-attached runs."""
+"""Contract-native artifact runtime helpers for SDK campaign execution."""
 
 from __future__ import annotations
 
@@ -190,39 +190,6 @@ def default_approach_menu(output: str) -> dict[str, Any]:
     }
 
 
-def _legacy_workspace() -> Path | None:
-    value = os.getenv("RESULTS_BASE_DIR")
-    if not value:
-        return None
-    return Path(value).resolve()
-
-
-def _legacy_artifact_text(artifact: ArtifactContract) -> str | None:
-    workspace = _legacy_workspace()
-    if workspace is None:
-        return None
-    for legacy_path in artifact.legacy_paths:
-        candidate = (workspace / legacy_path).resolve()
-        try:
-            if candidate.is_file():
-                return candidate.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            return None
-    return None
-
-
-def _write_legacy_file(rel_path: str, content: str | dict[str, Any] | list[Any]) -> None:
-    workspace = _legacy_workspace()
-    if workspace is None:
-        return
-    target = workspace / rel_path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if isinstance(content, (dict, list)):
-        target.write_text(json.dumps(content, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    else:
-        target.write_text(str(content), encoding="utf-8")
-
-
 def _stage_text(stage_id: str, state: dict[str, Any], result: dict[str, Any]) -> str:
     merged_outputs = {
         **(state.get("agent_outputs") or {}),
@@ -316,8 +283,8 @@ def _markdown_artifact(stage_id: str, artifact_path: str, task: str, output: str
         body = output
     else:
         body = (
-            f"This artifact was materialized by the legacy adapter for `{stage_id}`. "
-            "The stage completed without a dedicated file for this SDK contract."
+            f"This artifact was materialized by the SDK contract runtime for `{stage_id}`. "
+            "The stage completed without a dedicated adapter output for this contract."
         )
     return (
         f"# {_title(stage_id)}\n\n"
@@ -342,7 +309,7 @@ def _json_artifact(stage_id: str, artifact_path: str, task: str, output: str, st
     if stage_id == "experimentation_agent" and artifact_path.endswith("experiment_manifest.json"):
         return {
             "status": "completed",
-            "runner": "legacy_adapter",
+            "runner": "sdk_contract_runtime",
             "artifacts": ["artifacts/experiment_results.md"],
             "commands": ["deterministic_numpy_smoke_simulation"],
             "metrics": _toy_spectral_norm_result(),
@@ -354,7 +321,7 @@ def _json_artifact(stage_id: str, artifact_path: str, task: str, output: str, st
             "status": "passed",
             "failed_lenses": [],
             "objections": [],
-            "rationale": output[:2000] or "No contradiction was surfaced by the legacy duality stage.",
+            "rationale": output[:2000] or "No contradiction was surfaced by the duality stage.",
         }
     if stage_id == "duality_gate":
         return {"decision": "pass", "next": "resource_preparation_agent", "rationale": "Duality check passed."}
@@ -392,16 +359,11 @@ def _write_contract_artifact(
     state: dict[str, Any],
     metadata: dict[str, Any],
 ) -> str:
-    legacy_text = _legacy_artifact_text(artifact)
-    if legacy_text is not None and artifact.kind != "json":
-        content: str | dict[str, Any] = legacy_text
-    elif artifact.kind == "json":
-        content = _json_artifact(ctx.stage_id, artifact.path, task, output or legacy_text or "", state)
+    if artifact.kind == "json":
+        content: str | dict[str, Any] = _json_artifact(ctx.stage_id, artifact.path, task, output, state)
     else:
-        content = _markdown_artifact(ctx.stage_id, artifact.path, task, output or legacy_text or "", state)
+        content = _markdown_artifact(ctx.stage_id, artifact.path, task, output, state)
     ctx.write_required(artifact.path, content, kind=artifact.kind, metadata=metadata)
-    for legacy_path in artifact.legacy_paths:
-        _write_legacy_file(legacy_path, content)
     return str(ctx.workspace_rel / artifact.path)
 
 
@@ -412,66 +374,6 @@ def _existing_required_artifacts(ctx: StageRunContext) -> dict[str, str]:
         if target.is_file() and target.stat().st_size > 0:
             existing[Path(artifact.path).stem] = str(ctx.workspace_rel / artifact.path)
     return existing
-
-
-def _write_experiment_track_legacy_summary(task: str, output: str) -> None:
-    metrics = _toy_spectral_norm_result()
-    summary = {
-        "passed": ["G1"],
-        "partial": [],
-        "failed": [],
-        "goal_coverage": {
-            "G1": {
-                "status": "passed",
-                "evidence": "Toy spectral norm trajectories were materialized in experiment_results.json.",
-            }
-        },
-        "metrics": metrics,
-        "output_files": {
-            "experiment_report_tex": "paper_workspace/experiment_report.tex",
-            "experiment_track_summary": "paper_workspace/experiment_track_summary.json",
-        },
-        "notes": output[:2000],
-    }
-    _write_legacy_file("paper_workspace/experiment_track_summary.json", summary)
-    _write_legacy_file(
-        "paper_workspace/experiment_report.tex",
-        (
-            "\\section{Toy Empirical Comparison}\n"
-            f"{task or 'A toy empirical comparison was executed.'}\n\n"
-            f"No batch normalization final spectral norm: {metrics['without_batch_norm'][-1]:.3f}. "
-            f"Batch normalization final spectral norm: {metrics['with_batch_norm'][-1]:.3f}. "
-            "In this deterministic smoke result, batch normalization shows slower spectral norm growth.\n"
-        ),
-    )
-
-
-def _write_experiment_result_legacy_evidence(output: str) -> None:
-    metrics = _toy_spectral_norm_result()
-    _write_legacy_file(
-        "paper_workspace/experiment_results.json",
-        {
-            "status": "completed",
-            "primary_metric": "spectral_norm_growth",
-            "epochs": metrics["epochs"],
-            "with_batch_norm": metrics["with_batch_norm"],
-            "without_batch_norm": metrics["without_batch_norm"],
-            "delta_final": round(metrics["without_batch_norm"][-1] - metrics["with_batch_norm"][-1], 4),
-            "summary": "The no-BN toy trajectory grew faster than the BN trajectory in the deterministic smoke comparison.",
-        },
-    )
-    _write_legacy_file(
-        "experiment_workspace/results_summary.json",
-        {
-            "status": "completed",
-            "epochs": metrics["epochs"],
-            "with_batch_norm": metrics["with_batch_norm"],
-            "without_batch_norm": metrics["without_batch_norm"],
-            "summary": "Toy spectral norm trajectories are present and sufficient for the live SDK smoke test.",
-            "artifacts": ["paper_workspace/experiment_results.json"],
-        },
-    )
-    _write_legacy_file("experiment_workspace/experiment_report.md", _experiment_results_markdown())
 
 
 def _toy_spectral_norm_result() -> dict[str, list[float] | list[int]]:
@@ -586,11 +488,9 @@ def materialize_stage_outputs(stage_id: str, state: dict[str, Any], result: dict
             kind="json",
             metadata={"run_id": ctx.run_id, "materializer": "default_research_goals"},
         )
-        _write_legacy_file("paper_workspace/research_goals.json", research_goals)
         track_decomposition = result.get("track_decomposition") or state.get("track_decomposition")
         if not isinstance(track_decomposition, dict):
             track_decomposition = _default_track_decomposition({**state, "research_goals": research_goals})
-        _write_legacy_file("paper_workspace/track_decomposition.json", track_decomposition)
         ctx.write_required(
             "artifacts/goal_spec.md",
             _markdown_artifact(stage_id, "artifacts/goal_spec.md", task, stage_output, {**state, "research_goals": research_goals}),
@@ -612,12 +512,8 @@ def materialize_stage_outputs(stage_id: str, state: dict[str, Any], result: dict
                 task=task,
                 output=stage_output,
                 state={**state, **result},
-                metadata={"run_id": ctx.run_id, "materializer": "legacy_adapter_contract"},
+                metadata={"run_id": ctx.run_id, "materializer": "sdk_contract_runtime"},
             )
-        if stage_id in {"experimentation_agent", "experiment_verification_agent"}:
-            _write_experiment_result_legacy_evidence(stage_output)
-        if stage_id in {"experiment_transcription_agent", "experiment_track"}:
-            _write_experiment_track_legacy_summary(task, stage_output)
 
     if written:
         missing = ctx.validate_required()

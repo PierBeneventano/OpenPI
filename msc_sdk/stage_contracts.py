@@ -45,7 +45,6 @@ class ArtifactContract:
     kind: str = "markdown"
     required: bool = True
     description: str = ""
-    legacy_paths: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

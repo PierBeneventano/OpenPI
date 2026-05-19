@@ -14,7 +14,6 @@ from .campaigns import CampaignClient
 from .events import EventStore, redact
 from .manifest import write_manifest
 from .project import ProjectClient
-from .runs import RunClient
 
 
 def _now() -> str:
@@ -70,10 +69,6 @@ class OrchestratorHarness:
     def inspect_project(self) -> dict[str, Any]:
         data = ProjectClient(self.root).inspect().to_dict()
         return {"ok": True, "project": data}
-
-    def runs(self, *, limit: int | None = 10, results_dir: str | Path = "results") -> dict[str, Any]:
-        runs = RunClient(self.root / results_dir).list(limit=limit)
-        return {"ok": True, "runs": [run.to_dict() for run in runs]}
 
     def campaigns(self) -> dict[str, Any]:
         return {"ok": True, "campaigns": CampaignClient(self.root).list()}

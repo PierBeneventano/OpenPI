@@ -1,8 +1,8 @@
-"""Diagnostic source contracts derived from the original research engine.
+"""Feedback-derived source contracts for the SDK-native research graph.
 
-These definitions preserve node ids, routes, and artifact hints from the
-original graph as structured SDK data. They are source material for the
-SDK-native target graph, not an execution authority.
+These definitions preserve node ids, routes, and artifact contracts as
+structured SDK data. They are source material for the SDK-native target graph,
+not an execution authority.
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ from __future__ import annotations
 from msc_sdk.stage_contracts import ArtifactContract, BudgetPolicy, RouteContract, StageContract
 
 
-def a(path: str, kind: str = "markdown", *, required: bool = True, description: str = "", legacy: tuple[str, ...] = ()) -> ArtifactContract:
-    return ArtifactContract(path=path, kind=kind, required=required, description=description, legacy_paths=legacy)
+def a(path: str, kind: str = "markdown", *, required: bool = True, description: str = "") -> ArtifactContract:
+    return ArtifactContract(path=path, kind=kind, required=required, description=description)
 
 
 def r(target: str, kind: str = "stage_order", *, condition: str = "always", description: str = "") -> RouteContract:
@@ -36,8 +36,8 @@ CONTRACTS: tuple[StageContract, ...] = (
         purpose="Frame the research task through multiple expert personas, debate assumptions, and synthesize the initial research posture.",
         inputs=("objective",),
         required_artifacts=(
-            a("artifacts/persona_debate.md", description="Persona debate transcript and competing perspectives.", legacy=("paper_workspace/persona_council.md",)),
-            a("artifacts/research_proposal.md", description="Initial synthesized research proposal.", legacy=("paper_workspace/research_proposal.md",)),
+            a("artifacts/persona_debate.md", description="Persona debate transcript and competing perspectives."),
+            a("artifacts/research_proposal.md", description="Initial synthesized research proposal."),
         ),
         optional_artifacts=(a("artifacts/persona_votes.json", "json", required=False),),
         validators=("proposal_not_empty", "personas_reached_synthesis"),
@@ -55,8 +55,8 @@ CONTRACTS: tuple[StageContract, ...] = (
         purpose="Search, read, and organize related work; decide whether the proposed direction is feasible and novel enough to continue.",
         inputs=("persona_council", "objective"),
         required_artifacts=(
-            a("artifacts/literature_matrix.md", description="Related-work matrix and citations.", legacy=("paper_workspace/literature_review.md",)),
-            a("artifacts/lit_review_feasibility.json", "json", description="Feasibility and novelty decision.", legacy=("paper_workspace/lit_review_feasibility.json",)),
+            a("artifacts/literature_matrix.md", description="Related-work matrix and citations."),
+            a("artifacts/lit_review_feasibility.json", "json", description="Feasibility and novelty decision."),
         ),
         optional_artifacts=(a("artifacts/source_bibliography.bib", "bib", required=False),),
         validators=("citations_present", "feasibility_json_schema"),
@@ -92,7 +92,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         purpose="Generate hypotheses, approach menus, and priority ordering for theory and empirical execution.",
         inputs=("lit_review_gate", "persona_council"),
         required_artifacts=(
-            a("artifacts/brainstorm.md", description="Hypotheses and approach menu.", legacy=("paper_workspace/brainstorm.md",)),
+            a("artifacts/brainstorm.md", description="Hypotheses and approach menu."),
             a("artifacts/approach_menu.json", "json", description="Structured approach options and priorities."),
         ),
         optional_artifacts=(a("artifacts/open_questions.md", required=False),),
@@ -143,7 +143,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         purpose="Convert ideas into explicit hypotheses, success criteria, track assignments, and measurable objectives.",
         inputs=("formalize_goals_entry",),
         required_artifacts=(
-            a("artifacts/research_goals.json", "json", description="Structured goals, hypotheses, and success criteria.", legacy=("paper_workspace/research_goals.json",)),
+            a("artifacts/research_goals.json", "json", description="Structured goals, hypotheses, and success criteria."),
             a("artifacts/goal_spec.md", description="Human-readable goal contract."),
         ),
         optional_artifacts=(a("artifacts/goal_risks.md", required=False),),
@@ -161,7 +161,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Write the plan that a researcher can approve before costly execution tracks begin.",
         inputs=("formalize_goals_agent",),
-        required_artifacts=(a("artifacts/research_plan.md", description="Execution plan and rationale.", legacy=("paper_workspace/research_plan.md",)),),
+        required_artifacts=(a("artifacts/research_plan.md", description="Execution plan and rationale."),),
         optional_artifacts=(a("artifacts/planning_notes.md", required=False),),
         validators=("plan_mentions_goals", "plan_has_execution_steps"),
         tool_families=("llm", "markdown_writer"),
@@ -177,7 +177,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="router",
         purpose="Split the plan into theory and empirical questions and decide which tracks should run.",
         inputs=("research_plan_writeup_agent",),
-        required_artifacts=(a("artifacts/track_decomposition.json", "json", legacy=("paper_workspace/track_decomposition.json",)),),
+        required_artifacts=(a("artifacts/track_decomposition.json", "json"),),
         validators=("track_decomposition_schema",),
         tool_families=("artifact_validator", "router"),
         budget_policy=CONTROL_BUDGET,
@@ -210,7 +210,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="track",
         purpose="Wrapper around the proof-oriented subgraph for theory questions.",
         inputs=("milestone_goals",),
-        required_artifacts=(a("artifacts/theory_track_summary.md", legacy=("paper_workspace/theory_track_summary.md",)),),
+        required_artifacts=(a("artifacts/theory_track_summary.md"),),
         optional_artifacts=(a("artifacts/theory_failure_report.md", required=False),),
         validators=("theory_track_status_present",),
         tool_families=("langgraph_subgraph", "math_agents", "tree_search_optional"),
@@ -229,7 +229,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Find mathematical prior art, lemmas, and proof strategies relevant to the theory questions.",
         inputs=("theory_track",),
-        required_artifacts=(a("artifacts/math_literature.md", legacy=("paper_workspace/math_literature.md",)),),
+        required_artifacts=(a("artifacts/math_literature.md"),),
         optional_artifacts=(a("artifacts/math_bibliography.bib", "bib", required=False),),
         validators=("math_sources_present",),
         tool_families=("paper_search", "arxiv", "llm"),
@@ -245,7 +245,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Propose theorem statements, proof sketches, and dependency structure.",
         inputs=("math_literature_agent",),
-        required_artifacts=(a("artifacts/theorem_proposals.md", legacy=("paper_workspace/theorem_proposals.md",)),),
+        required_artifacts=(a("artifacts/theorem_proposals.md"),),
         optional_artifacts=(a("artifacts/lemma_dependency_graph.json", "json", required=False),),
         validators=("theorem_proposals_nonempty",),
         tool_families=("llm", "math_reasoning"),
@@ -275,7 +275,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Attempt formal or semi-formal proofs for the selected claims.",
         inputs=("goal_tag_validation_gate",),
-        required_artifacts=(a("artifacts/proof_attempt.md", legacy=("paper_workspace/proof_attempt.md",)),),
+        required_artifacts=(a("artifacts/proof_attempt.md"),),
         optional_artifacts=(a("artifacts/proof_obstacles.md", required=False),),
         validators=("proof_attempt_present",),
         tool_families=("llm", "proof_reasoning", "python_optional"),
@@ -291,7 +291,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Check proofs adversarially for gaps, unstated assumptions, and invalid derivations.",
         inputs=("math_prover_agent",),
-        required_artifacts=(a("artifacts/rigorous_verification.md", legacy=("paper_workspace/rigorous_verification.md",)),),
+        required_artifacts=(a("artifacts/rigorous_verification.md"),),
         optional_artifacts=(a("artifacts/proof_gap_report.json", "json", required=False),),
         validators=("verification_verdict_present",),
         tool_families=("llm", "adversarial_verification"),
@@ -322,7 +322,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Use computational checks or toy examples to probe whether theory claims are plausible.",
         inputs=("human_review_gate",),
-        required_artifacts=(a("artifacts/math_empirical_checks.md", legacy=("paper_workspace/math_empirical_checks.md",)),),
+        required_artifacts=(a("artifacts/math_empirical_checks.md"),),
         optional_artifacts=(a("artifacts/math_check_results.json", "json", required=False),),
         validators=("empirical_check_summary_present",),
         tool_families=("python", "experiments", "llm"),
@@ -338,7 +338,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Convert verified theory outputs into paper-ready proof text.",
         inputs=("math_empirical_verifier_agent",),
-        required_artifacts=(a("artifacts/proof_section.md", legacy=("paper_workspace/proof_section.md",)),),
+        required_artifacts=(a("artifacts/proof_section.md"),),
         optional_artifacts=(a("artifacts/proof_section.tex", "tex", required=False),),
         validators=("proof_text_ready_for_writeup",),
         tool_families=("llm", "latex"),
@@ -371,7 +371,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="track",
         purpose="Wrapper around the empirical subgraph for designing, running, verifying, and transcribing experiments.",
         inputs=("milestone_goals",),
-        required_artifacts=(a("artifacts/experiment_track_summary.md", legacy=("paper_workspace/experiment_track_summary.md",)),),
+        required_artifacts=(a("artifacts/experiment_track_summary.md"),),
         optional_artifacts=(a("artifacts/experiment_failure_report.md", required=False),),
         validators=("experiment_track_status_present",),
         tool_families=("langgraph_subgraph", "python", "experiments"),
@@ -390,7 +390,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Find datasets, baselines, metrics, and experimental methods relevant to the empirical questions.",
         inputs=("experiment_track",),
-        required_artifacts=(a("artifacts/experiment_literature.md", legacy=("paper_workspace/experiment_literature.md",)),),
+        required_artifacts=(a("artifacts/experiment_literature.md"),),
         optional_artifacts=(a("artifacts/experiment_bibliography.bib", "bib", required=False),),
         validators=("experiment_sources_present",),
         tool_families=("paper_search", "arxiv", "llm"),
@@ -405,7 +405,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Specify minimal experiments, baselines, metrics, and expected result tables.",
         inputs=("experiment_literature_agent",),
-        required_artifacts=(a("artifacts/experiment_plan.md", legacy=("paper_workspace/experiment_plan.md", "paper_workspace/experiments_to_run_later.md")),),
+        required_artifacts=(a("artifacts/experiment_plan.md"),),
         optional_artifacts=(a("artifacts/experiment_config.json", "json", required=False),),
         validators=("experiment_plan_present", "metrics_defined"),
         tool_families=("llm", "python_planning"),
@@ -422,7 +422,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         purpose="Implement and run local experiments, leaving reproducible code and raw results.",
         inputs=("experiment_design_agent",),
         required_artifacts=(
-            a("artifacts/experiment_results.md", legacy=("paper_workspace/experiment_results.md",)),
+            a("artifacts/experiment_results.md"),
             a("artifacts/experiment_manifest.json", "json"),
         ),
         optional_artifacts=(
@@ -443,7 +443,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Check experiment code, metrics, and results for reproducibility and correctness.",
         inputs=("experimentation_agent",),
-        required_artifacts=(a("artifacts/experiment_verification.md", legacy=("paper_workspace/experiment_verification.md",)),),
+        required_artifacts=(a("artifacts/experiment_verification.md"),),
         optional_artifacts=(a("artifacts/verification_failures.json", "json", required=False),),
         validators=("verification_verdict_present",),
         tool_families=("python", "llm", "adversarial_verification"),
@@ -459,7 +459,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Turn verified empirical findings into paper-ready text, tables, and figure descriptions.",
         inputs=("experiment_verification_agent",),
-        required_artifacts=(a("artifacts/experiment_section.md", legacy=("paper_workspace/experiment_section.md",)),),
+        required_artifacts=(a("artifacts/experiment_section.md"),),
         optional_artifacts=(a("artifacts/experiment_tables.md", required=False),),
         validators=("experiment_section_ready_for_writeup",),
         tool_families=("llm", "markdown_writer"),
@@ -475,7 +475,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="control",
         purpose="Merge theory and experiment track outputs into one state for synthesis.",
         inputs=("theory_track", "experiment_track"),
-        required_artifacts=(a("artifacts/track_merge_summary.md", legacy=("paper_workspace/track_merge_summary.md",)),),
+        required_artifacts=(a("artifacts/track_merge_summary.md"),),
         validators=("track_outputs_collected",),
         tool_families=("state_mapper",),
         budget_policy=CONTROL_BUDGET,
@@ -489,7 +489,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="router",
         purpose="Decide whether execution is sufficient, needs goal refinement, or requires a fundamental rethink.",
         inputs=("track_merge",),
-        required_artifacts=(a("artifacts/completion_verification.json", "json", legacy=("paper_workspace/completion_verification.json",)),),
+        required_artifacts=(a("artifacts/completion_verification.json", "json"),),
         validators=("completion_decision_present",),
         tool_families=("artifact_validator", "router"),
         budget_policy=CONTROL_BUDGET,
@@ -508,7 +508,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Synthesize theory and experiment outcomes into claims, limitations, and paper-ready result narratives.",
         inputs=("verify_completion",),
-        required_artifacts=(a("artifacts/formalized_results.md", legacy=("paper_workspace/formalized_results.md",)),),
+        required_artifacts=(a("artifacts/formalized_results.md"),),
         optional_artifacts=(a("artifacts/claims_and_limitations.json", "json", required=False),),
         validators=("claims_tied_to_evidence",),
         tool_families=("llm", "markdown_writer"),
@@ -524,7 +524,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Critique whether theory and empirical claims support each other or reveal a contradiction.",
         inputs=("formalize_results_agent",),
-        required_artifacts=(a("artifacts/duality_check.json", "json", legacy=("paper_workspace/duality_check.json",)),),
+        required_artifacts=(a("artifacts/duality_check.json", "json"),),
         validators=("duality_verdict_present",),
         tool_families=("llm", "adversarial_verification"),
         budget_policy=AGENT_BUDGET,
@@ -557,7 +557,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Resolve duality or novelty concerns by searching for targeted prior work before re-brainstorming.",
         inputs=("duality_gate",),
-        required_artifacts=(a("artifacts/followup_literature.md", legacy=("paper_workspace/followup_literature.md",)),),
+        required_artifacts=(a("artifacts/followup_literature.md"),),
         validators=("followup_findings_present",),
         tool_families=("paper_search", "arxiv", "llm"),
         budget_policy=AGENT_BUDGET,
@@ -571,7 +571,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Prepare figures, tables, citations, and workspace resources for writing.",
         inputs=("duality_gate", "formalize_results_agent"),
-        required_artifacts=(a("artifacts/resource_manifest.json", "json", legacy=("paper_workspace/resource_manifest.json",)),),
+        required_artifacts=(a("artifacts/resource_manifest.json", "json"),),
         optional_artifacts=(a("artifacts/figure_table_plan.md", required=False),),
         validators=("resource_manifest_schema",),
         tool_families=("filesystem", "llm", "citation_tools"),
@@ -587,7 +587,7 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="control",
         purpose="Write the paper artifact contract that downstream writing and validation must satisfy.",
         inputs=("resource_preparation_agent",),
-        required_artifacts=(a("artifacts/paper_contract.json", "json", legacy=("paper_workspace/paper_contract.json",)),),
+        required_artifacts=(a("artifacts/paper_contract.json", "json"),),
         validators=("paper_contract_schema",),
         tool_families=("artifact_contract", "filesystem"),
         budget_policy=CONTROL_BUDGET,
@@ -602,10 +602,10 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Compose the paper-like artifact from validated research outputs.",
         inputs=("paper_contract_builder",),
-        required_artifacts=(a("artifacts/final_paper.md", description="Primary paper draft.", legacy=("paper_workspace/final_paper.md",)),),
+        required_artifacts=(a("artifacts/final_paper.md", description="Primary paper draft."),),
         optional_artifacts=(
-            a("artifacts/final_paper.tex", "tex", required=False, legacy=("paper_workspace/final_paper.tex",)),
-            a("artifacts/final_paper.pdf", "pdf", required=False, legacy=("paper_workspace/final_paper.pdf",)),
+            a("artifacts/final_paper.tex", "tex", required=False),
+            a("artifacts/final_paper.pdf", "pdf", required=False),
         ),
         validators=("paper_contract_terms_present", "required_sections_present"),
         tool_families=("llm", "markdown_writer", "latex_optional"),
@@ -653,10 +653,10 @@ CONTRACTS: tuple[StageContract, ...] = (
         kind="agent",
         purpose="Copyedit, tighten style, and produce editorial reports for the paper draft.",
         inputs=("proofreading_entry",),
-        required_artifacts=(a("artifacts/copyedit_report.md", legacy=("paper_workspace/copyedit_report.md",)),),
+        required_artifacts=(a("artifacts/copyedit_report.md"),),
         optional_artifacts=(
-            a("artifacts/copyedit_report.tex", "tex", required=False, legacy=("paper_workspace/copyedit_report.tex",)),
-            a("artifacts/copyedit_report.pdf", "pdf", required=False, legacy=("paper_workspace/copyedit_report.pdf",)),
+            a("artifacts/copyedit_report.tex", "tex", required=False),
+            a("artifacts/copyedit_report.pdf", "pdf", required=False),
         ),
         validators=("copyedit_report_present",),
         tool_families=("llm", "style_editor"),
@@ -689,12 +689,12 @@ CONTRACTS: tuple[StageContract, ...] = (
         purpose="Evaluate the draft like a paper reviewer, identify blockers, and issue a verdict.",
         inputs=("proofread_gate",),
         required_artifacts=(
-            a("artifacts/review_report.md", legacy=("paper_workspace/review_report.md",)),
-            a("artifacts/review_verdict.json", "json", legacy=("paper_workspace/review_verdict.json",)),
+            a("artifacts/review_report.md"),
+            a("artifacts/review_verdict.json", "json"),
         ),
         optional_artifacts=(
-            a("artifacts/review_report.tex", "tex", required=False, legacy=("paper_workspace/review_report.tex",)),
-            a("artifacts/review_report.pdf", "pdf", required=False, legacy=("paper_workspace/review_report.pdf",)),
+            a("artifacts/review_report.tex", "tex", required=False),
+            a("artifacts/review_report.pdf", "pdf", required=False),
         ),
         validators=("review_verdict_schema", "blockers_actionable"),
         tool_families=("llm", "ensemble_review_optional"),

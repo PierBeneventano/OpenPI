@@ -28,7 +28,6 @@ DB_PATH = Path(".msc") / "campaigns.db"
 
 TEMPLATE_NAMES = template_names()
 SDK_NATIVE_RUNTIME = "sdk_native"
-DIAGNOSTIC_LEGACY_RUNTIME = "diagnostic_legacy_runtime"
 
 
 def now_iso() -> str:
@@ -154,19 +153,6 @@ class CampaignStore:
               producer_node_id TEXT,
               size_bytes INTEGER,
               checksum TEXT,
-              metadata_json TEXT NOT NULL,
-              FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
-            );
-            CREATE TABLE IF NOT EXISTS runs (
-              id TEXT PRIMARY KEY,
-              campaign_id TEXT NOT NULL,
-              status TEXT NOT NULL,
-              command_json TEXT NOT NULL,
-              pid INTEGER,
-              started_at TEXT,
-              exited_at TEXT,
-              exit_code INTEGER,
-              budget_usd REAL,
               metadata_json TEXT NOT NULL,
               FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
             );
@@ -839,7 +825,6 @@ class CampaignStore:
         gate_verdicts = self._payload_records(events, "GateVerdictRecorded")
         completion_evaluations = self._payload_records(events, "StageCompletionEvaluated")
         model_policy_violations = self._payload_records(events, "ModelPolicyViolation")
-        legacy_attempts = self._legacy_execution_attempts(events)
         aim = {
             "objective": campaign["objective"],
             "constraints": {
@@ -896,7 +881,6 @@ class CampaignStore:
             "event_count": event_count,
             "events_truncated": not include_diagnostic_events and event_count > 0,
             "events_command": f"msc campaigns events {campaign_id} --limit 200 --json",
-            "legacy_attempts": legacy_attempts,
             "completion_evaluations": completion_evaluations,
             "model_policy_violations": model_policy_violations,
         }
@@ -943,7 +927,6 @@ class CampaignStore:
                 "event_count": event_count,
                 "events_truncated": not include_diagnostic_events and event_count > 0,
                 "events_command": f"msc campaigns events {campaign_id} --limit 200 --json",
-                "legacy_attempts": legacy_attempts,
                 "completion_evaluations": completion_evaluations,
                 "model_policy_violations": model_policy_violations,
             },
@@ -1074,69 +1057,16 @@ class CampaignStore:
     def _is_sdk_native_event(cls, event: dict[str, Any]) -> bool:
         return cls._event_runtime(event) == SDK_NATIVE_RUNTIME or str(event.get("actor") or "") == SDK_NATIVE_RUNTIME
 
-    @classmethod
-    def _legacy_execution_attempts(cls, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        attempts: dict[str, dict[str, Any]] = {}
-        for event in events:
-            if event["type"] not in {"CampaignExecutionStarted", "CampaignExecutionCompleted", "CampaignExecutionFailed"}:
-                continue
-            if cls._is_sdk_native_event(event):
-                continue
-            payload = event["payload"]
-            execution_id = str(payload.get("execution_id") or payload.get("run_id") or event["id"])
-            row = attempts.setdefault(
-                execution_id,
-                {
-                    "execution_id": execution_id,
-                    "run_id": payload.get("run_id"),
-                    "runtime": DIAGNOSTIC_LEGACY_RUNTIME,
-                    "status": "unknown",
-                    "events": [],
-                },
-            )
-            row["events"].append({"type": event["type"], "created_at": event["created_at"], "actor": event["actor"]})
-            row["updated_at"] = event["created_at"]
-            row["metadata"] = {**dict(row.get("metadata") or {}), **dict(payload.get("metadata") or {})}
-            if event["type"] == "CampaignExecutionStarted":
-                row.update(
-                    {
-                        "status": "running",
-                        "pid": payload.get("pid"),
-                        "command": payload.get("command"),
-                        "graph_version": payload.get("graph_version"),
-                        "started_at": event["created_at"],
-                    }
-                )
-            else:
-                row.update(
-                    {
-                        "status": str(payload.get("status") or ("completed" if payload.get("exit_code") == 0 else "failed")),
-                        "exit_code": payload.get("exit_code"),
-                        "exited_at": event["created_at"],
-                    }
-                )
-        return sorted(attempts.values(), key=lambda item: str(item.get("updated_at") or ""), reverse=True)
-
     def _decision_read_models(self, campaign_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM approvals WHERE campaign_id=? ORDER BY created_at DESC",
                 (campaign_id,),
             ).fetchall()
-        dry_run_success_run_ids = self._dry_run_success_run_ids(campaign_id)
         decisions: list[dict[str, Any]] = []
         for row in rows:
             metadata = json.loads(row["metadata_json"] or "{}")
             target_type = str(row["target_type"])
-            if metadata.get("runtime") == DIAGNOSTIC_LEGACY_RUNTIME and target_type == "failure_recovery":
-                continue
-            if (
-                target_type == "failure_recovery"
-                and row["status"] == "pending"
-                and str(row["target_id"]) in dry_run_success_run_ids
-                and metadata.get("exit_code") == 0
-            ):
-                continue
             reason = str(metadata.get("reason") or metadata.get("error") or metadata.get("requested_status") or target_type)
             decisions.append(
                 {
@@ -1159,20 +1089,8 @@ class CampaignStore:
             )
         return decisions
 
-    def _dry_run_success_run_ids(self, campaign_id: str) -> set[str]:
-        with self.connect() as conn:
-            rows = conn.execute(
-                "SELECT id FROM runs WHERE campaign_id=? AND status=? AND exit_code=0",
-                (campaign_id, "dry_run_passed"),
-            ).fetchall()
-        return {str(row["id"]) for row in rows}
-
     @staticmethod
     def _decision_title(target_type: str, reason: str) -> str:
-        if target_type == "failure_recovery":
-            if "recursion" in reason.lower() or "GRAPH_RECURSION_LIMIT" in reason:
-                return "Campaign execution reached graph transition limit"
-            return "Campaign execution needs recovery"
         if target_type == "stage_failure":
             return "Stage needs recovery"
         if target_type == "stage_completion":
@@ -1183,15 +1101,6 @@ class CampaignStore:
 
     @staticmethod
     def _decision_summary(target_type: str, reason: str) -> str:
-        if target_type == "failure_recovery":
-            if "recursion" in reason.lower() or "GRAPH_RECURSION_LIMIT" in reason:
-                return (
-                    "The campaign used more graph transitions than the runtime allowed. "
-                    "This may be a real loop, or a full research pass with feedback cycles "
-                    "running under too small a transition budget. Use OpenClaude to inspect "
-                    "the stage history, then rerun, rewind, or repair through SDK commands."
-                )
-            return "The latest campaign execution failed and needs a recovery choice before continuing."
         if target_type == "stage_failure":
             return "A stage failed and needs repair, rewrite, rerun, or abort guidance."
         if target_type == "stage_completion":
@@ -1202,8 +1111,6 @@ class CampaignStore:
 
     @staticmethod
     def _decision_target_label(target_type: str, target_id: str, metadata: dict[str, Any]) -> str:
-        if target_type == "failure_recovery":
-            return "latest failed execution"
         return str(metadata.get("node_id") or metadata.get("stage_id") or metadata.get("artifact_path") or target_id or "campaign")
 
     @staticmethod
@@ -1214,8 +1121,6 @@ class CampaignStore:
             return ["rerun-stage", "rewrite-stage", "request-repair", "abort"]
         if target_type == "graph_change":
             return ["approve", "reject", "revise-proposal"]
-        if target_type == "failure_recovery":
-            return ["rerun-stage", "rewind", "request-repair", "abort"]
         return ["approve", "reject"]
 
     @staticmethod
@@ -1622,101 +1527,6 @@ class CampaignStore:
             resolved.append(item)
         return resolved
 
-    def record_run_started(
-        self,
-        campaign_ref: str | Path,
-        *,
-        command: list[str] | dict[str, Any],
-        pid: int | None = None,
-        graph_version: int | None = None,
-        actor: str = "runner",
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        campaign_id = self.resolve_ref(campaign_ref)
-        started_at = now_iso()
-        run_id = stable_id(campaign_id, "run", str(pid or ""), started_at)
-        command_json = command if isinstance(command, dict) else {"argv": command}
-        runtime_metadata = {**(metadata or {})}
-        runtime_metadata.setdefault("runtime", DIAGNOSTIC_LEGACY_RUNTIME)
-        with self.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO runs
-                (id, campaign_id, status, command_json, pid, started_at, exited_at, exit_code, budget_usd, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    campaign_id,
-                    "running",
-                    json_dumps(command_json),
-                    pid,
-                    started_at,
-                    None,
-                    None,
-                    None,
-                    json_dumps({"graph_version": graph_version, **runtime_metadata}),
-                ),
-            )
-            conn.execute("UPDATE campaigns SET updated_at=? WHERE id=?", (started_at, campaign_id))
-            event = self._append_event(
-                conn,
-                campaign_id=campaign_id,
-                event_type="CampaignExecutionStarted",
-                actor=actor,
-                payload={
-                    "execution_id": run_id,
-                    "run_id": run_id,
-                    "pid": pid,
-                    "command": command_json,
-                    "graph_version": graph_version,
-                    "runtime": DIAGNOSTIC_LEGACY_RUNTIME,
-                    "metadata": runtime_metadata,
-                },
-            )
-        return {"ok": True, "campaign_id": campaign_id, "run_id": run_id, "event": event}
-
-    def record_run_exited(
-        self,
-        campaign_ref: str | Path,
-        run_id: str,
-        *,
-        exit_code: int | None,
-        status: str | None = None,
-        actor: str = "runner",
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        campaign_id = self.resolve_ref(campaign_ref)
-        exited_at = now_iso()
-        run_status = status or ("completed" if exit_code == 0 else "failed")
-        runtime_metadata = {**(metadata or {})}
-        runtime_metadata.setdefault("runtime", DIAGNOSTIC_LEGACY_RUNTIME)
-        with self.connect() as conn:
-            conn.execute(
-                "UPDATE runs SET status=?, exited_at=?, exit_code=? WHERE id=? AND campaign_id=?",
-                (run_status, exited_at, exit_code, run_id, campaign_id),
-            )
-            conn.execute("UPDATE campaigns SET updated_at=? WHERE id=?", (exited_at, campaign_id))
-            execution_completed = run_status in {"completed", "dry_run_passed"}
-            event = self._append_event(
-                conn,
-                campaign_id=campaign_id,
-                event_type="CampaignExecutionCompleted" if execution_completed else "CampaignExecutionFailed",
-                actor=actor,
-                payload={
-                    "execution_id": run_id,
-                    "run_id": run_id,
-                    "status": run_status,
-                    "exit_code": exit_code,
-                    "runtime": DIAGNOSTIC_LEGACY_RUNTIME,
-                    **runtime_metadata,
-                    "metadata": runtime_metadata,
-                },
-            )
-            approval = None
-        self.refresh_artifact_files(campaign_id)
-        return {"ok": True, "campaign_id": campaign_id, "run_id": run_id, "status": run_status, "event": event, "approval": approval}
-
     def record_artifact(
         self,
         campaign_ref: str | Path,
@@ -1987,7 +1797,6 @@ class CampaignStore:
                 "graph_nodes",
                 "graph_edges",
                 "artifacts",
-                "runs",
                 "steering_messages",
                 "approvals",
                 "graph_snapshots",
