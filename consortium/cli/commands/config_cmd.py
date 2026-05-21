@@ -254,3 +254,107 @@ def config_keys_unset(ctx: click.Context, name: str, as_json: bool) -> None:
         click.echo(json.dumps({"ok": True, "env_var": name, "config_path": str(path)}))
     else:
         console.print(f"[green]Removed[/green] {name} → {path}")
+
+
+# ----- pricing CRUD over .llm_config.yaml --------------------------------------
+
+
+def _llm_config_path() -> str:
+    """Resolve the .llm_config.yaml path from CWD upward; falls back to project root."""
+    cwd = os.path.abspath(os.getcwd())
+    while True:
+        candidate = os.path.join(cwd, ".llm_config.yaml")
+        if os.path.exists(candidate):
+            return candidate
+        parent = os.path.dirname(cwd)
+        if parent == cwd:
+            break
+        cwd = parent
+    # Default to project root from env, or current dir
+    root = os.getenv("CONSORTIUM_PROJECT_ROOT") or os.getcwd()
+    return os.path.join(root, ".llm_config.yaml")
+
+
+def _load_llm_config() -> dict:
+    path = _llm_config_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+
+
+def _save_llm_config(cfg: dict) -> str:
+    path = _llm_config_path()
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False, default_flow_style=False)
+    os.replace(tmp, path)
+    return path
+
+
+@config.group("pricing")
+def config_pricing() -> None:
+    """List, set, or remove per-model pricing in `.llm_config.yaml`."""
+
+
+@config_pricing.command("list")
+@click.option("--json", "as_json", is_flag=True)
+def config_pricing_list(as_json: bool) -> None:
+    """Print all model pricing entries from `.llm_config.yaml`."""
+    cfg = _load_llm_config()
+    pricing = (cfg.get("budget") or {}).get("pricing") or {}
+    if as_json:
+        click.echo(json.dumps({"ok": True, "pricing": pricing, "path": _llm_config_path()}, indent=2))
+        return
+    if not pricing:
+        click.echo("(no pricing entries)")
+        return
+    for model, rates in sorted(pricing.items()):
+        click.echo(
+            f"{model:<55s}  in=${rates.get('input_per_1k', 0):>7.5f}/1k "
+            f"out=${rates.get('output_per_1k', 0):>7.5f}/1k"
+        )
+
+
+@config_pricing.command("set")
+@click.argument("model")
+@click.option("--input-per-1k", type=float, required=True)
+@click.option("--output-per-1k", type=float, required=True)
+@click.option("--json", "as_json", is_flag=True)
+def config_pricing_set(
+    model: str, input_per_1k: float, output_per_1k: float, as_json: bool,
+) -> None:
+    """Add or update a model's pricing in `.llm_config.yaml`."""
+    cfg = _load_llm_config()
+    budget = cfg.setdefault("budget", {})
+    pricing = budget.setdefault("pricing", {})
+    pricing[model] = {
+        "input_per_1k": float(input_per_1k),
+        "output_per_1k": float(output_per_1k),
+    }
+    path = _save_llm_config(cfg)
+    out = {"ok": True, "model": model, "input_per_1k": float(input_per_1k),
+           "output_per_1k": float(output_per_1k), "path": path}
+    if as_json:
+        click.echo(json.dumps(out, indent=2))
+    else:
+        click.echo(f"set {model}: in=${input_per_1k}/1k out=${output_per_1k}/1k -> {path}")
+
+
+@config_pricing.command("unset")
+@click.argument("model")
+@click.option("--json", "as_json", is_flag=True)
+def config_pricing_unset(model: str, as_json: bool) -> None:
+    """Remove a model's pricing entry."""
+    cfg = _load_llm_config()
+    pricing = (cfg.get("budget") or {}).get("pricing") or {}
+    existed = pricing.pop(model, None)
+    path = _save_llm_config(cfg) if existed is not None else _llm_config_path()
+    out = {"ok": True, "model": model, "removed": bool(existed), "path": path}
+    if as_json:
+        click.echo(json.dumps(out, indent=2))
+    else:
+        click.echo(f"{'removed' if existed else 'not found'}: {model} -> {path}")

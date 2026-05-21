@@ -54,7 +54,7 @@ budget:
       input_per_1k: 0.00014
       output_per_1k: 0.00028
 counsel:
-  enabled: false
+  enabled: true
   max_debate_rounds: 0
   synthesis_model: claude-sonnet-4-6
   models: []

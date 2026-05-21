@@ -9,6 +9,9 @@ const MAX_LOG_LINES = 400;
 const MAX_CHAT_MESSAGES = 120;
 const MAX_PROMPT_HISTORY_MESSAGES = 14;
 const MAX_PROMPT_HISTORY_CHARS = 1800;
+const OPENCLAUDE_WATCHDOG_INTERVAL_MS = 15000;
+const OPENCLAUDE_STALL_WARN_MS = 180000;
+const OPENCLAUDE_STALL_KILL_MS = 300000;
 const RUN_CONFIRMATION = 'RUN LOCAL';
 const STEERING_URL = 'http://127.0.0.1:5002';
 const TEXT_PREVIEW_BYTES = 256 * 1024;
@@ -34,6 +37,9 @@ function openDashboard(context, options = {}) {
   const session = createDashboardSession(panel, root);
   if (options.openOnboarding) {
     session.state.onboardingOpen = true;
+  }
+  if (options.openSetup) {
+    session.state.setupOpen = true;
   }
   panel.webview.html = renderHtml(context, panel.webview);
 
@@ -61,17 +67,29 @@ function activate(context) {
   });
 
   const setKeysCmd = vscode.commands.registerCommand('mscDashboard.setKeys', () => {
-    // Surface the onboarding panel even when the dashboard isn't open yet.
+    // Surface the Setup tab even when the dashboard isn't open yet.
     for (const existing of activeDashboards) {
-      existing.state.onboardingOpen = true;
+      existing.state.setupOpen = true;
+      existing.state.onboardingOpen = false;
       postState(existing);
       existing.panel.reveal();
       return;
     }
-    openDashboard(context, { openOnboarding: true });
+    openDashboard(context, { openSetup: true });
   });
 
-  context.subscriptions.push(openCmd, setKeysCmd);
+  const openSetupCmd = vscode.commands.registerCommand('mscDashboard.openSetup', () => {
+    for (const existing of activeDashboards) {
+      existing.state.setupOpen = true;
+      existing.state.onboardingOpen = false;
+      postState(existing);
+      existing.panel.reveal();
+      return;
+    }
+    openDashboard(context, { openSetup: true });
+  });
+
+  context.subscriptions.push(openCmd, setKeysCmd, openSetupCmd);
 
   // Intentionally NOT spawning the CLI here. The activation event is
   // onStartupFinished and VSCode is still bringing up extension hosts;
@@ -143,6 +161,18 @@ async function handleMessage(session, message) {
   } else if (message.type === 'closeSettings') {
     session.state.settingsOpen = false;
     postState(session);
+  } else if (message.type === 'openSetup') {
+    session.state.setupOpen = true;
+    session.state.settingsOpen = false;
+    session.state.onboardingOpen = false;
+    postState(session);
+    await refreshKeyStatus(session);
+    await refresh(session);
+  } else if (message.type === 'closeSetup') {
+    session.state.setupOpen = false;
+    postState(session);
+  } else if (message.type === 'installOpenClaude') {
+    await installOpenClaude(session);
   } else if (message.type === 'openOnboarding') {
     session.state.onboardingOpen = true;
     session.state.settingsOpen = false;
@@ -182,6 +212,8 @@ async function handleMessage(session, message) {
     stopOpenClaudeSession(session);
   } else if (message.type === 'openClaudeSend') {
     await sendOpenClaudeMessage(session, message);
+  } else if (message.type === 'openClaudeCancel') {
+    cancelOpenClaudeSession(session);
   } else if (message.type === 'openClaudeRestartModel') {
     await restartOpenClaudeWithModel(session, message);
   } else if (message.type === 'openClaudeClearHistory') {
@@ -190,6 +222,26 @@ async function handleMessage(session, message) {
     await linkArtifactContext(session, message);
   } else if (message.type === 'updateContextLink') {
     await updateContextLink(session, message);
+  } else if (message.type === 'openStageNewestFile') {
+    await openStageNewestFile(session, String(message.stageId || ''));
+  } else if (message.type === 'revealStageWorkspace') {
+    await revealStageWorkspace(session, String(message.stageId || ''));
+  } else if (message.type === 'updateBudgetCap') {
+    await updateBudgetCap(session, Number(message.newCap));
+  } else if (message.type === 'setPricingDisposition') {
+    await setPricingDisposition(session, message);
+  } else if (message.type === 'pricingList') {
+    await pricingList(session);
+  } else if (message.type === 'pricingSet') {
+    await pricingSet(session, message);
+  } else if (message.type === 'pricingUnset') {
+    await pricingUnset(session, message);
+  } else if (message.type === 'restartNode') {
+    await restartNode(session, message);
+  } else if (message.type === 'restartCampaign') {
+    await restartCampaign(session, message);
+  } else if (message.type === 'resumeFromCouncilDeadlock') {
+    await resumeFromCouncilDeadlock(session, message);
   }
 }
 
@@ -208,13 +260,18 @@ function createDashboardSession(panel, root) {
 
 function cleanupSession(session) {
   stopSteeringPolling(session);
+  if (session.slurmPollTimer) {
+    clearTimeout(session.slurmPollTimer);
+    session.slurmPollTimer = null;
+  }
   if (session.stopTimer) {
     clearTimeout(session.stopTimer);
     session.stopTimer = null;
   }
   // Closing a dashboard panel should not be a destructive run-control action.
   // The explicit Stop button owns process termination; panel disposal only
-  // detaches this UI session from further log/steering updates.
+  // detaches this UI session from further log/steering updates. Detached
+  // SLURM runs are owned by the scheduler; nothing to clean up for them.
   session.activeProcess = null;
   if (session.openClaudeProcess) {
     session.openClaudeProcess.kill('SIGTERM');
@@ -274,6 +331,7 @@ function initialState(root) {
     campaignWorkspace: null,
     campaignGraph: null,
     campaignArtifacts: [],
+    campaignMetadata: {},
     campaignEvents: [],
     campaignExecution: null,
     campaignDecisions: [],
@@ -285,9 +343,12 @@ function initialState(root) {
     selectedGraphNode: null,
     artifactPreview: null,
     settingsOpen: false,
+    setupOpen: false,
     onboardingOpen: false,
     keyStatus: null,
     settings: defaultSettings(root),
+    setup: null,
+    setupOps: { openclaudeInstall: null },
     diagnostics: {},
     activeRun: null,
     runLog: [],
@@ -346,6 +407,8 @@ async function doRefresh(session) {
   state.view = previous.view || 'home';
   state.selectedCampaign = previous.selectedCampaign;
   state.settingsOpen = previous.settingsOpen;
+  state.setupOpen = previous.setupOpen;
+  state.setupOps = previous.setupOps || { openclaudeInstall: null };
   state.activeRun = previous.activeRun;
   state.runLog = previous.runLog;
   state.steering = previous.steering;
@@ -374,22 +437,26 @@ async function collectDashboardData(root) {
   const readiness = await runJson(root, ['project', 'readiness', '--json']);
   const openclaude = await runJson(root, ['openclaude', 'readiness', '--json']);
   const openclaudeModels = await runJson(root, ['openclaude', 'models', '--json']);
+  const setupStateResult = await runJson(root, ['project', 'setup-state', '--json']);
 
   state.settings = {
     ...defaultSettings(root),
     openRouterConfigured: openRouterConfigured(openclaude),
     readiness: unwrap(readiness, 'readiness')
   };
+  state.setup = (setupStateResult.ok && setupStateResult.data && setupStateResult.data.setup) || null;
   state.diagnostics = {
     readiness: unwrap(readiness, 'readiness'),
     openclaude: unwrap(openclaude, 'openclaude'),
-    openclaudeModels: unwrap(openclaudeModels, 'openclaudeModels')
+    openclaudeModels: unwrap(openclaudeModels, 'openclaudeModels'),
+    setup: state.setup
   };
   state.errors = [
     ...campaigns.errors,
     ...readiness.errors,
     ...openclaude.errors,
-    ...openclaudeModels.errors
+    ...openclaudeModels.errors,
+    ...setupStateResult.errors
   ];
   state.openClaude = {
     ...state.openClaude,
@@ -433,6 +500,21 @@ async function selectCampaign(session, campaignRef) {
     setActionError(session, 'No campaign was selected.');
     return;
   }
+
+  // OpenClaude is per-campaign: each campaign has its own chat transcript on
+  // disk and its own context pack. If an Overseer turn from the previously-
+  // selected campaign is still streaming, kill it before switching — otherwise
+  // chunks from the old subprocess will land in the new campaign's transcript
+  // (saveOpenClaudeHistory reads session.state.selectedCampaign at flush time,
+  // which has already moved). Killing now produces a clean interruption note in
+  // the *old* campaign's transcript via reconcileZombieResponding the next time
+  // it's loaded.
+  const switchingCampaigns = session.state.selectedCampaign && session.state.selectedCampaign !== campaignRef;
+  if (switchingCampaigns && session.openClaudeProcess) {
+    try { session.openClaudeProcess.kill('SIGTERM'); } catch (_) {}
+    session.openClaudeProcess = null;
+  }
+
   session.state = {
     ...session.state,
     loading: true,
@@ -442,6 +524,13 @@ async function selectCampaign(session, campaignRef) {
     artifactPreview: null,
     actionError: null
   };
+  // When switching, also stop polling the previous campaign's SLURM run so the
+  // poller doesn't compete with the new one we may start.
+  if (switchingCampaigns) {
+    stopSlurmRunPolling(session);
+    session.state.activeRun = null;
+    session.state.runLog = [];
+  }
   postState(session);
 
   const workspace = await loadCampaignWorkspace(session.root, campaignRef);
@@ -455,6 +544,52 @@ async function selectCampaign(session, campaignRef) {
   hydrateOpenClaudeHistory(session, campaignRef, { replace: true });
   session.state.errors = [...(session.state.errors || []), ...(workspace.errors || [])];
   postState(session);
+
+  // If a SLURM run for this campaign is still live on the backend (extension
+  // was closed while the campaign kept running), reattach so the Stop button,
+  // steering, and polling all work without needing a fresh submit.
+  await reattachLiveSlurmRun(session, campaignRef).catch(() => null);
+}
+
+async function reattachLiveSlurmRun(session, campaignRef) {
+  if (!campaignRef) return;
+  if (session.state.activeRun && session.state.activeRun.slurmRunId) return;
+  // `msc hpc status` returns the latest run + its squeue state. If the
+  // orchestrator is still queued/running we adopt it; otherwise leave
+  // activeRun alone so the user can submit a fresh one.
+  const result = await runJson(session.root, [
+    'hpc', '--root', session.root, 'status', String(campaignRef), '--json'
+  ], { timeout: 30000 });
+  if (!result.ok || !result.data) return;
+  const data = result.data;
+  const orchState = data.orchestrator_state;
+  const lastEventType = data.last_event && data.last_event.type;
+  const terminalTypes = new Set(['RunFinished', 'RunFailed', 'RunCancelled']);
+  const stillLive = !!orchState || (lastEventType && !terminalTypes.has(lastEventType) && orchState !== null);
+  // orchState !== null AND a non-terminal last event = healthy live run; or
+  // orchState present (PENDING/RUNNING) regardless of last event.
+  if (!data.run_id || !stillLive) return;
+  session.state.activeRun = {
+    status: 'running',
+    startedAt: (data.last_event && data.last_event.created_at) || new Date().toISOString(),
+    exitedAt: null,
+    exitCode: null,
+    command: `(reattached) hpc submit ${campaignRef}`,
+    pid: null,
+    dryRun: false,
+    campaign: campaignRef,
+    slurmRunId: String(data.run_id),
+    orchestratorJobId: data.orchestrator_job_id ? String(data.orchestrator_job_id) : null,
+    heartbeatJobId: data.heartbeat_job_id ? String(data.heartbeat_job_id) : null,
+    steeringInbox: data.steering_inbox || null,
+    workspaceRoot: data.campaign_id || null,
+    reattached: true
+  };
+  appendRunLog(session, 'system',
+    `Reattached to running SLURM run ${data.run_id} ` +
+    `(orchestrator state: ${orchState || 'unknown'}).`);
+  postState(session);
+  startSlurmRunPolling(session);
 }
 
 async function loadCampaignWorkspace(root, campaignRef) {
@@ -474,6 +609,54 @@ async function loadCampaignWorkspace(root, campaignRef) {
   const diagnosticArtifacts = Array.isArray(diagnostics.artifacts) ? diagnostics.artifacts : [];
   const allArtifacts = [...deliverables, ...plannedOutputs, ...diagnosticArtifacts];
   const contextLinks = Array.isArray(workspace.context?.links) ? workspace.context.links : [];
+
+  // Live budget snapshot (cap + per-model spend) for the Budget tab. Best-effort.
+  const budgetResult = await runJson(
+    root, ['campaigns', '--root', root, 'budget', campaignRef, '--json'],
+    { timeout: 20000 }
+  ).catch(() => ({ ok: false }));
+  const campaignBudget = (budgetResult.ok && budgetResult.data) || {};
+
+  // Uncovered models: collect PricingUnknown events that haven't been resolved
+  // by a later disposition. The UI surfaces these with [Use suggested] / [Allow $0]
+  // / [Skip] buttons that map straight to `hpc set-pricing-disposition`.
+  const seenResolved = new Set();
+  const uncovered = [];
+  for (let i = campaignEvents.length - 1; i >= 0; i--) {
+    const ev = campaignEvents[i];
+    if (!ev || !ev.type) continue;
+    const model = ev.payload && ev.payload.model_id;
+    if (!model) continue;
+    if (ev.type === 'CampaignMetadataUpdated') {
+      const dispositions = (ev.payload && ev.payload.updates && ev.payload.updates.pricing_dispositions) || {};
+      Object.keys(dispositions).forEach((m) => seenResolved.add(m));
+    } else if (ev.type === 'PricingUnknown' && !seenResolved.has(model)) {
+      seenResolved.add(model);
+      uncovered.push({
+        model_id: model,
+        suggestion: ev.payload.suggestion || null,
+        ts: ev.created_at,
+      });
+    }
+  }
+
+  // campaignMetadata: replay CampaignMetadataUpdated events in chronological
+  // order to reconstruct the current metadata blob. The same pattern the SDK
+  // uses for get_campaign_metadata. Surfaces e.g. persona_council_deadlock
+  // so DecisionsTab can render the new banner.
+  const campaignMetadata = {};
+  for (const ev of campaignEvents) {
+    if (!ev || ev.type !== 'CampaignMetadataUpdated') continue;
+    const updates = (ev.payload && ev.payload.updates) || {};
+    for (const [k, v] of Object.entries(updates)) {
+      if (v === null || v === undefined) {
+        delete campaignMetadata[k];
+      } else {
+        campaignMetadata[k] = v;
+      }
+    }
+  }
+
   return {
     campaignWorkspace: workspace,
     campaignDetails: campaignDetailsFromWorkspace(workspace),
@@ -485,6 +668,9 @@ async function loadCampaignWorkspace(root, campaignRef) {
     campaignDeliverables: normalizeArtifacts({ artifacts: deliverables }),
     campaignPlannedOutputs: normalizeArtifacts({ artifacts: plannedOutputs }),
     campaignDiagnosticArtifacts: normalizeArtifacts({ artifacts: diagnosticArtifacts }),
+    campaignBudget,
+    campaignUncoveredModels: uncovered,
+    campaignMetadata,
     campaignEvents,
     campaignRunSummary: summarizeCampaignWorkspace(workspace, campaignEvents),
     openClaudeContextLinks: contextLinks,
@@ -554,7 +740,7 @@ async function createCampaignDraftForSession(session, draft) {
     ['target_research', 'consortium_scaffold', 'consortium_budget', 'literature_only', 'experiment_design', 'blank'],
     'target_research',
   );
-  const result = await runJson(session.root, [
+  const createArgs = [
     'campaigns',
     '--root',
     session.root,
@@ -571,8 +757,23 @@ async function createCampaignDraftForSession(session, draft) {
     tier,
     '--output-format',
     outputFormat,
-    '--json'
-  ]);
+  ];
+  // Persona-council overrides land in campaign metadata so each campaign
+  // can have its own consensus / safety-cap behavior independent of the
+  // global runner defaults.
+  if (draft.personaDebateRounds) {
+    createArgs.push('--persona-debate-rounds', String(parseInt(draft.personaDebateRounds, 10) || 3));
+  }
+  if (draft.personaMaxSynthesisAttempts) {
+    createArgs.push('--persona-max-synthesis-attempts',
+                    String(parseInt(draft.personaMaxSynthesisAttempts, 10) || 5));
+  }
+  if (draft.personaDeadlockPolicy && draft.personaDeadlockPolicy !== 'pause') {
+    // 'pause' is the default; only forward non-default
+    createArgs.push('--persona-deadlock-policy', String(draft.personaDeadlockPolicy));
+  }
+  createArgs.push('--json');
+  const result = await runJson(session.root, createArgs, { timeout: 60000 });
   if (!result.ok) {
     setActionError(session, result.error || result.stderr || 'Campaign creation failed.');
     return;
@@ -599,6 +800,187 @@ async function createCampaignDraftForSession(session, draft) {
       setActionError(session, 'Campaign was created, but automatic execution did not start.');
     }
   }
+}
+
+async function updateBudgetCap(session, newCap) {
+  if (!session.state.selectedCampaign) {
+    setActionError(session, 'Select a campaign before adjusting its budget cap.');
+    return;
+  }
+  if (!Number.isFinite(newCap) || newCap <= 0) {
+    setActionError(session, 'New cap must be a positive number.');
+    return;
+  }
+  const result = await runJson(session.root, [
+    'campaigns', '--root', session.root,
+    'update-budget-cap', String(session.state.selectedCampaign), String(newCap),
+    '--reason', 'updated via VSCode budget tab', '--json',
+  ], { timeout: 30000 });
+  if (!result.ok) {
+    setActionError(session, result.error || result.stderr || 'Could not update budget cap.');
+    return;
+  }
+  await refresh(session);
+}
+
+async function setPricingDisposition(session, message) {
+  if (!session.state.selectedCampaign) {
+    setActionError(session, 'Select a campaign before resolving pricing.');
+    return;
+  }
+  const modelId = String(message.modelId || '').trim();
+  const action = String(message.action || '').trim();
+  if (!modelId || !action) {
+    setActionError(session, 'Pricing disposition requires modelId and action.');
+    return;
+  }
+  const args = [
+    'hpc', '--root', session.root, 'set-pricing-disposition',
+    String(session.state.selectedCampaign),
+    '--model', modelId,
+    '--action', action,
+  ];
+  if (action === 'set_rate') {
+    args.push('--input-per-1k', String(message.inputPer1k));
+    args.push('--output-per-1k', String(message.outputPer1k));
+  }
+  args.push('--json');
+  const result = await runJson(session.root, args, { timeout: 30000 });
+  if (!result.ok) {
+    setActionError(session, result.error || result.stderr || 'Pricing disposition failed.');
+    return;
+  }
+  await refresh(session);
+}
+
+async function pricingList(session) {
+  const result = await runJson(session.root, [
+    'config', 'pricing', 'list', '--json'
+  ], { timeout: 20000 });
+  session.panel.webview.postMessage({
+    type: 'pricingListResult',
+    pricing: (result.ok && result.data && result.data.pricing) || {},
+  });
+}
+
+async function pricingSet(session, message) {
+  const model = String(message.model || '').trim();
+  const inputPer1k = Number(message.inputPer1k);
+  const outputPer1k = Number(message.outputPer1k);
+  if (!model || !Number.isFinite(inputPer1k) || !Number.isFinite(outputPer1k)) {
+    setActionError(session, 'pricingSet requires model + numeric rates.');
+    return;
+  }
+  const result = await runJson(session.root, [
+    'config', 'pricing', 'set', model,
+    '--input-per-1k', String(inputPer1k),
+    '--output-per-1k', String(outputPer1k),
+    '--json',
+  ], { timeout: 20000 });
+  if (!result.ok) {
+    setActionError(session, result.error || result.stderr || 'Could not set pricing.');
+    return;
+  }
+  await pricingList(session);
+}
+
+async function pricingUnset(session, message) {
+  const model = String(message.model || '').trim();
+  if (!model) return;
+  const result = await runJson(session.root, [
+    'config', 'pricing', 'unset', model, '--json',
+  ], { timeout: 20000 });
+  if (!result.ok) {
+    setActionError(session, result.error || result.stderr || 'Could not remove pricing.');
+    return;
+  }
+  await pricingList(session);
+}
+
+async function restartNode(session, message) {
+  if (!session.state.selectedCampaign) {
+    setActionError(session, 'Select a campaign before restarting a node.');
+    return;
+  }
+  const nodeId = String(message.nodeId || '').trim();
+  if (!nodeId) {
+    setActionError(session, 'restartNode requires a nodeId.');
+    return;
+  }
+  const reason = String(message.reason || 'user-initiated restart').slice(0, 500);
+  appendRunLog(session, 'system', `Restart node requested: ${nodeId} (${reason})`);
+  // hpc restart-node does: scancel + rerun_stage audit + sbatch with
+  // --start-from-stage. It can take up to ~90s on a loaded login node
+  // (two sbatch calls + DB writes + Python startup).
+  const result = await runJson(session.root, [
+    'hpc', '--root', session.root, 'restart-node',
+    String(session.state.selectedCampaign), nodeId,
+    '--reason', reason, '--json',
+  ], { timeout: 120000 });
+  if (!result.ok) {
+    setActionError(session, result.error || result.stderr || 'Restart node failed.');
+    return;
+  }
+  appendRunLog(session, 'system',
+    `Node ${nodeId} restart submitted. New run: ${result.data?.new_run_id || '?'} ` +
+    `(orchestrator job ${result.data?.new_orchestrator_job_id || '?'})`);
+  await refresh(session);
+}
+
+async function restartCampaign(session, message) {
+  if (!session.state.selectedCampaign) {
+    setActionError(session, 'Select a campaign before restarting it.');
+    return;
+  }
+  const reason = String(message.reason || 'user-initiated restart').slice(0, 500);
+  const archive = message.archive !== false;
+  appendRunLog(session, 'system',
+    `Restart campaign requested (${reason}; archive=${archive ? 'yes' : 'no'})`);
+  const result = await runJson(session.root, [
+    'hpc', '--root', session.root, 'restart-campaign',
+    String(session.state.selectedCampaign),
+    '--reason', reason,
+    archive ? '--archive' : '--no-archive',
+    '--json',
+  ], { timeout: 120000 });
+  if (!result.ok) {
+    setActionError(session, result.error || result.stderr || 'Restart campaign failed.');
+    return;
+  }
+  appendRunLog(session, 'system',
+    `Campaign restart complete. Archived ${result.data?.archived_paths?.length || 0} prior runs. ` +
+    `New run: ${result.data?.new_run_id || '?'}`);
+  await refresh(session);
+}
+
+async function resumeFromCouncilDeadlock(session, message) {
+  if (!session.state.selectedCampaign) {
+    setActionError(session, 'Select a campaign before resolving a deadlock.');
+    return;
+  }
+  const mode = String(message.mode || '').trim();
+  if (mode !== 'accept_as_is' && mode !== 'edited') {
+    setActionError(session, "mode must be 'accept_as_is' or 'edited'.");
+    return;
+  }
+  const reason = String(message.reason || '').slice(0, 500);
+  appendRunLog(session, 'system',
+    `Resolving persona_council deadlock (mode=${mode}${reason ? `, reason="${reason}"` : ''})`);
+  const result = await runJson(session.root, [
+    'hpc', '--root', session.root, 'resume-from-deadlock',
+    String(session.state.selectedCampaign),
+    '--mode', mode,
+    ...(reason ? ['--reason', reason] : []),
+    '--json',
+  ], { timeout: 120000 });
+  if (!result.ok) {
+    setActionError(session, result.error || result.stderr || 'Resume from deadlock failed.');
+    return;
+  }
+  appendRunLog(session, 'system',
+    `Deadlock resolved (mode=${mode}). New run: ${result.data?.new_run_id || '?'} ` +
+    `orchestrator job ${result.data?.new_orchestrator_job_id || '?'}`);
+  await refresh(session);
 }
 
 async function deleteCampaignForSession(session, message) {
@@ -654,6 +1036,7 @@ async function deleteCampaignForSession(session, message) {
     campaignWorkspace: null,
     campaignGraph: null,
     campaignArtifacts: [],
+    campaignMetadata: {},
     campaignEvents: [],
     campaignExecution: null,
     campaignDecisions: [],
@@ -736,6 +1119,105 @@ async function openArtifactForSession(session, artifact) {
   }
 }
 
+function resolveStageWorkspaceDir(session, stageId) {
+  const trimmed = String(stageId || '').trim();
+  if (!trimmed) return null;
+  const details = session.state.campaignDetails || {};
+  const stages = Array.isArray(details.stages) ? details.stages : [];
+  const stage = stages.find((candidate) =>
+    candidate && (candidate.stage_id === trimmed || candidate.id === trimmed || candidate.name === trimmed)
+  );
+  const baseRoots = artifactBaseRoots(session.root, details);
+  const stageWorkspace = (stage && stage.workspace) || (details && details.workspace_root);
+  const candidates = [];
+  const pushAbs = (p) => {
+    if (!p) return;
+    const r = path.resolve(p);
+    if (!candidates.includes(r)) candidates.push(r);
+  };
+  if (stageWorkspace) {
+    for (const base of baseRoots) {
+      const ws = path.isAbsolute(stageWorkspace) ? path.resolve(stageWorkspace) : path.resolve(base, stageWorkspace);
+      pushAbs(ws);
+      // StageRunContext layout: <ws>/runs/<run_id>/<stage_id>
+      const runsParent = path.join(ws, 'runs');
+      try {
+        if (fs.existsSync(runsParent) && fs.statSync(runsParent).isDirectory()) {
+          const newestRun = fs.readdirSync(runsParent)
+            .map((name) => ({ name, mtime: safeMtime(path.join(runsParent, name)) }))
+            .filter((entry) => entry.mtime > 0)
+            .sort((a, b) => b.mtime - a.mtime)[0];
+          if (newestRun) pushAbs(path.join(runsParent, newestRun.name, trimmed));
+        }
+      } catch (_) { /* fall through */ }
+    }
+  }
+  // Pick the newest existing dir, preferring StageRunContext run dirs.
+  const existing = candidates
+    .map((p) => ({ p, mtime: safeMtime(p) }))
+    .filter((entry) => entry.mtime > 0)
+    .sort((a, b) => b.mtime - a.mtime);
+  return existing.length ? existing[0].p : (candidates[0] || null);
+}
+
+function findNewestFile(dir) {
+  let best = null;
+  const walk = (current) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch (_) { return; }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(current, entry.name);
+      try {
+        if (entry.isDirectory()) {
+          walk(full);
+        } else if (entry.isFile()) {
+          const m = fs.statSync(full).mtimeMs;
+          if (!best || m > best.mtime) best = { path: full, mtime: m };
+        }
+      } catch (_) { /* skip unreadable */ }
+    }
+  };
+  walk(dir);
+  return best ? best.path : null;
+}
+
+async function openStageNewestFile(session, stageId) {
+  const dir = resolveStageWorkspaceDir(session, stageId);
+  if (!dir || !fs.existsSync(dir)) {
+    setActionError(session, `Stage workspace not found for "${stageId}". The stage may not have started writing yet.`);
+    return;
+  }
+  const newest = findNewestFile(dir);
+  if (!newest) {
+    setActionError(session, `No files written yet under ${dir}.`);
+    return;
+  }
+  try {
+    await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(newest));
+  } catch (error) {
+    setActionError(session, error.message || String(error));
+  }
+}
+
+async function revealStageWorkspace(session, stageId) {
+  const dir = resolveStageWorkspaceDir(session, stageId);
+  if (!dir) {
+    setActionError(session, `Could not resolve a workspace directory for stage "${stageId}".`);
+    return;
+  }
+  if (!fs.existsSync(dir)) {
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (_) { /* best effort */ }
+  }
+  try {
+    await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(dir));
+  } catch (error) {
+    setActionError(session, error.message || String(error));
+  }
+}
+
 function safeResolveArtifactPath(root, campaignDetails, artifact) {
   const artifactPath = String(artifact.path || artifact.file || artifact.workspace_path || artifact.relativePath || '').trim();
   if (!artifactPath) {
@@ -746,16 +1228,30 @@ function safeResolveArtifactPath(root, campaignDetails, artifact) {
     ? [artifactPath]
     : artifactCandidateRoots(root, campaignDetails, artifact).map((candidateRoot) => path.join(candidateRoot, artifactPath));
 
+  let sawAllowedButMissing = false;
+  let firstAllowedCandidate = null;
   for (const candidate of candidates) {
     const resolved = path.resolve(candidate);
     if (!allowedRoots.some((allowedRoot) => isWithin(resolved, allowedRoot))) {
       continue;
     }
+    if (!firstAllowedCandidate) firstAllowedCandidate = resolved;
     if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
       return resolved;
     }
+    sawAllowedButMissing = true;
   }
-  throw new Error('Artifact preview path is outside allowed roots or does not exist.');
+  if (sawAllowedButMissing) {
+    const stage = artifact.stage_id ? ` (stage: ${artifact.stage_id})` : '';
+    throw new Error(
+      `${path.basename(artifactPath)} has not been written yet${stage}. ` +
+      `Expected at: ${firstAllowedCandidate}`
+    );
+  }
+  throw new Error(
+    `Artifact preview path is outside allowed roots. Path: ${artifactPath}. ` +
+    'This usually means the campaign workspace metadata is incomplete; relaunch the campaign with --campaign-id.'
+  );
 }
 
 function artifactAllowedRoots(root, campaignDetails, artifact = {}) {
@@ -834,10 +1330,48 @@ function artifactCandidateRoots(root, campaignDetails, artifact = {}) {
   });
   pushFromBases(stage && stage.workspace);
   pushFromBases(campaignDetails && campaignDetails.workspace_root);
+
+  // StageRunContext (msc_sdk/stage_runtime.py) writes to
+  // results/<campaign>/runs/<run_id>/<stage_id>/, but artifacts.json only declares the
+  // stage workspace one level above. Probe the per-run subdirs so previews work
+  // even for runs the artifact metadata doesn't yet know about.
+  const stageId = String(artifact.stage_id || (stage && (stage.stage_id || stage.id || stage.name)) || '').trim();
+  const stageWorkspace = (stage && stage.workspace) || (campaignDetails && campaignDetails.workspace_root);
+  if (stageId && stageWorkspace) {
+    for (const baseRoot of baseRoots) {
+      const runsParent = path.isAbsolute(stageWorkspace)
+        ? path.resolve(stageWorkspace, 'runs')
+        : path.resolve(baseRoot, stageWorkspace, 'runs');
+      let runIds = [];
+      try {
+        if (fs.existsSync(runsParent) && fs.statSync(runsParent).isDirectory()) {
+          runIds = fs.readdirSync(runsParent)
+            .map((name) => ({ name, mtime: safeMtime(path.join(runsParent, name)) }))
+            .filter((entry) => entry.mtime > 0)
+            .sort((a, b) => b.mtime - a.mtime)
+            .map((entry) => entry.name);
+        }
+      } catch (_) {
+        runIds = [];
+      }
+      for (const runId of runIds) {
+        push(path.join(runsParent, runId, stageId));
+      }
+    }
+  }
+
   for (const baseRoot of baseRoots) {
     push(baseRoot);
   }
   return roots.length ? roots : [path.resolve(root)];
+}
+
+function safeMtime(filePath) {
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch (_) {
+    return 0;
+  }
 }
 
 function artifactBaseRoots(root, campaignDetails) {
@@ -1522,6 +2056,70 @@ async function setApiKey(session, message) {
   await refreshKeyStatus(session);
 }
 
+async function installOpenClaude(session) {
+  const setupOps = session.state.setupOps || { openclaudeInstall: null };
+  if (setupOps.openclaudeInstall && setupOps.openclaudeInstall.status === 'running') {
+    return;
+  }
+  setupOps.openclaudeInstall = {
+    status: 'running',
+    startedAt: new Date().toISOString(),
+    log: [],
+    error: null,
+    path: null
+  };
+  session.state.setupOps = setupOps;
+  postState(session);
+
+  const command = resolveMscCommand(session.root);
+  const args = [...command.prefixArgs, 'openclaude', 'install', '--json'];
+  const proc = childProcess.spawn(command.bin, args, {
+    cwd: session.root,
+    env: runtimeEnv(session.root),
+    shell: false
+  });
+
+  let stdout = '';
+  let stderr = '';
+  const append = (chunk, channel) => {
+    const text = chunk.toString();
+    if (channel === 'stdout') stdout += text;
+    else stderr += text;
+    setupOps.openclaudeInstall.log.push({ channel, text, timestamp: new Date().toISOString() });
+    postState(session);
+  };
+  proc.stdout.on('data', (chunk) => append(chunk, 'stdout'));
+  proc.stderr.on('data', (chunk) => append(chunk, 'stderr'));
+
+  await new Promise((resolve) => {
+    proc.on('error', (error) => {
+      setupOps.openclaudeInstall.status = 'failed';
+      setupOps.openclaudeInstall.error = error.message || String(error);
+      resolve();
+    });
+    proc.on('exit', (code) => {
+      let parsed = null;
+      try { parsed = JSON.parse(stdout); } catch (_) { parsed = null; }
+      if (code === 0 && parsed && parsed.ok) {
+        setupOps.openclaudeInstall.status = 'completed';
+        setupOps.openclaudeInstall.path = parsed.path || null;
+        setupOps.openclaudeInstall.alreadyInstalled = Boolean(parsed.already_installed);
+      } else {
+        setupOps.openclaudeInstall.status = 'failed';
+        setupOps.openclaudeInstall.error =
+          (parsed && (parsed.error || parsed.error_code)) ||
+          stderr.trim().split('\n').pop() ||
+          `npm exited with code ${code}`;
+      }
+      resolve();
+    });
+  });
+
+  session.state.setupOps = setupOps;
+  postState(session);
+  await refresh(session);
+}
+
 async function unsetApiKey(session, message) {
   const envVar = String(message.env_var || '').trim().toUpperCase();
   if (!envVar) {
@@ -1552,6 +2150,10 @@ async function startCampaignExecution(session, message) {
     setActionError(session, 'Campaign execution is already active in this dashboard.');
     return false;
   }
+  if (session.state.activeRun && session.state.activeRun.slurmRunId && session.state.activeRun.status === 'running') {
+    setActionError(session, 'A detached SLURM run is already attached to this campaign.');
+    return false;
+  }
 
   const options = normalizeRunOptions(message);
   if (session.state.selectedCampaign) {
@@ -1562,6 +2164,13 @@ async function startCampaignExecution(session, message) {
   if (validationError) {
     setActionError(session, validationError);
     return false;
+  }
+
+  // If sbatch is on PATH and we have a campaign id, submit as a detached
+  // SLURM run so the campaign survives the IDE being closed.
+  const sbatchAvailable = await detectSbatch();
+  if (sbatchAvailable && options.campaignId && !options.dryRun) {
+    return startSlurmCampaignExecution(session, options);
   }
 
   const commandSpec = resolveMscCommand(session.root);
@@ -1611,6 +2220,158 @@ async function startCampaignExecution(session, message) {
     await refresh(session);
   });
   return true;
+}
+
+let _sbatchAvailableCache = null;
+async function detectSbatch() {
+  if (_sbatchAvailableCache !== null) return _sbatchAvailableCache;
+  const result = await new Promise((resolve) => {
+    const proc = childProcess.spawn('which', ['sbatch'], { shell: false });
+    proc.on('exit', (code) => resolve(code === 0));
+    proc.on('error', () => resolve(false));
+  });
+  _sbatchAvailableCache = result;
+  return result;
+}
+
+async function startSlurmCampaignExecution(session, options) {
+  const command = resolveMscCommand(session.root);
+  const args = buildHpcSubmitArgs(options, session.root);
+  session.state.activeRun = {
+    status: 'submitting',
+    startedAt: new Date().toISOString(),
+    exitedAt: null,
+    exitCode: null,
+    command: [command.label, ...args].join(' '),
+    pid: null,
+    dryRun: false,
+    campaign: session.state.selectedCampaign || null,
+    slurmRunId: null,
+    orchestratorJobId: null,
+    heartbeatJobId: null
+  };
+  session.state.runLog = [];
+  session.state.actionError = null;
+  appendRunLog(session, 'system', '$ ' + session.state.activeRun.command);
+  postState(session);
+
+  // `hpc submit` does: Python import (~1.5s) + DB writes + two sbatch calls.
+  // On a loaded login node that comfortably exceeds the 15s default timeout
+  // used for most CLI calls. Give it a real budget so legitimate submissions
+  // don't get killed mid-sbatch — at which point we end up with a half-state
+  // (jobs queued, extension thinks it failed). 90s is generous.
+  const result = await runJson(session.root, args, { timeout: 90000 });
+  if (!result.ok) {
+    const reason = result.error || result.stderr || 'sbatch submission failed.';
+    const hint = /timed out|ETIMEDOUT/i.test(reason)
+      ? ' (timeout while talking to SLURM; check `squeue -u $USER` — your jobs may have been submitted successfully even though we did not see the response)'
+      : '';
+    session.state.activeRun = {
+      ...session.state.activeRun,
+      status: 'failed',
+      exitedAt: new Date().toISOString(),
+      exitCode: result.code != null ? result.code : null
+    };
+    appendRunLog(session, 'stderr', reason);
+    setActionError(session, `SLURM submission failed: ${reason}${hint}`);
+    postState(session);
+    return false;
+  }
+  const data = result.data || {};
+  session.state.activeRun = {
+    ...session.state.activeRun,
+    status: 'running',
+    slurmRunId: String(data.run_id || ''),
+    orchestratorJobId: String(data.orchestrator_job_id || ''),
+    heartbeatJobId: String(data.heartbeat_job_id || ''),
+    steeringInbox: data.steering && data.steering.inbox || null,
+    workspaceRoot: data.campaign_id || null
+  };
+  appendRunLog(session, 'system',
+    `Submitted SLURM run ${session.state.activeRun.slurmRunId} ` +
+    `(orchestrator job ${session.state.activeRun.orchestratorJobId}, ` +
+    `heartbeat job ${session.state.activeRun.heartbeatJobId}).`);
+  postState(session);
+  startSlurmRunPolling(session);
+  await refresh(session);
+  return true;
+}
+
+function buildHpcSubmitArgs(options, root) {
+  const args = ['hpc', '--root', root, 'submit', String(options.campaignId), '--json'];
+  if (options.task) args.push('--task', options.task);
+  if (options.tier) args.push('--tier', String(options.tier));
+  if (options.budget != null) args.push('--budget', String(options.budget));
+  if (options.outputFormat) args.push('--output-format', String(options.outputFormat));
+  if (options.maxRunSeconds) args.push('--max-run-seconds', String(options.maxRunSeconds));
+  // Forward feature toggles using the canonical runner flag names from
+  // consortium/args.py — `--counsel` / `--math` / `--tree-search` are *not*
+  // valid runner flags; argparse abbreviation-matching silently maps them to
+  // `--counsel-max-debate-rounds` and the orchestrator dies at startup.
+  if (options.counsel) args.push('--extra-runner-arg', '--enable-counsel');
+  else args.push('--extra-runner-arg', '--no-counsel');
+  if (options.math) args.push('--extra-runner-arg', '--enable-math-agents');
+  if (options.treeSearch) args.push('--extra-runner-arg', '--enable-tree-search');
+  return args;
+}
+
+const SLURM_POLL_INTERVAL_MS = 10000;
+function startSlurmRunPolling(session) {
+  if (session.slurmPollTimer) return;
+  const tick = async () => {
+    if (!session || !session.state || !session.state.activeRun || !session.state.activeRun.slurmRunId) {
+      session.slurmPollTimer = null;
+      return;
+    }
+    if (session.state.activeRun.status !== 'running' && session.state.activeRun.status !== 'stopping') {
+      session.slurmPollTimer = null;
+      return;
+    }
+    const campaign = session.state.selectedCampaign;
+    if (!campaign) {
+      session.slurmPollTimer = null;
+      return;
+    }
+    try {
+      const statusResult = await runJson(session.root, [
+        'hpc', '--root', session.root, 'status', String(campaign),
+        '--run-id', String(session.state.activeRun.slurmRunId), '--json'
+      ], { timeout: 30000 });
+      if (statusResult.ok && statusResult.data) {
+        const data = statusResult.data;
+        const orchState = data.orchestrator_state;
+        const lastEventType = data.last_event && data.last_event.type;
+        // Run is over once squeue forgets the orch job AND a terminal event exists.
+        const terminalTypes = ['RunFinished', 'RunFailed', 'RunCancelled'];
+        if (orchState == null && terminalTypes.includes(lastEventType)) {
+          session.state.activeRun = {
+            ...session.state.activeRun,
+            status: lastEventType === 'RunFinished' ? 'exited' : 'failed',
+            exitedAt: new Date().toISOString()
+          };
+          appendRunLog(session, 'system', `SLURM run ${session.state.activeRun.slurmRunId} ${lastEventType}.`);
+          postState(session);
+          await refresh(session);
+          session.slurmPollTimer = null;
+          return;
+        }
+      }
+      // Trigger reconciliation so any stale rows get a RunFailed event.
+      await runJson(session.root, ['hpc', '--root', session.root, 'reconcile', String(campaign), '--json'], { timeout: 30000 })
+        .catch(() => null);
+    } catch (_) {
+      // Polling is best-effort; ignore transient errors.
+    }
+    session.slurmPollTimer = setTimeout(tick, SLURM_POLL_INTERVAL_MS);
+  };
+  session.slurmPollTimer = setTimeout(tick, SLURM_POLL_INTERVAL_MS);
+}
+
+function stopSlurmRunPolling(session) {
+  if (session.slurmPollTimer) {
+    clearTimeout(session.slurmPollTimer);
+    session.slurmPollTimer = null;
+  }
 }
 
 function normalizeRunOptions(message) {
@@ -1682,7 +2443,32 @@ function buildRunArgs(options, root) {
   return args;
 }
 
-function stopCampaignExecution(session) {
+async function stopCampaignExecution(session) {
+  // Detached SLURM run: scancel both jobs via `msc hpc cancel`.
+  const activeRun = session.state.activeRun;
+  if (activeRun && activeRun.slurmRunId && !session.activeProcess) {
+    appendRunLog(session, 'system', `Stop requested: scancel for run ${activeRun.slurmRunId}.`);
+    session.state.activeRun = { ...activeRun, status: 'stopping' };
+    postState(session);
+    const result = await runJson(session.root, [
+      'hpc', '--root', session.root, 'cancel', String(session.state.selectedCampaign || ''),
+      '--run-id', String(activeRun.slurmRunId), '--json'
+    ], { timeout: 30000 });
+    if (!result.ok) {
+      setActionError(session, result.error || result.stderr || 'scancel failed.');
+    } else {
+      session.state.activeRun = {
+        ...session.state.activeRun,
+        status: 'exited',
+        exitedAt: new Date().toISOString()
+      };
+      appendRunLog(session, 'system', 'SLURM run cancelled.');
+    }
+    stopSlurmRunPolling(session);
+    postState(session);
+    await refresh(session);
+    return;
+  }
   if (!session.activeProcess) {
     setActionError(session, 'No active campaign execution to stop.');
     return;
@@ -1700,6 +2486,24 @@ function stopCampaignExecution(session) {
 }
 
 async function interruptRun(session) {
+  const activeRun = session.state.activeRun;
+  if (activeRun && activeRun.slurmRunId && !session.activeProcess) {
+    // For detached runs the file-based steering queue is the channel.
+    // An interrupt is just a steer call with `--interrupt --message ''`,
+    // but `--message` requires non-empty text. Use a no-op instruction.
+    const result = await runJson(session.root, [
+      'hpc', '--root', session.root, 'steer', String(session.state.selectedCampaign || ''),
+      '--run-id', String(activeRun.slurmRunId),
+      '--interrupt', '--message', 'pause requested by researcher',
+      '--type', 'm', '--json'
+    ], { timeout: 30000 });
+    if (!result.ok) {
+      setActionError(session, result.error || result.stderr || 'steering call failed.');
+      return;
+    }
+    appendRunLog(session, 'system', 'Steering interrupt enqueued (file channel).');
+    return;
+  }
   if (!session.activeProcess) {
     setActionError(session, 'Start campaign execution before sending steering commands.');
     return;
@@ -1714,16 +2518,32 @@ async function interruptRun(session) {
 }
 
 async function sendInstruction(session, message) {
-  if (!session.activeProcess) {
-    setActionError(session, 'Start campaign execution before sending steering instructions.');
-    return;
-  }
+  const activeRun = session.state.activeRun;
   const text = String(message.text || '').trim();
   if (!text) {
     setActionError(session, 'Enter a steering instruction first.');
     return;
   }
   const instructionType = oneOf(message.instructionType, ['m', 'n'], 'm');
+  if (activeRun && activeRun.slurmRunId && !session.activeProcess) {
+    const result = await runJson(session.root, [
+      'hpc', '--root', session.root, 'steer', String(session.state.selectedCampaign || ''),
+      '--run-id', String(activeRun.slurmRunId),
+      '--message', text,
+      '--type', instructionType,
+      '--no-interrupt', '--json'
+    ], { timeout: 30000 });
+    if (!result.ok) {
+      setActionError(session, result.error || result.stderr || 'steering call failed.');
+      return;
+    }
+    appendRunLog(session, 'system', 'Steering instruction enqueued (file channel).');
+    return;
+  }
+  if (!session.activeProcess) {
+    setActionError(session, 'Start campaign execution before sending steering instructions.');
+    return;
+  }
   const result = await steeringRequest('POST', '/instruction', { text, type: instructionType });
   if (!result.ok) {
     updateSteering(session, false, 0, false, result.error);
@@ -1805,6 +2625,34 @@ function hydrateOpenClaudeHistory(session, campaignRef, options = {}) {
     historyLoaded: true,
     transcript
   };
+  reconcileZombieResponding(session);
+}
+
+// If a prior turn was mid-stream when the extension host was killed/reloaded,
+// the on-disk transcript has `streaming: true` and `status === 'responding'`
+// but the producer subprocess is gone (it lived only in session memory). Clear
+// the spinner so the panel is usable again.
+function reconcileZombieResponding(session) {
+  const oc = session.state.openClaude;
+  if (!oc) return;
+  const hasLiveProcess = Boolean(session.openClaudeProcess);
+  const transcript = oc.transcript || [];
+  const lastStreaming = transcript.length && transcript[transcript.length - 1].streaming;
+  if (hasLiveProcess) return;
+  if (oc.status !== 'responding' && !lastStreaming) return;
+  finalizeStreamingAssistantMessage(session);
+  const interruptedNote = appendChatMessage(session.state.openClaude.transcript || [], {
+    role: 'system',
+    text: 'Previous response was interrupted (extension reloaded or session lost). Send a new message to retry.',
+    timestamp: new Date().toISOString()
+  });
+  session.state.openClaude = {
+    ...session.state.openClaude,
+    status: 'ready',
+    error: 'Previous OpenClaude turn did not finish before the extension was reloaded.',
+    transcript: interruptedNote
+  };
+  saveOpenClaudeHistory(session);
 }
 
 function openClaudeChatPath(root, campaignRef) {
@@ -2004,7 +2852,38 @@ async function sendOpenClaudeMessage(session, message) {
   let stdoutBuffer = '';
   let stderrBuffer = '';
   let assistantText = '';
+  let lastChunkAt = Date.now();
+  let stallWarned = false;
+  let killedForStall = false;
+  const watchdog = setInterval(() => {
+    if (!session.openClaudeProcess || session.openClaudeProcess !== proc) {
+      clearInterval(watchdog);
+      return;
+    }
+    const idleMs = Date.now() - lastChunkAt;
+    if (!stallWarned && idleMs >= OPENCLAUDE_STALL_WARN_MS) {
+      stallWarned = true;
+      appendOpenClaudeAction(session, {
+        kind: 'stall',
+        status: 'warning',
+        text: `No output from OpenClaude for ${Math.round(idleMs / 1000)}s. It may be stuck on a tool call.`,
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (!killedForStall && idleMs >= OPENCLAUDE_STALL_KILL_MS) {
+      killedForStall = true;
+      appendOpenClaudeAction(session, {
+        kind: 'stall',
+        status: 'failed',
+        text: `Terminating OpenClaude after ${Math.round(idleMs / 1000)}s of silence.`,
+        timestamp: new Date().toISOString()
+      });
+      try { proc.kill('SIGTERM'); } catch (_) {}
+    }
+  }, OPENCLAUDE_WATCHDOG_INTERVAL_MS);
   proc.stdout.on('data', (chunk) => {
+    lastChunkAt = Date.now();
+    stallWarned = false;
     stdoutBuffer += chunk.toString();
     const parsed = consumeJsonLines(stdoutBuffer);
     stdoutBuffer = parsed.remainder;
@@ -2021,11 +2900,13 @@ async function sendOpenClaudeMessage(session, message) {
     }
   });
   proc.stderr.on('data', (chunk) => {
+    lastChunkAt = Date.now();
     const textChunk = chunk.toString();
     stderrBuffer += textChunk;
     appendOpenClaudeAction(session, { kind: 'stderr', status: 'running', text: textChunk, timestamp: new Date().toISOString() });
   });
   proc.on('error', (error) => {
+    clearInterval(watchdog);
     session.state.openClaude = {
       ...(session.state.openClaude || defaultOpenClaudeState()),
       status: 'error',
@@ -2041,18 +2922,24 @@ async function sendOpenClaudeMessage(session, message) {
     postState(session);
   });
   proc.on('exit', async (code, signal) => {
+    clearInterval(watchdog);
     session.openClaudeProcess = null;
     if (!assistantText && stdoutBuffer.trim()) {
       assistantText = stdoutBuffer.trim();
       updateStreamingAssistantMessage(session, assistantText);
     }
     finalizeStreamingAssistantMessage(session);
+    const stalledOut = killedForStall;
     session.state.openClaude = {
       ...(session.state.openClaude || defaultOpenClaudeState()),
-      status: code === 0 ? 'ready' : 'error',
-      error: code === 0 ? null : `OpenClaude exited with code ${code == null ? 'null' : code}${signal ? ` (${signal})` : ''}.`
+      status: code === 0 && !stalledOut ? 'ready' : 'error',
+      error: code === 0 && !stalledOut
+        ? null
+        : stalledOut
+          ? 'OpenClaude was terminated after going silent for too long. Send a new message to retry.'
+          : `OpenClaude exited with code ${code == null ? 'null' : code}${signal ? ` (${signal})` : ''}.`
     };
-    if (code !== 0 && !assistantText) {
+    if ((code !== 0 || stalledOut) && !assistantText) {
       session.state.openClaude.transcript = appendChatMessage(session.state.openClaude?.transcript || [], {
         role: 'system',
         text: [
@@ -2062,11 +2949,36 @@ async function sendOpenClaudeMessage(session, message) {
         timestamp: new Date().toISOString()
       });
     }
-    appendOpenClaudeAction(session, { kind: 'command', status: code === 0 ? 'completed' : 'failed', text: `OpenClaude exited with code ${code == null ? 'null' : code}.`, timestamp: new Date().toISOString() });
+    appendOpenClaudeAction(session, { kind: 'command', status: code === 0 && !stalledOut ? 'completed' : 'failed', text: `OpenClaude exited with code ${code == null ? 'null' : code}${stalledOut ? ' (stall watchdog)' : ''}.`, timestamp: new Date().toISOString() });
     Object.assign(session.state, await loadCampaignWorkspace(session.root, session.state.selectedCampaign));
     saveOpenClaudeHistory(session);
     postState(session);
   });
+}
+
+function cancelOpenClaudeSession(session) {
+  const proc = session.openClaudeProcess;
+  if (!proc) {
+    finalizeStreamingAssistantMessage(session);
+    session.state.openClaude = {
+      ...(session.state.openClaude || defaultOpenClaudeState()),
+      status: 'ready'
+    };
+    saveOpenClaudeHistory(session);
+    postState(session);
+    return;
+  }
+  appendOpenClaudeAction(session, { kind: 'command', status: 'cancelled', text: 'Cancel requested by user.', timestamp: new Date().toISOString() });
+  session.state.openClaude = {
+    ...(session.state.openClaude || defaultOpenClaudeState()),
+    transcript: appendChatMessage(session.state.openClaude?.transcript || [], {
+      role: 'system',
+      text: 'Cancelled by user.',
+      timestamp: new Date().toISOString()
+    })
+  };
+  try { proc.kill('SIGTERM'); } catch (_) {}
+  // The exit handler finishes the cleanup (finalize, status, saveHistory, postState).
 }
 
 async function linkArtifactContext(session, message) {
@@ -2148,31 +3060,52 @@ async function loadOpenClaudeContextPack(session, model) {
 }
 
 function buildOpenClaudePrompt(session, userText, contextPack) {
-  const contextJson = JSON.stringify(compactOpenClaudeContext(contextPack), null, 2);
+  const selectedNodeId = session.state.selectedGraphNode || '';
+  const contextJson = JSON.stringify(compactOpenClaudeContext(contextPack, selectedNodeId), null, 2);
   const history = chatHistoryForPrompt(session.state.openClaude?.transcript || [], userText);
   const root = session.root || process.cwd();
   const commandSpec = resolveMscCommand(root);
   const cliPrefix = commandSpec.shellPrefix || commandSpec.label;
   return [
     `Campaign: ${session.state.selectedCampaign}`,
+    selectedNodeId ? `Researcher's currently selected graph node: ${selectedNodeId} (treat "this stage" / "this node" as referring to it unless told otherwise).` : '',
     `Researcher message: ${userText}`,
     '',
     'Recent chat history:',
     history || 'No prior chat history for this campaign.',
     '',
+    'You are the Overseer for this campaign. This chat is the researcher\'s primary steering interface — the graph and node-detail panel they see on the left expose the same campaign state you can inspect through the SDK. When the researcher asks for action, prefer to actually call the SDK rather than only describing what would happen.',
     `Use the MSc SDK/CLI as the campaign authority. Run commands from ${root} with this repo-local prefix: ${cliPrefix}. Do not assume bare msc is on PATH.`,
-    'You may autonomously inspect and mutate campaign state through public SDK commands, including feedback, context links, reruns, reroutes, approvals, and campaign continuation. Do not edit product truth directly, delete campaigns/artifacts, edit repo code, scrape SQLite, or bypass budget limits.',
+    '',
+    'Steering verbs you have direct CLI access to via "<prefix> campaigns ..." (see "<prefix> campaigns --help" for the full surface):',
+    '  - rerun-stage <campaign> <node> --reason "..."   (re-execute a stage; produces a new artifact iteration)',
+    '  - rewrite-stage <campaign> <node> --instruction "..."   (apply an explicit edit instruction)',
+    '  - rewind <campaign> <node> --reason "..."   (roll the graph back to before a node)',
+    '  - reroute --from <node> --to <node> --reason "..."   (change the active path)',
+    '  - propose-repair <campaign> --node <node> --reason "..."   (open a structured repair proposal)',
+    '  - summarize-artifacts <campaign>   (digest the most recent deliverables)',
+    '  - request-evidence <campaign> --question "..." [--node <node>] [--artifact <path>]',
+    '  - approve <approval-id> / reject <approval-id>   (decide a pending approval)',
+    '',
+    'Detached SLURM runs (auto-used on HPC hosts) are managed via "<prefix> hpc ...":',
+    '  - hpc submit <campaign> --task "..."   (start a new detached orchestrator + heartbeat)',
+    '  - hpc status <campaign> [--run-id ID] --json   (squeue state + last event for a run)',
+    '  - hpc steer <campaign> --message "..."  (file-based steering; reaches compute nodes)',
+    '  - hpc cancel <campaign> [--run-id ID]   (scancel both jobs; records RunCancelled)',
+    '  - hpc reconcile <campaign>   (reconcile any vanished jobs against squeue)',
+    '  - hpc tail <campaign> [--run-id ID]   (tail -F the orchestrator stdout log)',
+    'For ad-hoc analysis you may also Read / Grep artifact files directly from the campaign workspace. To "spawn a debug agent" you typically use propose-repair or request-evidence with a focused question, then iterate via rerun-stage once the diagnosis lands. Never edit repo code, delete campaigns/artifacts, scrape SQLite directly, or bypass budget limits.',
     '',
     'Current compact campaign context:',
     contextJson
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
-function compactOpenClaudeContext(contextPack) {
+function compactOpenClaudeContext(contextPack, selectedNodeId = '') {
   if (!contextPack) {
-    return {};
+    return selectedNodeId ? { selected_node_id: selectedNodeId } : {};
   }
-  return {
+  const compact = {
     schema: contextPack.schema,
     campaign: contextPack.campaign,
     execution: contextPack.execution,
@@ -2183,6 +3116,8 @@ function compactOpenClaudeContext(contextPack) {
     recent_feedback: contextPack.recent_feedback,
     selected_artifacts: contextPack.selected_artifacts
   };
+  if (selectedNodeId) compact.selected_node_id = selectedNodeId;
+  return compact;
 }
 
 function chatHistoryForPrompt(messages, currentUserText = '') {

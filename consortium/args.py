@@ -5,7 +5,35 @@ import argparse
 from .utils import AVAILABLE_MODELS
 
 def parse_arguments():
-    """Parse command line arguments."""
+    """Parse command line arguments (instantiates a fresh parser each call)."""
+    return build_parser().parse_args()
+
+
+def known_runner_flags() -> set[str]:
+    """Return the set of long-form flag strings accepted by the runner.
+
+    Used by ``msc hpc submit`` to validate the argv it's about to splice
+    into the orchestrator sbatch script *before* `sbatch` is called, so
+    typos like ``--tier`` (a ``msc run`` Click flag, not a runner flag)
+    surface as a CLI error instead of an opaque exit-code-2 after 30s of
+    compute. Includes only the canonical ``--name`` form, not short
+    aliases or ``--no-*`` negations of BooleanOptionalAction (we expose
+    the negations explicitly in args.py where they exist).
+    """
+    flags: set[str] = set()
+    for action in build_parser()._actions:
+        for opt in action.option_strings:
+            if opt.startswith("--"):
+                flags.add(opt)
+    return flags
+
+
+def build_parser():
+    """Construct the runner's argparse parser without parsing argv.
+
+    Lets callers (e.g. the hpc-submit validator) introspect the legal
+    flag set without running ``parse_args``.
+    """
     parser = argparse.ArgumentParser(
         description="PoggioAI/MSc — Multi-Agent Research Pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -163,6 +191,47 @@ Examples:
         type=int,
         default=None,
         help="Graph snapshot version this run is executing.",
+    )
+
+    parser.add_argument(
+        "--resume-run-id",
+        type=str,
+        default=None,
+        help=(
+            "Reuse an existing run_id when this orchestrator is being resubmitted "
+            "as a fresh attempt of the same logical run (used by msc hpc submit + "
+            "the supervising heartbeat). Anchors the LangGraph checkpointer's "
+            "thread_id so resume picks up from the last node-level checkpoint."
+        ),
+    )
+
+    parser.add_argument(
+        "--steering-inbox",
+        type=str,
+        default=None,
+        help=(
+            "Path to a JSONL file the runner polls for steering instructions. "
+            "Used in detached/SLURM runs where the HTTP steering socket is not "
+            "reachable from the IDE."
+        ),
+    )
+
+    parser.add_argument(
+        "--steering-outbox",
+        type=str,
+        default=None,
+        help="Path the runner writes per-instruction acks to (companion to --steering-inbox).",
+    )
+
+    parser.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        help=(
+            "USD budget cap for this run. Precedence: campaign DB (when "
+            "--campaign-id is set) > this flag > .llm_config.yaml's "
+            "budget.usd_limit > 3.0 fallback."
+        ),
     )
 
     # -----------------------------------------------------------------
@@ -490,4 +559,4 @@ Examples:
              "configured research loops, avoiding LangGraph's small default.",
     )
 
-    return parser.parse_args()
+    return parser

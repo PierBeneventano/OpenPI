@@ -3,6 +3,23 @@
 This directory contains the configuration-first OpenClaude integration for
 PoggioAI/MSc.
 
+## Install
+
+For a guided install, use the dashboard's **Setup** tab — see the
+[README "One-place setup" section](../../README.md#2-one-place-setup-under-5-minutes).
+For terminal users:
+
+```bash
+msc openclaude install          # idempotent; npm install -g @gitlawb/openclaude
+msc openclaude readiness --json # confirms the install
+```
+
+The package is `@gitlawb/openclaude` — an OpenAI-compatible Claude Code fork
+that talks to OpenRouter via the env contract MSc produces. The install lands
+in the same environment that ships `msc` itself.
+
+## Surface
+
 The integration treats OpenClaude as a high-level campaign steering harness. It
 provides:
 

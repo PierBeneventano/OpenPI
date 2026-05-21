@@ -2874,7 +2874,16 @@ def build_research_graph_v2(config: "ResearchGraphConfig"):
         )
     else:
         graph.set_entry_point("persona_council")
-        graph.add_edge("persona_council", "literature_review_agent")
+        # Conditional gate: if persona_council set critical_failure (e.g.
+        # 'persona_council_deadlock' when the synthesize-vote loop hit its
+        # safety cap without 2-of-3 ACCEPT), park the graph at END so the
+        # campaign sits in human_decision_required until the user acts. On
+        # consensus (the common path), proceed to literature_review.
+        graph.add_conditional_edges(
+            "persona_council",
+            _critical_failure_check("literature_review_agent"),
+            {"literature_review_agent": "literature_review_agent", END: END},
+        )
 
     # Lit review → gate
     graph.add_edge("literature_review_agent", "lit_review_gate")

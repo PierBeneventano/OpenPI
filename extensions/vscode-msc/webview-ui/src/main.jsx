@@ -30,6 +30,9 @@ const emptyState = {
   runLog: [],
   steering: {},
   onboardingOpen: false,
+  setupOpen: false,
+  setup: null,
+  setupOps: { openclaudeInstall: null },
   keyStatus: null,
   openClaude: { status: 'idle', model: 'openai/gpt-5-mini', models: [], transcript: [], actions: [], contextLinks: [] },
   openClaudeContextLinks: []
@@ -39,7 +42,7 @@ function App() {
   const [state, setState] = useState(emptyState);
   const [newCampaignOpen, setNewCampaignOpen] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState(null);
-  const [workspaceTab, setWorkspaceTab] = useState('graph');
+  const [workspaceTab, setWorkspaceTab] = useState('deliverables');
   const [keyOpStatus, setKeyOpStatus] = useState(null);
 
   useEffect(() => {
@@ -88,25 +91,24 @@ function App() {
   }, []);
 
   const onboardingOpen = Boolean(state.onboardingOpen);
+  const setupOpen = Boolean(state.setupOpen);
   const keyStatus = state.keyStatus;
   useEffect(() => {
-    if (onboardingOpen && !keyStatus) {
+    if ((onboardingOpen || setupOpen) && !keyStatus) {
       vscode.postMessage({ type: 'refreshKeyStatus' });
     }
-  }, [onboardingOpen, keyStatus]);
+  }, [onboardingOpen, setupOpen, keyStatus]);
 
   useEffect(() => {
-    if (!state.loaded || onboardingOpen) return;
-    // Only auto-open onboarding when we have an authoritative answer that
-    // OPENROUTER is missing. Without this guard, a transient spawn failure
-    // (e.g. EAGAIN under HPC node load) makes the warning panel pop up
-    // even though the key is configured in ~/.msc/.env.
-    if (!keyStatus || !keyStatus.ok || !Array.isArray(keyStatus.keys)) return;
-    const openrouterEntry = keyStatus.keys.find((entry) => entry.env_var === 'OPENROUTER_API_KEY');
-    if (openrouterEntry && !openrouterEntry.configured) {
-      vscode.postMessage({ type: 'openOnboarding' });
+    if (!state.loaded || setupOpen || onboardingOpen) return;
+    // Open the Setup tab automatically when setup-state reports any required
+    // item is missing. Guarded by state.loaded so a transient spawn failure
+    // (e.g. EAGAIN under HPC node load) doesn't flash the panel open.
+    const warnings = state.setup && Array.isArray(state.setup.warnings) ? state.setup.warnings : null;
+    if (warnings && warnings.length > 0) {
+      vscode.postMessage({ type: 'openSetup' });
     }
-  }, [state.loaded, onboardingOpen, keyStatus]);
+  }, [state.loaded, setupOpen, onboardingOpen, state.setup]);
 
   useEffect(() => {
     if (!deleteCandidate || !state.loaded) return;
@@ -129,6 +131,7 @@ function App() {
           requestDelete={setDeleteCandidate}
         />
         {deleteCandidate ? <DeleteCampaignModal target={deleteCandidate} state={state} onClose={() => setDeleteCandidate(null)} /> : null}
+        {setupOpen ? <SetupTab state={state} opStatus={keyOpStatus} /> : null}
         {onboardingOpen ? <OnboardingPanel state={state} opStatus={keyOpStatus} /> : null}
       </>
     );
@@ -143,6 +146,7 @@ function App() {
         requestDelete={setDeleteCandidate}
       />
       {deleteCandidate ? <DeleteCampaignModal target={deleteCandidate} state={state} onClose={() => setDeleteCandidate(null)} /> : null}
+      {setupOpen ? <SetupTab state={state} opStatus={keyOpStatus} /> : null}
       {onboardingOpen ? <OnboardingPanel state={state} opStatus={keyOpStatus} /> : null}
     </>
   );
@@ -164,6 +168,7 @@ function Home({ state, newCampaignOpen, setNewCampaignOpen, requestDelete }) {
         </div>
         <div className="header-actions">
           <button onClick={() => vscode.postMessage({ type: 'refresh' })}>Refresh</button>
+          <SetupHeaderButton state={state} />
           <button onClick={() => vscode.postMessage({ type: 'openSettings' })}>Diagnostics</button>
           <button className="primary" onClick={() => setNewCampaignOpen(true)}>New Campaign</button>
         </div>
@@ -294,13 +299,18 @@ function DeleteCampaignModal({ target, state, onClose }) {
 }
 
 function CampaignWorkspace({ state, tab, setTab, requestDelete }) {
-  const [chatOpen, setChatOpen] = useState(false);
   const details = state.campaignDetails || {};
   const title = details.name || details.campaign_id || basename(state.selectedCampaign) || 'Campaign';
   const execution = state.campaignExecution || {};
-  const currentStage = graphNodesFromState(state).find((node) => node.id === execution.current_stage_id);
-  const openClaude = state.openClaude || emptyState.openClaude;
-  const inspectorTab = tab === 'graph' ? 'decisions' : tab;
+  const graphNodes = graphNodesFromState(state);
+  const currentStageId = execution.current_stage_id || '';
+  const currentStage = graphNodes.find((node) => node.id === currentStageId);
+  const selectedNodeId = state.selectedGraphNode || '';
+  const selectedNode = graphNodes.find((node) => node.id === selectedNodeId) || null;
+  // Restart confirmation modal state. `kind` is 'restart-node' or 'restart-campaign'.
+  // Lives at the workspace level so the modal can render in front of everything.
+  const [restartConfirm, setRestartConfirm] = useState(null);
+  const detailTab = ['decisions', 'deliverables', 'feedback', 'diagnostics', 'budget'].includes(tab) ? tab : 'deliverables';
   const previewArtifact = useCallback((artifact, options = {}) => {
     if (options.openDeliverables) {
       setTab('deliverables');
@@ -308,27 +318,32 @@ function CampaignWorkspace({ state, tab, setTab, requestDelete }) {
     vscode.postMessage({ type: 'previewArtifact', artifact });
     if (options.scrollToPreview) {
       window.setTimeout(() => {
-        document.getElementById('deliverables-preview')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('inline-preview')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 80);
     }
   }, [setTab]);
 
   return (
-    <div className="app-shell workspace-shell graph-workspace">
-      <header className="workspace-header graph-header">
+    <div className="app-shell workspace-shell campaign-shell">
+      <header className="workspace-header campaign-header">
         <div className="workspace-title">
           <button onClick={() => vscode.postMessage({ type: 'backToCampaigns' })}>Back</button>
           <div>
-            <p className="eyebrow">Research Graph</p>
+            <p className="eyebrow">Campaign</p>
             <h1>{title}</h1>
             <p className="subtle">{details.metadata?.objective || details.path || state.selectedCampaign}</p>
           </div>
         </div>
         <div className="header-actions">
           <span className={`pill status-${statusClass(statusOf(details))}`}>{statusOf(details)}</span>
-          <span className="pill">{currentStage?.label || 'No active stage'}</span>
-          <button className="primary" onClick={() => setChatOpen(true)}>AI Helper</button>
+          <span className={`pill ${currentStage ? `status-${statusClass(currentStage.status || 'running')}` : ''}`}>
+            {currentStage ? `Active: ${currentStage.label || currentStage.id}` : 'No active stage'}
+          </span>
           <button onClick={() => vscode.postMessage({ type: 'refreshCampaign' })}>Refresh</button>
+          <button
+            className="restart-campaign-btn"
+            onClick={() => setRestartConfirm({ kind: 'restart-campaign', campaignName: title })}
+          >Restart campaign</button>
           <button className="danger" onClick={() => requestDelete(deleteTargetForCampaign({ path: state.selectedCampaign, title }))}>Delete</button>
         </div>
       </header>
@@ -337,61 +352,68 @@ function CampaignWorkspace({ state, tab, setTab, requestDelete }) {
       {state.actionError ? <div className="notice error">{state.actionError}</div> : null}
       <ErrorSummary errors={state.errors || []} />
 
-      <main className="graph-primary-layout">
-        <GraphTab
-          state={state}
-          onPreviewArtifact={(artifact) => previewArtifact(artifact, { openDeliverables: true, scrollToPreview: true })}
-        />
-        <ContextRail state={state} currentStage={currentStage} />
+      <main className="campaign-layout">
+        <section className="campaign-main">
+          <GraphTab
+            state={state}
+            currentStageId={currentStageId}
+            selectedNodeId={selectedNodeId}
+            onPreviewArtifact={(artifact) => previewArtifact(artifact, { openDeliverables: false, scrollToPreview: true })}
+          />
+          <NodeDetailPanel
+            state={state}
+            node={selectedNode}
+            isActive={Boolean(selectedNode && selectedNode.id === currentStageId)}
+            tab={detailTab}
+            setTab={setTab}
+            onPreviewArtifact={previewArtifact}
+            onRequestRestart={(node) => setRestartConfirm({
+              kind: 'restart-node',
+              nodeId: node.id,
+              nodeLabel: node.label || node.id,
+            })}
+          />
+        </section>
+        <aside className="campaign-chat-column">
+          <OverseerChat state={state} selectedNode={selectedNode} currentStage={currentStage} />
+        </aside>
       </main>
-
-      <section className="inspector-stack">
-        <div className="inspector-tabs">
-          {['decisions', 'deliverables', 'feedback', 'diagnostics'].map((name) => (
-            <button key={name} className={inspectorTab === name ? 'active' : ''} onClick={() => setTab(name)}>
-              {capitalize(name)}
-            </button>
-          ))}
-        </div>
-        <div className="inspector-body">
-          {inspectorTab === 'decisions' ? <DecisionsTab state={state} /> : null}
-          {inspectorTab === 'deliverables' ? <DeliverablesTab state={state} onPreviewArtifact={(artifact) => previewArtifact(artifact, { scrollToPreview: true })} /> : null}
-          {inspectorTab === 'feedback' ? <FeedbackTab state={state} /> : null}
-          {inspectorTab === 'diagnostics' ? <DiagnosticsTab state={state} /> : null}
-        </div>
-      </section>
-      <FloatingOpenClaude state={state} open={chatOpen} setOpen={setChatOpen} />
+      {restartConfirm ? (
+        <RestartConfirmModal
+          confirm={restartConfirm}
+          onClose={() => setRestartConfirm(null)}
+        />
+      ) : null}
     </div>
   );
 }
 
-function FloatingOpenClaude({ state, open, setOpen }) {
+function OverseerChat({ state, selectedNode, currentStage }) {
   const openClaude = state.openClaude || emptyState.openClaude;
-  if (!open) {
-    return (
-      <button className="ai-helper-button" onClick={() => setOpen(true)} aria-label="Open AI helper">
-        <span>AI</span>
-        <small>{openClaude.status || 'idle'}</small>
-      </button>
-    );
-  }
   return (
-    <section className="floating-openclaude" aria-label="AI helper">
-      <div className="floating-openclaude-head">
+    <section className="overseer-chat" aria-label="Overseer chat">
+      <div className="overseer-head">
         <div>
-          <p className="eyebrow">AI Helper</p>
-          <h2>OpenClaude</h2>
+          <p className="eyebrow">Overseer</p>
+          <h2>Steer the campaign</h2>
+          <p className="subtle">
+            {currentStage
+              ? `Active stage: ${currentStage.label || currentStage.id}`
+              : 'No stage is currently running.'}
+            {selectedNode && (!currentStage || selectedNode.id !== currentStage.id)
+              ? ` · Selected: ${selectedNode.label || selectedNode.id}`
+              : ''}
+          </p>
         </div>
-        <div className="floating-openclaude-actions">
+        <div className="overseer-head-actions">
           <span className={`pill status-${statusClass(openClaude.status || 'idle')}`}>{openClaude.status || 'idle'}</span>
           <button onClick={() => vscode.postMessage({ type: 'openClaudeStart', model: openClaude.model })}>Refresh</button>
-          <button onClick={() => vscode.postMessage({ type: 'openClaudeClearHistory' })}>Clear History</button>
+          <button onClick={() => vscode.postMessage({ type: 'openClaudeClearHistory' })}>Clear</button>
           <button className="danger" onClick={() => vscode.postMessage({ type: 'openClaudeStop' })}>Stop</button>
-          <button onClick={() => setOpen(false)}>Hide</button>
         </div>
       </div>
       <ModelSelector openClaude={openClaude} />
-      <OpenClaudeChat state={state} />
+      <OpenClaudeChat state={state} selectedNode={selectedNode} />
     </section>
   );
 }
@@ -419,7 +441,7 @@ function ModelSelector({ openClaude }) {
   );
 }
 
-function OpenClaudeChat({ state }) {
+function OpenClaudeChat({ state, selectedNode }) {
   const [text, setText] = useState('');
   const chatEndRef = useRef(null);
   const openClaude = state.openClaude || emptyState.openClaude;
@@ -427,12 +449,20 @@ function OpenClaudeChat({ state }) {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: 'end' });
   }, [transcript.length, transcript[transcript.length - 1]?.text, openClaude.status]);
-  const suggestions = [
-    'Continue the campaign and tell me what you changed.',
-    'Review the latest deliverables and flag weaknesses.',
-    'Rerun the current stage using my feedback.',
-    'Compare the linked artifacts and decide what evidence is missing.'
-  ];
+  const nodeLabel = selectedNode ? (selectedNode.label || selectedNode.id) : '';
+  const suggestions = nodeLabel
+    ? [
+        `Rerun "${nodeLabel}" with the latest feedback.`,
+        `Compare the last two iterations of "${nodeLabel}".`,
+        `Spawn a debug agent to investigate "${nodeLabel}".`,
+        `Summarize what "${nodeLabel}" produced and flag weaknesses.`
+      ]
+    : [
+        'Continue the campaign and tell me what you changed.',
+        'Review the latest deliverables and flag weaknesses.',
+        'Rerun the current stage using my feedback.',
+        'Spawn a debug agent to investigate the most recent failure.'
+      ];
   function send(value = text) {
     const message = value.trim();
     if (!message) return;
@@ -478,6 +508,13 @@ function OpenClaudeChat({ state }) {
               <span>thinking...</span>
             </div>
             <p>Preparing a response...</p>
+            <button
+              type="button"
+              className="link"
+              onClick={() => vscode.postMessage({ type: 'openClaudeCancel' })}
+            >
+              Cancel
+            </button>
           </article>
         ) : null}
         <div ref={chatEndRef} />
@@ -487,9 +524,19 @@ function OpenClaudeChat({ state }) {
         send();
       }}>
         <textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="Tell OpenClaude what you want to inspect, change, rerun, or improve..." />
-        <button className="primary" type="submit" disabled={!text.trim() || openClaude.status === 'responding'}>
-          Send to OpenClaude
-        </button>
+        {openClaude.status === 'responding' ? (
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => vscode.postMessage({ type: 'openClaudeCancel' })}
+          >
+            Cancel OpenClaude
+          </button>
+        ) : (
+          <button className="primary" type="submit" disabled={!text.trim()}>
+            Send to OpenClaude
+          </button>
+        )}
       </form>
     </section>
   );
@@ -509,46 +556,6 @@ function ContextChips({ links }) {
         </span>
       ))}
     </div>
-  );
-}
-
-function ContextRail({ state, currentStage }) {
-  const openClaude = state.openClaude || emptyState.openClaude;
-  const links = openClaude.contextLinks?.length ? openClaude.contextLinks : state.openClaudeContextLinks || [];
-  const decisions = state.campaignDecisions || [];
-  const deliverables = state.campaignDeliverables || [];
-  const actions = openClaude.actions || [];
-  return (
-    <aside className="context-rail">
-      <section>
-        <p className="eyebrow">Campaign State</p>
-        <h2>{state.campaignExecution?.status || 'not started'}</h2>
-        <dl className="definition-list compact">
-          <dt>Stage</dt><dd>{currentStage?.label || '-'}</dd>
-          <dt>Decisions</dt><dd>{decisions.length}</dd>
-          <dt>Deliverables</dt><dd>{deliverables.length}</dd>
-          <dt>Model</dt><dd>{openClaude.model || '-'}</dd>
-        </dl>
-      </section>
-      <section>
-        <h3>Linked Context</h3>
-        <ContextChips links={links} />
-      </section>
-      <section>
-        <h3>Latest Deliverables</h3>
-        <ArtifactRows artifacts={deliverables.slice(0, 5)} compact />
-      </section>
-      <section>
-        <h3>Autonomous Action Log</h3>
-        {actions.length ? (
-          <div className="action-log">
-            {actions.slice(-12).map((action, index) => <code key={`${action.timestamp}-${index}`}>{action.status}: {action.text}</code>)}
-          </div>
-        ) : (
-          <p className="subtle">OpenClaude actions will appear here as it uses SDK commands and tools.</p>
-        )}
-      </section>
-    </aside>
   );
 }
 
@@ -686,57 +693,24 @@ function StartCampaignModal({ state, onClose }) {
   );
 }
 
-function GraphTab({ state, onPreviewArtifact }) {
+function GraphTab({ state, currentStageId, selectedNodeId }) {
   const graphNodes = graphNodesFromState(state);
   const graphEdges = graphEdgesFromState(state, graphNodes);
-  const selectedNodeId = state.selectedGraphNode || graphNodes[0]?.id || '';
-  const selectedNode = graphNodes.find((node) => node.id === selectedNodeId);
-  const stageArtifacts = (state.campaignArtifacts || []).filter((artifact) => {
-    return !selectedNode || !artifact.stage_id || artifact.stage_id === selectedNode.id;
-  });
+  const activeId = currentStageId || '';
+  const selectedId = selectedNodeId || '';
 
   return (
-    <main className="split-layout">
-      <section className="graph-board">
-        {graphNodes.length ? (
-          <InteractiveGraph nodes={graphNodes} edges={graphEdges} selectedNodeId={selectedNodeId} />
-        ) : (
-          <Empty title="No graph yet" detail="Draft campaigns show their graph after stages are planned." />
-        )}
-      </section>
-
-      <aside className="detail-panel">
-        <h2>{selectedNode?.label || selectedNode?.id || 'Stage details'}</h2>
-        <dl className="definition-list">
-          <dt>Kind</dt><dd>{selectedNode?.kind || '-'}</dd>
-          <dt>Status</dt><dd>{selectedNode?.status || 'unknown'}</dd>
-          <dt>Purpose</dt><dd>{selectedNode?.purpose || '-'}</dd>
-          <dt>Workspace</dt><dd>{selectedNode?.workspace || '-'}</dd>
-          <dt>Budget</dt><dd>{formatBudget(selectedNode?.budget)}</dd>
-          <dt>Council</dt><dd>{formatCouncil(selectedNode?.councilPolicy)}</dd>
-          <dt>Tier</dt><dd>{selectedNode?.tierPolicy?.id || selectedNode?.tierPolicy?.label || '-'}</dd>
-          <dt>Duality</dt><dd>{selectedNode?.requiresDualityPass ? 'required before this stage' : selectedNode?.dualityRequired ? 'gate' : '-'}</dd>
-          <dt>Tools</dt><dd>{(selectedNode?.tools || []).join(', ') || '-'}</dd>
-          <dt>Validators</dt><dd>{(selectedNode?.validators || []).join(', ') || '-'}</dd>
-          <dt>Pause</dt><dd>{(selectedNode?.pausePolicy || []).join(', ') || '-'}</dd>
-          <dt>Router</dt><dd>{formatRouter(selectedNode?.routerSpec)}</dd>
-          <dt>Retry Caps</dt><dd>{formatRetryCaps(selectedNode?.routerSpec)}</dd>
-          <dt>Subgraph</dt><dd>{formatSubgraph(selectedNode)}</dd>
-          <dt>State Reads</dt><dd>{(selectedNode?.stateReads || []).join(', ') || '-'}</dd>
-          <dt>State Writes</dt><dd>{(selectedNode?.stateWrites || []).join(', ') || '-'}</dd>
-          <dt>Routes</dt><dd>{formatRoutes(selectedNode?.routes)}</dd>
-          <dt>Failure</dt><dd>{selectedNode?.fail_reason || '-'}</dd>
-        </dl>
-        <h3>Stage Outputs</h3>
-        <ArtifactRows artifacts={stageArtifacts} onPreview={onPreviewArtifact} />
-        <h3>Logs</h3>
-        <LogList logs={selectedNode?.logs || []} />
-      </aside>
-    </main>
+    <section className="graph-board">
+      {graphNodes.length ? (
+        <InteractiveGraph nodes={graphNodes} edges={graphEdges} selectedNodeId={selectedId} activeNodeId={activeId} />
+      ) : (
+        <Empty title="No graph yet" detail="Draft campaigns show their graph after stages are planned." />
+      )}
+    </section>
   );
 }
 
-function InteractiveGraph({ nodes, edges, selectedNodeId }) {
+function InteractiveGraph({ nodes, edges, selectedNodeId, activeNodeId }) {
   const viewportRef = useRef(null);
   const [view, setView] = useState({ x: 36, y: 36, scale: 0.78 });
   const [drag, setDrag] = useState(null);
@@ -860,7 +834,12 @@ function InteractiveGraph({ nodes, edges, selectedNodeId }) {
           </g>
           <g className="graph-nodes">
             {layout.nodes.map((node) => (
-              <GraphSvgNode key={node.id} node={node} selected={selectedNodeId === node.id} />
+              <GraphSvgNode
+                key={node.id}
+                node={node}
+                selected={selectedNodeId === node.id}
+                active={activeNodeId === node.id}
+              />
             ))}
           </g>
         </g>
@@ -869,11 +848,17 @@ function InteractiveGraph({ nodes, edges, selectedNodeId }) {
   );
 }
 
-function GraphSvgNode({ node, selected }) {
+function GraphSvgNode({ node, selected, active }) {
   const titleLines = wrapLabel(node.label || node.id, 24, 2);
+  const classes = [
+    'graph-svg-node',
+    `status-${statusClass(node.status)}`,
+    selected ? 'selected' : '',
+    active ? 'active' : ''
+  ].filter(Boolean).join(' ');
   return (
     <g
-      className={`graph-svg-node status-${statusClass(node.status)} ${selected ? 'selected' : ''}`}
+      className={classes}
       transform={`translate(${node.x} ${node.y})`}
       role="button"
       tabIndex="0"
@@ -889,6 +874,7 @@ function GraphSvgNode({ node, selected }) {
         }
       }}
     >
+      {active ? <rect className="active-ring" x="-4" y="-4" width={node.width + 8} height={node.height + 8} rx="9" /> : null}
       <rect width={node.width} height={node.height} rx="6" />
       <circle cx="16" cy="18" r="5" />
       <text x="28" y="21" className="node-kind">{node.kind || 'node'}</text>
@@ -898,18 +884,551 @@ function GraphSvgNode({ node, selected }) {
       {titleLines.map((line, index) => (
         <text key={`${line}-${index}`} x="14" y={46 + index * 17} className="node-title">{line}</text>
       ))}
-      <text x="14" y={node.height - 15} className="node-meta">{node.status || 'unknown'} | {node.artifactCount || 0} outputs</text>
+      <text x="14" y={node.height - 15} className="node-meta">{active ? 'running · ' : ''}{node.status || 'unknown'} | {node.artifactCount || 0} outputs</text>
     </g>
   );
 }
 
-function DecisionsTab({ state }) {
-  const decisions = state.campaignDecisions || [];
-  if (!decisions.length) {
+function NodeDetailPanel({ state, node, isActive, tab, setTab, onPreviewArtifact, onRequestRestart }) {
+  if (!node) {
+    return (
+      <section className="node-detail empty">
+        <p className="eyebrow">Stage Detail</p>
+        <h2>Click a node on the graph</h2>
+        <p className="subtle">
+          Select any node in the campaign graph to see its latest artifact rendered inline, its metadata,
+          and the history of runs that led up to it.
+        </p>
+        <DetailInspectorTabs state={state} tab={tab} setTab={setTab} stageId="" onPreviewArtifact={onPreviewArtifact} />
+      </section>
+    );
+  }
+
+  const allArtifacts = state.campaignArtifacts || [];
+  const stageArtifacts = allArtifacts.filter((artifact) => artifact.stage_id === node.id);
+  const headline = pickHeadlineArtifact(stageArtifacts);
+  const isHeadlineActivePreview = state.artifactPreview && headline && (state.artifactPreview.id === headline.id || state.artifactPreview.path === headline.path);
+  const history = runHistoryForNode(state.campaignEvents || [], stageArtifacts, node.id);
+
+  function previewHeadline() {
+    if (!headline) return;
+    onPreviewArtifact(headline, { scrollToPreview: false });
+  }
+
+  return (
+    <section className="node-detail">
+      <header className="node-detail-head">
+        <div>
+          <p className="eyebrow">Stage Detail</p>
+          <h2>
+            {node.label || node.id}
+            {isActive ? <span className="pill running-pill">Running</span> : null}
+            <span className={`pill status-${statusClass(node.status)}`}>{node.status || 'unknown'}</span>
+          </h2>
+          {node.purpose ? <p className="subtle">{node.purpose}</p> : null}
+        </div>
+        <div className="node-detail-actions">
+          {headline && headline.exists ? (
+            <button onClick={previewHeadline}>Show latest artifact</button>
+          ) : null}
+          <button
+            title="Open the most recently modified file under this stage's workspace"
+            onClick={() => vscode.postMessage({ type: 'openStageNewestFile', stageId: node.id })}
+          >
+            Open newest file
+          </button>
+          <button
+            title="Reveal this stage's workspace directory in your file explorer"
+            onClick={() => vscode.postMessage({ type: 'revealStageWorkspace', stageId: node.id })}
+          >
+            Reveal in finder
+          </button>
+          <button onClick={() => vscode.postMessage({ type: 'openClaudeSend', text: `Summarize what stage "${node.label || node.id}" produced and flag what is weak or missing.` })}>Ask Overseer</button>
+          {/* Restart this node. Disabled when the node hasn't run yet — there's
+              nothing meaningful to restart from a pending/planned state. */}
+          <button
+            className="restart-node-btn"
+            disabled={['pending', 'planned', 'unknown'].includes(node.status)}
+            title={['pending', 'planned', 'unknown'].includes(node.status)
+              ? 'This node has not run yet; nothing to restart.'
+              : 'Cancel any active run + sbatch a fresh orchestrator from this node.'}
+            onClick={() => onRequestRestart && onRequestRestart(node)}
+          >
+            Restart node
+          </button>
+        </div>
+      </header>
+
+      <div className="node-detail-headline">
+        {headline ? (
+          <>
+            <p className="eyebrow">
+              {headline.exists
+                ? (isActive ? 'Latest output so far' : 'Final artifact')
+                : (isActive ? 'Planned output (stage running)' : 'Planned output (not yet produced)')}
+            </p>
+            {isHeadlineActivePreview && state.artifactPreview ? (
+              <InlinePreview preview={state.artifactPreview} />
+            ) : (
+              <div className="inline-preview headline-placeholder" id="inline-preview">
+                <PreviewHead preview={{
+                  title: headline.label || basename(headline.path) || 'Artifact',
+                  relativePath: headline.path
+                }} />
+                {headline.exists ? (
+                  <button className="primary" onClick={previewHeadline}>Render preview</button>
+                ) : (
+                  <p className="subtle">
+                    This artifact has not been written to disk yet. Use <strong>Open newest file</strong> above
+                    to see whatever this stage has written so far, or wait for the stage to complete.
+                  </p>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="inline-preview empty" id="inline-preview">
+            <p className="eyebrow">{isActive ? 'Stage is running' : 'No artifacts yet'}</p>
+            <p className="subtle">
+              {isActive
+                ? 'No artifact has been produced for this stage yet. Watch the chat for progress.'
+                : 'No artifact has been produced for this stage.'}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {node.id === 'persona_council' ? (
+        <PersonaCouncilAttemptsFeed events={state.campaignEvents || []} />
+      ) : null}
+
+      <StageHistoryDrawer history={history} headline={headline} onPreviewArtifact={onPreviewArtifact} />
+
+      <details className="node-detail-meta">
+        <summary>Stage metadata</summary>
+        <dl className="definition-list">
+          <dt>Kind</dt><dd>{node.kind || '-'}</dd>
+          <dt>Status</dt><dd>{node.status || 'unknown'}</dd>
+          <dt>Workspace</dt><dd>{node.workspace || '-'}</dd>
+          <dt>Budget</dt><dd>{formatBudget(node.budget)}</dd>
+          <dt>Council</dt><dd>{formatCouncil(node.councilPolicy)}</dd>
+          <dt>Tier</dt><dd>{node.tierPolicy?.id || node.tierPolicy?.label || '-'}</dd>
+          <dt>Duality</dt><dd>{node.requiresDualityPass ? 'required before this stage' : node.dualityRequired ? 'gate' : '-'}</dd>
+          <dt>Tools</dt><dd>{(node.tools || []).join(', ') || '-'}</dd>
+          <dt>Validators</dt><dd>{(node.validators || []).join(', ') || '-'}</dd>
+          <dt>Pause</dt><dd>{(node.pausePolicy || []).join(', ') || '-'}</dd>
+          <dt>Router</dt><dd>{formatRouter(node.routerSpec)}</dd>
+          <dt>Retry Caps</dt><dd>{formatRetryCaps(node.routerSpec)}</dd>
+          <dt>Subgraph</dt><dd>{formatSubgraph(node)}</dd>
+          <dt>State Reads</dt><dd>{(node.stateReads || []).join(', ') || '-'}</dd>
+          <dt>State Writes</dt><dd>{(node.stateWrites || []).join(', ') || '-'}</dd>
+          <dt>Routes</dt><dd>{formatRoutes(node.routes)}</dd>
+          <dt>Failure</dt><dd>{node.fail_reason || '-'}</dd>
+        </dl>
+      </details>
+
+      <details className="node-detail-outputs" open>
+        <summary>All outputs for this stage ({stageArtifacts.length})</summary>
+        <ArtifactRows artifacts={stageArtifacts} onPreview={(artifact) => onPreviewArtifact(artifact, { scrollToPreview: true })} />
+      </details>
+
+      <DetailInspectorTabs state={state} tab={tab} setTab={setTab} stageId={node.id} onPreviewArtifact={onPreviewArtifact} />
+    </section>
+  );
+}
+
+function DetailInspectorTabs({ state, tab, setTab, stageId, onPreviewArtifact }) {
+  return (
+    <div className="inspector-stack node-detail-inspector">
+      <div className="inspector-tabs">
+        {['deliverables', 'decisions', 'feedback', 'budget', 'diagnostics'].map((name) => (
+          <button key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>
+            {capitalize(name)}
+          </button>
+        ))}
+      </div>
+      <div className="inspector-body">
+        {tab === 'deliverables' ? <DeliverablesTab state={state} stageId={stageId} onPreviewArtifact={(artifact) => onPreviewArtifact(artifact, { scrollToPreview: true })} /> : null}
+        {tab === 'decisions' ? <DecisionsTab state={state} stageId={stageId} /> : null}
+        {tab === 'feedback' ? <FeedbackTab state={state} stageId={stageId} /> : null}
+        {tab === 'budget' ? <BudgetTab state={state} /> : null}
+        {tab === 'diagnostics' ? <DiagnosticsTab state={state} stageId={stageId} /> : null}
+      </div>
+    </div>
+  );
+}
+
+function BudgetTab({ state }) {
+  const budget = state.campaignBudget || {};
+  const runtime = budget.runtime || {};
+  const cap = Number(budget.limit_usd || 0);
+  const spent = Number(runtime.total_usd || 0);
+  const pct = cap > 0 ? Math.min(100, Math.round((spent / cap) * 100)) : 0;
+  const byModel = runtime.by_model || {};
+  const uncovered = state.campaignUncoveredModels || [];
+  const [newCap, setNewCap] = useState(cap || '');
+  const [pricingOpen, setPricingOpen] = useState(false);
+  useEffect(() => { setNewCap(cap || ''); }, [cap]);
+
+  function setCap() {
+    const value = Number(newCap);
+    if (!Number.isFinite(value) || value <= 0) return;
+    vscode.postMessage({ type: 'updateBudgetCap', newCap: value });
+  }
+
+  return (
+    <main className="panel budget-tab">
+      <header className="budget-head">
+        <div>
+          <p className="eyebrow">Budget</p>
+          <h2>${spent.toFixed(4)} / ${cap.toFixed(2)} ({pct}%)</h2>
+          <p className="subtle">
+            {pct >= 100 ? 'Cap reached — runner will halt.' :
+             pct >= 95  ? 'Approaching cap (95%+).' :
+             pct >= 85  ? 'Above 85% — consider raising cap.' :
+                          'Healthy.'}
+          </p>
+        </div>
+        <div className="budget-head-actions">
+          <input type="number" min="1" step="0.5" value={newCap}
+                 onChange={(event) => setNewCap(event.target.value)}
+                 style={{width: '7em'}}
+                 placeholder="new cap"/>
+          <button onClick={setCap}>Update cap</button>
+          <button onClick={() => setPricingOpen(true)}>Pricing…</button>
+        </div>
+      </header>
+      <div className="budget-bar">
+        <div className="budget-bar-fill" style={{ width: `${pct}%`,
+              background: pct >= 95 ? 'var(--bad)' : pct >= 85 ? 'var(--warn)' : 'var(--accent)' }} />
+      </div>
+      <h3>Per-model spend</h3>
+      {Object.keys(byModel).length ? (
+        <table className="budget-table">
+          <thead><tr><th>Model</th><th style={{textAlign: 'right'}}>USD</th></tr></thead>
+          <tbody>
+            {Object.entries(byModel).sort((a, b) => b[1] - a[1]).map(([model, usd]) => (
+              <tr key={model}><td>{model}</td><td style={{textAlign: 'right'}}>${Number(usd).toFixed(4)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="subtle">No spend recorded yet.</p>
+      )}
+      <h3>Uncovered models</h3>
+      {uncovered.length ? (
+        <div className="uncovered-list">
+          {uncovered.map((entry) => (
+            <UncoveredModelRow key={entry.model_id} entry={entry} />
+          ))}
+        </div>
+      ) : (
+        <p className="subtle">All models used so far have pricing entries.</p>
+      )}
+      {pricingOpen ? <PricingModal onClose={() => setPricingOpen(false)} state={state} /> : null}
+    </main>
+  );
+}
+
+function UncoveredModelRow({ entry }) {
+  const suggestion = entry.suggestion || {};
+  function dispose(action, extra = {}) {
+    vscode.postMessage({ type: 'setPricingDisposition',
+                         modelId: entry.model_id, action, ...extra });
+  }
+  return (
+    <div className="uncovered-row">
+      <strong>{entry.model_id}</strong>
+      {suggestion.sibling ? (
+        <span className="subtle">
+          suggested rate from {suggestion.sibling}: ${suggestion.input_per_1k}/1k in, ${suggestion.output_per_1k}/1k out
+        </span>
+      ) : null}
+      <div className="uncovered-actions">
+        {suggestion.sibling ? <button onClick={() => dispose('use_suggested')}>Use suggested</button> : null}
+        <button onClick={() => dispose('treat_as_zero')}>Allow $0</button>
+        <button onClick={() => dispose('skip_model')}>Skip model</button>
+      </div>
+    </div>
+  );
+}
+
+function PricingModal({ onClose, state }) {
+  const [pricing, setPricing] = useState(null);
+  const [draft, setDraft] = useState({ model: '', input: '', output: '' });
+  useEffect(() => {
+    vscode.postMessage({ type: 'pricingList' });
+    function listener(event) {
+      if (event.data && event.data.type === 'pricingListResult') {
+        setPricing(event.data.pricing || {});
+      }
+    }
+    window.addEventListener('message', listener);
+    return () => window.removeEventListener('message', listener);
+  }, []);
+
+  function save() {
+    if (!draft.model || !draft.input || !draft.output) return;
+    vscode.postMessage({ type: 'pricingSet', model: draft.model,
+                         inputPer1k: Number(draft.input),
+                         outputPer1k: Number(draft.output) });
+    setDraft({ model: '', input: '', output: '' });
+  }
+  function remove(model) {
+    vscode.postMessage({ type: 'pricingUnset', model });
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal" style={{ maxWidth: '720px' }}>
+        <div className="modal-head">
+          <h2>Model pricing (.llm_config.yaml)</h2>
+          <button onClick={onClose}>Close</button>
+        </div>
+        {pricing === null ? <p className="subtle">Loading pricing…</p> : (
+          <table className="budget-table">
+            <thead><tr><th>Model</th><th>in/1k</th><th>out/1k</th><th></th></tr></thead>
+            <tbody>
+              {Object.entries(pricing).sort().map(([model, rates]) => (
+                <tr key={model}>
+                  <td>{model}</td>
+                  <td>${Number(rates.input_per_1k || 0).toFixed(5)}</td>
+                  <td>${Number(rates.output_per_1k || 0).toFixed(5)}</td>
+                  <td><button className="danger" onClick={() => remove(model)}>Remove</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <h3>Add / update</h3>
+        <div className="form-grid">
+          <label>Model id<input value={draft.model}
+                                onChange={(e) => setDraft({...draft, model: e.target.value})}
+                                placeholder="openrouter/perplexity/sonar-deep-research" /></label>
+          <label>Input $/1k<input type="number" step="0.00001" value={draft.input}
+                                  onChange={(e) => setDraft({...draft, input: e.target.value})} /></label>
+          <label>Output $/1k<input type="number" step="0.00001" value={draft.output}
+                                   onChange={(e) => setDraft({...draft, output: e.target.value})} /></label>
+        </div>
+        <button className="primary" onClick={save}>Save</button>
+      </section>
+    </div>
+  );
+}
+
+function StageHistoryDrawer({ history, headline, onPreviewArtifact }) {
+  if (!history || history.runs.length < 2) {
+    return null;
+  }
+  return (
+    <details className="node-history-drawer">
+      <summary>
+        Run history · {history.runs.length} run{history.runs.length === 1 ? '' : 's'}
+        {history.fallback ? ' (reconstructed from events)' : ''}
+      </summary>
+      <ol className="run-history-list">
+        {history.runs.map((run, index) => {
+          const isLatest = index === 0;
+          return (
+            <li key={run.run_id || `run-${index}`} className={`run-history-item ${isLatest ? 'latest' : ''}`}>
+              <div className="run-history-head">
+                <strong>{isLatest ? 'Latest' : `Run -${index}`}</strong>
+                <span className="subtle">{formatTime(run.ended_at) || formatTime(run.started_at) || '—'}</span>
+                <span className={`pill status-${statusClass(run.status || 'completed')}`}>{run.status || 'completed'}</span>
+              </div>
+              {run.reason ? <p className="subtle">{run.reason}</p> : null}
+              {run.artifacts && run.artifacts.length ? (
+                <ul className="run-history-artifacts">
+                  {run.artifacts.map((artifact) => {
+                    const isHeadline = headline && (artifact.id === headline.id || artifact.path === headline.path);
+                    return (
+                      <li key={artifact.id || artifact.path}>
+                        <span>{artifact.label || basename(artifact.path) || 'artifact'}</span>
+                        <span className="subtle">{artifact.path}</span>
+                        {isHeadline ? <span className="pill">featured above</span> : null}
+                        <button
+                          disabled={!artifact.exists}
+                          onClick={() => onPreviewArtifact(artifact, { scrollToPreview: true })}
+                        >
+                          Preview
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="subtle">No artifacts recorded for this run.</p>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </details>
+  );
+}
+
+function PersonaCouncilAttemptsFeed({ events }) {
+  const attempts = (events || [])
+    .filter((event) => event && event.type === 'PersonaCouncilAttempt')
+    .map((event) => ({
+      attempt: event.payload?.attempt,
+      maxAttempts: event.payload?.max_attempts,
+      verdicts: event.payload?.verdicts || {},
+      acceptCount: event.payload?.accept_count,
+      rejectCount: event.payload?.reject_count,
+      proposalPreview: event.payload?.proposal_preview || '',
+      ts: event.created_at
+    }))
+    .sort((a, b) => String(a.ts || '').localeCompare(String(b.ts || '')));
+  if (!attempts.length) {
+    return (
+      <details className="council-feed">
+        <summary>Persona council attempts (none yet)</summary>
+        <p className="subtle">
+          Once the council runs, each synthesize-vote attempt appears here with
+          live verdicts and the latest proposal preview.
+        </p>
+      </details>
+    );
+  }
+  const latest = attempts[attempts.length - 1];
+  return (
+    <details className="council-feed" open>
+      <summary>
+        Persona council attempts · {attempts.length}
+        {latest.maxAttempts ? ` of ${latest.maxAttempts}` : ''}
+        {latest.acceptCount >= 2 ? ' (CONSENSUS)' : ''}
+      </summary>
+      <ol className="council-attempts-list">
+        {attempts.map((entry, index) => {
+          const isLatest = index === attempts.length - 1;
+          return (
+            <li key={`${entry.ts}-${entry.attempt}`} className={`council-attempt-row ${isLatest ? 'latest' : ''}`}>
+              <div className="council-attempt-head">
+                <strong>Attempt {entry.attempt}</strong>
+                <span className="subtle">{formatTime(entry.ts)}</span>
+                <span className={`pill ${entry.acceptCount >= 2 ? 'status-completed' : entry.rejectCount >= 2 ? 'status-failed' : ''}`}>
+                  {entry.acceptCount} accept / {entry.rejectCount} reject
+                </span>
+              </div>
+              <ul className="council-verdicts">
+                {Object.entries(entry.verdicts).map(([persona, verdict]) => (
+                  <li key={persona}>
+                    <span className={`pill status-${verdict === 'ACCEPT' ? 'completed' : verdict === 'REJECT' ? 'failed' : ''}`}>
+                      {verdict}
+                    </span>
+                    <span>{persona}</span>
+                  </li>
+                ))}
+              </ul>
+              {isLatest && entry.proposalPreview ? (
+                <div className="council-proposal-preview">
+                  <p className="eyebrow">Latest proposal preview (first 400 chars)</p>
+                  <pre>{entry.proposalPreview}</pre>
+                </div>
+              ) : null}
+            </li>
+          );
+        })}
+      </ol>
+    </details>
+  );
+}
+
+function pickHeadlineArtifact(stageArtifacts) {
+  if (!stageArtifacts || !stageArtifacts.length) return null;
+  const existing = stageArtifacts.filter((artifact) => artifact.exists);
+  // If nothing exists yet, return the first declared artifact as a *preview placeholder*
+  // (NodeDetailPanel checks `headline.exists` before enabling the Render button).
+  const pool = existing.length ? existing : stageArtifacts;
+  const byMtime = pool.filter((artifact) => artifact.mtime || artifact.modified_at || artifact.created_at);
+  if (byMtime.length) {
+    return [...byMtime].sort((a, b) => artifactTimestamp(b) - artifactTimestamp(a))[0];
+  }
+  const required = pool.find((artifact) => artifact.required);
+  return required || pool[pool.length - 1];
+}
+
+function artifactTimestamp(artifact) {
+  const value = artifact.mtime || artifact.modified_at || artifact.created_at;
+  if (!value) return 0;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function runHistoryForNode(events, stageArtifacts, nodeId) {
+  if (!nodeId || !Array.isArray(events) || !events.length) {
+    return { runs: stageArtifacts.length ? [{ run_id: 'current', status: 'completed', artifacts: stageArtifacts, ended_at: null, started_at: null, reason: null }] : [], fallback: false };
+  }
+  const runs = new Map();
+  const orderKeys = [];
+  function bucketForRun(runId, startedAt) {
+    const key = runId || `unknown-${orderKeys.length}`;
+    if (!runs.has(key)) {
+      runs.set(key, { run_id: runId || '', status: '', started_at: startedAt || null, ended_at: null, reason: null, artifacts: [], event_count: 0 });
+      orderKeys.push(key);
+    }
+    return runs.get(key);
+  }
+  for (const event of events) {
+    if (!event || !event.type) continue;
+    const payload = event.payload || event.data || {};
+    const eventNode = payload.node_id || payload.stage_id || payload.target_node_id || event.node_id || event.stage_id;
+    if (eventNode && String(eventNode) !== String(nodeId)) continue;
+    const runId = String(payload.run_id || payload.execution_id || event.run_id || event.execution_id || '');
+    if (!runId && !eventNode) continue;
+    const bucket = bucketForRun(runId, event.created_at);
+    bucket.event_count += 1;
+    if (event.type.includes('start') || event.type.includes('queued')) {
+      bucket.started_at = bucket.started_at || event.created_at || null;
+    }
+    if (event.type.includes('complete') || event.type.includes('finish') || event.type.includes('exit') || event.type.includes('fail')) {
+      bucket.ended_at = event.created_at || bucket.ended_at;
+      if (event.type.includes('fail')) bucket.status = 'failed';
+      else if (!bucket.status) bucket.status = 'completed';
+    }
+    if (payload.reason && !bucket.reason) bucket.reason = String(payload.reason).slice(0, 200);
+  }
+  const orderedRuns = orderKeys
+    .map((key) => runs.get(key))
+    .filter((run) => run && run.event_count > 0)
+    .sort((a, b) => String(b.ended_at || b.started_at || '').localeCompare(String(a.ended_at || a.started_at || '')));
+  if (!orderedRuns.length) {
+    if (stageArtifacts.length) {
+      return { runs: [{ run_id: 'current', status: 'completed', artifacts: stageArtifacts, ended_at: null, started_at: null, reason: null }], fallback: false };
+    }
+    return { runs: [], fallback: false };
+  }
+  if (orderedRuns.length) {
+    orderedRuns[0].artifacts = stageArtifacts;
+  }
+  return { runs: orderedRuns, fallback: true };
+}
+
+function DecisionsTab({ state, stageId = '' }) {
+  const allDecisions = state.campaignDecisions || [];
+  const decisions = stageId
+    ? allDecisions.filter((decision) => !decision.target_id || decision.target_id === stageId || decision.target_label === stageId)
+    : allDecisions;
+  // If the persona_council deadlock blob is `open` (or `accepted_as_is`/`edited`
+  // but not yet consumed by a fresh run), render the specialized banner with
+  // per-persona rationales + edit/accept actions. This replaces the generic
+  // decision card for that specific decision; other decisions render as today.
+  const deadlock = (state.campaignMetadata || {}).persona_council_deadlock || null;
+  const hasOpenDeadlock = deadlock && deadlock.status === 'open';
+  const stageMatch = !stageId || stageId === 'persona_council';
+  const showBanner = hasOpenDeadlock && stageMatch;
+  // Hide the generic "graph_change for persona_council" decision when the
+  // banner is rendering — the banner replaces it.
+  const filteredDecisions = showBanner
+    ? decisions.filter((d) => d.target_id !== 'persona_council')
+    : decisions;
+
+  if (!showBanner && !filteredDecisions.length) {
     return (
       <main className="panel">
         <p className="eyebrow">Human decisions</p>
-        <h2>No Decisions Pending</h2>
+        <h2>{stageId ? `No decisions for ${stageId}` : 'No Decisions Pending'}</h2>
         <p className="subtle">When the graph reaches a review point, the decision, evidence, and safe actions will appear here.</p>
       </main>
     );
@@ -917,27 +1436,153 @@ function DecisionsTab({ state }) {
   return (
     <main className="panel">
       <p className="eyebrow">Human decisions</p>
-      <h2>Pending Decisions</h2>
-      <div className="feedback-list">
-        {decisions.map((decision) => (
-          <div className="feedback-item" key={decision.id}>
-            <div className="card-topline">
-              <span className="pill">{decision.status || 'pending'}</span>
-              <span className="pill">{decision.target_label || decision.target_type || 'campaign'}</span>
-              <span>{formatTime(decision.created_at)}</span>
+      <h2>{stageId ? `Decisions for ${stageId}` : 'Pending Decisions'}</h2>
+      {showBanner ? <PersonaCouncilDeadlockBanner deadlock={deadlock} /> : null}
+      {filteredDecisions.length ? (
+        <div className="feedback-list">
+          {filteredDecisions.map((decision) => (
+            <div className="feedback-item" key={decision.id}>
+              <div className="card-topline">
+                <span className="pill">{decision.status || 'pending'}</span>
+                <span className="pill">{decision.target_label || decision.target_type || 'campaign'}</span>
+                <span>{formatTime(decision.created_at)}</span>
+              </div>
+              <h3>{decision.title || 'Human review needed'}</h3>
+              <p>{decision.summary || decision.reason || decision.target_type || 'Human review is required.'}</p>
+              {decision.reason && decision.reason !== decision.summary ? <p className="subtle">Technical detail: {decision.reason}</p> : null}
+              {decision.evidence?.length ? <p className="subtle">{decision.evidence.join(', ')}</p> : null}
+              <div className="card-facts">
+                {(decision.safe_next_actions || []).map((action) => <span key={action}>{action}</span>)}
+              </div>
+              <DecisionActionButtons decision={decision} />
             </div>
-            <h3>{decision.title || 'Human review needed'}</h3>
-            <p>{decision.summary || decision.reason || decision.target_type || 'Human review is required.'}</p>
-            {decision.reason && decision.reason !== decision.summary ? <p className="subtle">Technical detail: {decision.reason}</p> : null}
-            {decision.evidence?.length ? <p className="subtle">{decision.evidence.join(', ')}</p> : null}
-            <div className="card-facts">
-              {(decision.safe_next_actions || []).map((action) => <span key={action}>{action}</span>)}
-            </div>
-            <DecisionActionButtons decision={decision} />
-          </div>
+          ))}
+        </div>
+      ) : null}
+    </main>
+  );
+}
+
+function PersonaCouncilDeadlockBanner({ deadlock }) {
+  const [mode, setMode] = useState('summary');  // 'summary' | 'editing' | 'confirm-accept'
+  const [reason, setReason] = useState('');
+  const verdicts = deadlock.verdicts || {};
+  const rationales = deadlock.rationales || {};
+  const proposalPath = deadlock.proposal_path || '';
+
+  function startEdit() {
+    if (proposalPath) {
+      vscode.postMessage({
+        type: 'openArtifact',
+        artifact: { path: proposalPath },
+      });
+    }
+    setMode('editing');
+  }
+
+  function applyEdited() {
+    vscode.postMessage({
+      type: 'resumeFromCouncilDeadlock',
+      mode: 'edited',
+      reason: reason.trim() || 'human edited proposal',
+    });
+  }
+
+  function acceptAsIs() {
+    vscode.postMessage({
+      type: 'resumeFromCouncilDeadlock',
+      mode: 'accept_as_is',
+      reason: reason.trim() || 'human accepted draft as-is',
+    });
+  }
+
+  return (
+    <section className="deadlock-banner">
+      <header className="deadlock-banner-head">
+        <p className="eyebrow">Persona council didn't converge</p>
+        <h3>
+          Council exhausted {deadlock.attempts || '?'} attempts without consensus.
+        </h3>
+        <p className="subtle">
+          The personas could not agree on the research plan. Read each persona's
+          rationale below, then either edit the latest draft yourself or accept
+          it as-is to advance the pipeline.
+        </p>
+      </header>
+
+      <div className="deadlock-rationales">
+        {Object.keys(verdicts).map((persona) => (
+          <details key={persona} className={`persona-rationale verdict-${(verdicts[persona] || 'unknown').toLowerCase()}`}>
+            <summary>
+              <strong>{persona}</strong>
+              <span className={`pill status-${(verdicts[persona] || '').toLowerCase() === 'accept' ? 'completed' : (verdicts[persona] || '').toLowerCase() === 'reject' ? 'failed' : ''}`}>
+                {verdicts[persona] || 'UNKNOWN'}
+              </span>
+            </summary>
+            <pre className="persona-rationale-text">{rationales[persona] || '(no rationale captured)'}</pre>
+          </details>
         ))}
       </div>
-    </main>
+
+      <div className="deadlock-proposal">
+        <p className="eyebrow">Latest proposal draft</p>
+        <p className="subtle">
+          <code>{proposalPath}</code>
+        </p>
+      </div>
+
+      {mode === 'editing' ? (
+        <div className="deadlock-editing-note">
+          <p>
+            <strong>Editing.</strong> A VSCode tab should have opened with{' '}
+            <code>research_proposal.md</code>. Edit the file, save (Ctrl+S), then{' '}
+            click <em>Apply edits</em> below.
+          </p>
+          <label>Reason (optional, for the audit log)
+            <input
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="e.g. tightened the empirical methodology section"
+            />
+          </label>
+          <div className="deadlock-actions">
+            <button type="button" onClick={() => setMode('summary')}>Cancel</button>
+            <button type="button" className="primary" onClick={applyEdited}>
+              Apply edits and proceed
+            </button>
+          </div>
+        </div>
+      ) : mode === 'confirm-accept' ? (
+        <div className="deadlock-confirm-accept">
+          <p>
+            Accept the latest synthesized draft as the council's output and
+            advance the pipeline to <code>literature_review_agent</code>?
+          </p>
+          <label>Reason (optional, for the audit log)
+            <input
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="e.g. the draft is close enough; let's move on"
+            />
+          </label>
+          <div className="deadlock-actions">
+            <button type="button" onClick={() => setMode('summary')}>Cancel</button>
+            <button type="button" className="primary" onClick={acceptAsIs}>
+              Confirm accept and proceed
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="deadlock-actions">
+          <button type="button" className="primary" onClick={startEdit}>
+            Edit plan and proceed
+          </button>
+          <button type="button" onClick={() => setMode('confirm-accept')}>
+            Accept as-is and proceed
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -964,10 +1609,11 @@ function decisionPrompt(decision, action) {
   return `${base}${reason} Inspect the campaign workspace and use the SDK to carry out or propose this action.`;
 }
 
-function FeedbackTab({ state }) {
+function FeedbackTab({ state, stageId = '' }) {
   const active = state.activeRun && ['running', 'stopping'].includes(state.activeRun.status);
   const steering = state.steering || {};
-  const feedback = state.campaignFeedback?.length ? state.campaignFeedback : state.campaignRunSummary?.feedback || [];
+  const allFeedback = state.campaignFeedback?.length ? state.campaignFeedback : state.campaignRunSummary?.feedback || [];
+  const feedback = stageId ? allFeedback.filter((item) => !item.node_id || item.node_id === stageId) : allFeedback;
   return (
     <main className="split-layout">
       <section className="panel">
@@ -1086,12 +1732,15 @@ function LowLevelSteering({ steering }) {
   );
 }
 
-function DeliverablesTab({ state, onPreviewArtifact }) {
+function DeliverablesTab({ state, stageId = '', onPreviewArtifact }) {
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
-  const [stageFilter, setStageFilter] = useState('all');
+  const [stageFilter, setStageFilter] = useState(stageId || 'all');
   const [existenceFilter, setExistenceFilter] = useState('existing');
   const [audienceFilter, setAudienceFilter] = useState('deliverables');
+  useEffect(() => {
+    if (stageId) setStageFilter(stageId);
+  }, [stageId]);
   const artifacts = state.campaignArtifacts || [];
   const stages = unique(artifacts.map((artifact) => artifact.stage_id).filter(Boolean));
   const types = unique(artifacts.map((artifact) => artifact.type).filter(Boolean));
@@ -1149,9 +1798,15 @@ function DeliverablesTab({ state, onPreviewArtifact }) {
   );
 }
 
-function DiagnosticsTab({ state }) {
-  const events = state.campaignEvents || [];
-  const diagnosticArtifacts = state.campaignDiagnosticArtifacts || [];
+function DiagnosticsTab({ state, stageId = '' }) {
+  const allEvents = state.campaignEvents || [];
+  const events = stageId ? allEvents.filter((event) => {
+    const payload = event.payload || event.data || {};
+    const eventNode = payload.node_id || payload.stage_id || event.node_id || event.stage_id;
+    return !eventNode || String(eventNode) === String(stageId);
+  }) : allEvents;
+  const allDiagnostics = state.campaignDiagnosticArtifacts || [];
+  const diagnosticArtifacts = stageId ? allDiagnostics.filter((artifact) => !artifact.stage_id || artifact.stage_id === stageId) : allDiagnostics;
   const logs = state.runLog || [];
   return (
     <main className="split-layout">
@@ -1228,22 +1883,53 @@ function PreviewPanel({ preview }) {
   }
   return (
     <aside id="deliverables-preview" className="preview-panel">
-      <div className="preview-head">
-        <div>
-          <h2>{preview.title}</h2>
-          <p>{preview.relativePath}</p>
-        </div>
-        <button onClick={() => vscode.postMessage({ type: 'openArtifact', artifact: preview })}>Open in VS Code</button>
-      </div>
-      <div className="preview-body">
-        {preview.kind === 'image' ? <img src={preview.uri} alt={preview.title} /> : null}
-        {preview.kind === 'pdf' ? <iframe title={preview.title} src={preview.uri} /> : null}
-        {preview.html ? <div className={`rendered-preview rendered-${preview.kind}`} dangerouslySetInnerHTML={{ __html: preview.html }} /> : null}
-        {!preview.html && preview.content ? <pre>{preview.content}</pre> : null}
-      </div>
+      <PreviewHead preview={preview} />
+      <PreviewBody preview={preview} />
       {preview.message ? <p className="subtle">{preview.message}</p> : null}
       {preview.truncated ? <p className="subtle">Preview truncated.</p> : null}
     </aside>
+  );
+}
+
+function InlinePreview({ preview, emptyText = 'Select an artifact to preview it here.', emptyTitle = 'Preview' }) {
+  if (!preview) {
+    return (
+      <div className="inline-preview empty" id="inline-preview">
+        <h3>{emptyTitle}</h3>
+        <p className="subtle">{emptyText}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="inline-preview" id="inline-preview">
+      <PreviewHead preview={preview} />
+      <PreviewBody preview={preview} />
+      {preview.message ? <p className="subtle">{preview.message}</p> : null}
+      {preview.truncated ? <p className="subtle">Preview truncated.</p> : null}
+    </div>
+  );
+}
+
+function PreviewHead({ preview }) {
+  return (
+    <div className="preview-head">
+      <div>
+        <h2>{preview.title}</h2>
+        <p>{preview.relativePath}</p>
+      </div>
+      <button onClick={() => vscode.postMessage({ type: 'openArtifact', artifact: preview })}>Open in VS Code</button>
+    </div>
+  );
+}
+
+function PreviewBody({ preview }) {
+  return (
+    <div className="preview-body">
+      {preview.kind === 'image' ? <img src={preview.uri} alt={preview.title} /> : null}
+      {preview.kind === 'pdf' ? <iframe title={preview.title} src={preview.uri} /> : null}
+      {preview.html ? <div className={`rendered-preview rendered-${preview.kind}`} dangerouslySetInnerHTML={{ __html: preview.html }} /> : null}
+      {!preview.html && preview.content ? <pre>{preview.content}</pre> : null}
+    </div>
   );
 }
 
@@ -1288,6 +1974,168 @@ function DiagnosticsModal({ state }) {
           ))}
         </dl>
       </section>
+    </div>
+  );
+}
+
+function SetupHeaderButton({ state }) {
+  const warnings = state.setup && Array.isArray(state.setup.warnings) ? state.setup.warnings : null;
+  const optionalActions = state.setup && Array.isArray(state.setup.next_actions) ? state.setup.next_actions.length : 0;
+  const needsRequired = warnings && warnings.length > 0;
+  const label = needsRequired ? `Setup (${warnings.length} required)` : optionalActions ? 'Setup' : 'Setup ✓';
+  const className = needsRequired ? 'primary' : '';
+  return (
+    <button className={className} onClick={() => vscode.postMessage({ type: 'openSetup' })}>{label}</button>
+  );
+}
+
+function SetupTab({ state, opStatus }) {
+  const setup = state.setup || null;
+  const setupOps = state.setupOps || { openclaudeInstall: null };
+  const keyStatus = state.keyStatus;
+  const keys = keyStatus && Array.isArray(keyStatus.keys) ? keyStatus.keys : [];
+  const openrouterEntry = keys.find((entry) => entry.env_var === 'OPENROUTER_API_KEY');
+  const installOp = setupOps.openclaudeInstall;
+
+  const requiredItems = [
+    {
+      key: 'openrouter',
+      label: 'OpenRouter API key',
+      help: 'Required to run any campaign or chat session. Stored locally in ~/.msc/.env (owner-only).',
+      ok: Boolean(setup ? setup.openrouter_configured : openrouterEntry?.configured),
+      detail: openrouterEntry?.source ? `Source: ${openrouterEntry.source}` : null,
+      render: () => (
+        openrouterEntry
+          ? <KeyRow entry={openrouterEntry} />
+          : <p className="subtle">Loading key status…</p>
+      )
+    },
+    {
+      key: 'openclaude',
+      label: 'OpenClaude binary',
+      help: 'Powers the steering chat. Installs @gitlawb/openclaude into the same env as msc.',
+      ok: Boolean(setup ? setup.openclaude_available : false),
+      detail: setup && setup.openclaude_launch_ready ? 'Launch-ready (skill, key, and binary all present).' : null,
+      render: () => <OpenClaudeInstallRow installOp={installOp} setup={setup} />
+    }
+  ];
+
+  const envItems = [
+    { key: 'python', label: 'Python ≥ 3.10', ok: Boolean(setup?.python_ready) },
+    { key: 'cli', label: 'msc CLI on PATH', ok: Boolean(setup?.cli_ready) },
+    { key: 'sdk', label: 'msc_sdk available', ok: Boolean(setup?.sdk_json_ready) },
+    { key: 'vscode', label: 'VS Code extension files present', ok: Boolean(setup?.vscode_extension_ready) }
+  ];
+
+  const optionalItems = [
+    { key: 'results', label: 'Results directory', ok: Boolean(setup?.results_dir_ready), help: 'Created on first run.' },
+    { key: 'slurm', label: 'SLURM (sbatch)', ok: Boolean(setup?.slurm_available), help: 'Needed for cluster jobs.' },
+    { key: 'latex', label: 'pdflatex', ok: Boolean(setup?.latex_available), help: 'Needed for PDF deliverables.' },
+    { key: 'rg', label: 'ripgrep (rg)', ok: Boolean(setup?.rg_available), help: 'Fast in-repo search.' },
+    { key: 'openclaw', label: 'OpenClaw gateway', ok: Boolean(setup?.openclaw_enabled), help: 'Optional autonomous oversight.' },
+    { key: 'telegram', label: 'Telegram notifications', ok: Boolean(setup?.telegram_enabled), help: 'Optional notifications.' }
+  ];
+
+  const requiredOkCount = requiredItems.filter((row) => row.ok).length;
+  const allRequiredOk = requiredOkCount === requiredItems.length;
+  const warningsCount = setup && Array.isArray(setup.warnings) ? setup.warnings.length : 0;
+  const progressLabel = setup
+    ? (allRequiredOk
+        ? 'All required items complete.'
+        : `${requiredOkCount} of ${requiredItems.length} required items complete${warningsCount ? `, ${warningsCount} warning${warningsCount === 1 ? '' : 's'}` : ''}.`)
+    : 'Loading setup state…';
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal" style={{ maxWidth: '720px' }}>
+        <div className="modal-head">
+          <h2>MSc Setup</h2>
+          <button onClick={() => vscode.postMessage({ type: 'closeSetup' })}>Close</button>
+        </div>
+        <p className="subtle">{progressLabel}</p>
+        {opStatus ? (
+          <div className={`notice ${opStatus.ok ? '' : 'error'}`}>{opStatus.message}</div>
+        ) : null}
+
+        <h3>Required</h3>
+        {requiredItems.map((row) => (
+          <SetupChecklistRow key={row.key} row={row}>
+            {!row.ok ? row.render() : null}
+          </SetupChecklistRow>
+        ))}
+
+        <h3>Environment</h3>
+        {envItems.map((row) => <SetupChecklistRow key={row.key} row={row} />)}
+
+        <h3>Optional helpers</h3>
+        {optionalItems.map((row) => <SetupChecklistRow key={row.key} row={row} />)}
+
+        {keyStatus && keyStatus.config_path ? (
+          <p className="subtle" style={{ marginTop: '0.75rem' }}>Config: {keyStatus.config_path}</p>
+        ) : null}
+
+        {allRequiredOk ? (
+          <div className="notice" style={{ marginTop: '0.75rem' }}>
+            <p style={{ margin: 0 }}>Setup complete. You can start a campaign or open the OpenClaude chat.</p>
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+              <button onClick={() => vscode.postMessage({ type: 'closeSetup' })}>Close</button>
+              <button onClick={() => vscode.postMessage({ type: 'refresh' })}>Refresh dashboard</button>
+            </div>
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function SetupChecklistRow({ row, children }) {
+  return (
+    <div className="setup-checklist-row" style={{ borderTop: '1px solid var(--vscode-panel-border)', padding: '0.55rem 0' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.75rem' }}>
+        <strong>
+          <span style={{ marginRight: '0.4rem' }}>{row.ok ? '✓' : '•'}</span>
+          {row.label}
+        </strong>
+        <span className="subtle">{row.ok ? 'ready' : 'needs setup'}</span>
+      </div>
+      {row.help ? <p className="subtle" style={{ margin: '0.2rem 0' }}>{row.help}</p> : null}
+      {row.detail ? <p className="subtle" style={{ margin: '0.2rem 0' }}>{row.detail}</p> : null}
+      {children}
+    </div>
+  );
+}
+
+function OpenClaudeInstallRow({ installOp, setup }) {
+  const status = installOp?.status || 'idle';
+  const log = installOp && Array.isArray(installOp.log) ? installOp.log : [];
+  const tail = log.slice(-30).map((entry) => entry.text).join('');
+  const disabled = status === 'running';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.4rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+        <button
+          className="primary"
+          disabled={disabled}
+          onClick={() => vscode.postMessage({ type: 'installOpenClaude' })}
+        >
+          {status === 'running' ? 'Installing…' : 'Install OpenClaude'}
+        </button>
+        <span className="subtle">Runs `msc openclaude install` (~30–60s on first install).</span>
+      </div>
+      {status === 'failed' && installOp?.error ? (
+        <div className="notice error">{String(installOp.error)}</div>
+      ) : null}
+      {status === 'completed' && installOp?.path ? (
+        <p className="subtle" style={{ margin: 0 }}>
+          {installOp.alreadyInstalled ? 'Already installed at ' : 'Installed at '}{installOp.path}
+        </p>
+      ) : null}
+      {tail ? (
+        <pre style={{ maxHeight: '120px', overflow: 'auto', margin: 0, padding: '0.4rem', background: 'var(--vscode-textCodeBlock-background)' }}>{tail}</pre>
+      ) : null}
+      {setup && setup.openclaude_available && !setup.openclaude_launch_ready ? (
+        <p className="subtle" style={{ margin: 0 }}>Binary is installed but launch isn't ready yet — usually the OpenRouter key is still missing.</p>
+      ) : null}
     </div>
   );
 }
@@ -1391,6 +2239,96 @@ function KeyRow({ entry }) {
   );
 }
 
+function RestartConfirmModal({ confirm, onClose }) {
+  const isNode = confirm.kind === 'restart-node';
+  const [reason, setReason] = useState('');
+  const [archive, setArchive] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+
+  function fire() {
+    if (submitting) return;
+    setSubmitting(true);
+    if (isNode) {
+      vscode.postMessage({
+        type: 'restartNode',
+        nodeId: confirm.nodeId,
+        reason: reason.trim() || `restart node ${confirm.nodeLabel}`,
+      });
+    } else {
+      vscode.postMessage({
+        type: 'restartCampaign',
+        archive,
+        reason: reason.trim() || 'restart campaign from scratch',
+      });
+    }
+    onClose();
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal restart-confirm-modal" style={{ maxWidth: '560px' }}>
+        <div className="modal-head">
+          <h2>{isNode ? 'Restart node' : 'Restart campaign'}</h2>
+          <button type="button" onClick={onClose} disabled={submitting}>Cancel</button>
+        </div>
+        {isNode ? (
+          <p>
+            Restart node <strong>{confirm.nodeLabel}</strong>?
+          </p>
+        ) : (
+          <p>
+            Restart campaign <strong>{confirm.campaignName}</strong> from the entry node?
+          </p>
+        )}
+        <p className="subtle">
+          This will:
+        </p>
+        <ul className="subtle restart-checklist">
+          <li>cancel any orchestrator + heartbeat SLURM job currently running for this campaign</li>
+          {isNode ? (
+            <li>re-execute the node only (other nodes' prior outputs are preserved)</li>
+          ) : (
+            <>
+              <li>reset every node's status back to <code>pending</code></li>
+              <li>
+                {archive ? 'archive' : 'leave in place'} the prior <code>runs/&lt;run_id&gt;</code>{' '}
+                directories so prior artifacts remain inspectable
+              </li>
+              <li>submit a fresh orchestrator that re-executes the graph from the entry node</li>
+            </>
+          )}
+          <li>write an audit event so the run-history drawer shows the boundary</li>
+        </ul>
+        <label>Reason (optional)
+          <input
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder={isNode ? 'e.g. unanimous reject; retry with broader prompt' : 'e.g. wrong objective; starting over'}
+            disabled={submitting}
+          />
+        </label>
+        {!isNode ? (
+          <label className="check-line">
+            <input
+              type="checkbox"
+              checked={archive}
+              onChange={(event) => setArchive(event.target.checked)}
+              disabled={submitting}
+            />
+            Archive prior artifacts (recommended)
+          </label>
+        ) : null}
+        <div className="restart-actions">
+          <button type="button" onClick={onClose} disabled={submitting}>Cancel</button>
+          <button type="button" className="danger" onClick={fire} disabled={submitting}>
+            {submitting ? 'Submitting…' : (isNode ? 'Confirm restart node' : 'Confirm restart campaign')}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function NewCampaignModal({ onClose }) {
   const [draft, setDraft] = useState({
     title: '',
@@ -1407,8 +2345,13 @@ function NewCampaignModal({ onClose }) {
     math: false,
     treeSearch: false,
     allowSpend: false,
-    confirmation: ''
+    confirmation: '',
+    // Persona-council overrides (per-campaign metadata).
+    personaDebateRounds: 3,
+    personaMaxSynthesisAttempts: 5,
+    personaDeadlockPolicy: 'pause'
   });
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   function update(key, value) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -1473,6 +2416,32 @@ function NewCampaignModal({ onClose }) {
                 </>
               ) : null}
             </>
+          ) : null}
+        </section>
+        <section className="advanced-section">
+          <button type="button" className="advanced-toggle" onClick={() => setAdvancedOpen((v) => !v)}>
+            {advancedOpen ? '▾ Advanced (persona council)' : '▸ Advanced (persona council)'}
+          </button>
+          {advancedOpen ? (
+            <div className="form-grid">
+              <label>Debate rounds
+                <input type="number" min="1" max="10"
+                       value={draft.personaDebateRounds}
+                       onChange={(event) => update('personaDebateRounds', event.target.value)} />
+              </label>
+              <label>Max synthesis attempts
+                <input type="number" min="1" max="20"
+                       value={draft.personaMaxSynthesisAttempts}
+                       onChange={(event) => update('personaMaxSynthesisAttempts', event.target.value)} />
+              </label>
+              <label>On deadlock
+                <select value={draft.personaDeadlockPolicy}
+                        onChange={(event) => update('personaDeadlockPolicy', event.target.value)}>
+                  <option value="pause">Pause (halt + ask)</option>
+                  <option value="best_effort">Best effort (advance anyway)</option>
+                </select>
+              </label>
+            </div>
           ) : null}
         </section>
         {blocked ? <div className="notice error">Real local execution requires allow spend plus confirmation text RUN LOCAL.</div> : null}

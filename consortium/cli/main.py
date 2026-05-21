@@ -79,6 +79,7 @@ def _register_commands() -> None:
     from consortium.cli.commands.capabilities import capabilities
     from consortium.cli.commands.events import events
     from consortium.cli.commands.harness import harness
+    from consortium.cli.commands.hpc import hpc
 
     cli.add_command(run)
     cli.add_command(setup)
@@ -101,6 +102,7 @@ def _register_commands() -> None:
     cli.add_command(capabilities)
     cli.add_command(events)
     cli.add_command(harness)
+    cli.add_command(hpc)
 
 
 _register_commands()

@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .openclaude import OPENCLAUDE_NPM_PACKAGE
+
 
 @dataclass(frozen=True)
 class SetupState:
@@ -70,7 +72,10 @@ def build_setup_state(
         warnings.append("openrouter_key_missing")
         next_actions.append("Run `msc setup` or set OPENROUTER_API_KEY in the supported config location.")
     if not openclaude_available:
-        next_actions.append("Optional: install OpenClaude with `npm install -g @gitlawb/openclaude`.")
+        next_actions.append(
+            f"Optional: install OpenClaude with `msc openclaude install` "
+            f"(runs `npm install -g {OPENCLAUDE_NPM_PACKAGE}`)."
+        )
     if not results_dir:
         next_actions.append("Create or select a results directory when runs exist.")
 

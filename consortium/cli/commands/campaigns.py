@@ -42,6 +42,14 @@ def campaigns_list(ctx: click.Context, as_json: bool) -> None:
 @click.option("--budget", type=float, default=1.0, show_default=True, help="Campaign budget cap in USD.")
 @click.option("--tier", default="standard", show_default=True, help="Default model tier.")
 @click.option("--output-format", default="markdown", show_default=True, help="Default output format.")
+@click.option("--persona-debate-rounds", type=int, default=None,
+              help="Per-campaign override: number of persona debate rounds (default: 3).")
+@click.option("--persona-max-synthesis-attempts", type=int, default=None,
+              help="Per-campaign override: safety cap on persona-council evolve-and-vote loop (default: 5).")
+@click.option("--persona-deadlock-policy",
+              type=click.Choice(["pause", "best_effort"]),
+              default=None,
+              help="On safety-cap exhaustion: 'pause' (default) halts the stage; 'best_effort' advances.")
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
 @click.pass_context
 def campaigns_create(
@@ -52,10 +60,14 @@ def campaigns_create(
     budget: float,
     tier: str,
     output_format: str,
+    persona_debate_rounds: int | None,
+    persona_max_synthesis_attempts: int | None,
+    persona_deadlock_policy: str | None,
     as_json: bool,
 ) -> None:
     """Create a local-first campaign in the project campaign store."""
-    data = CampaignClient(ctx.obj["campaign_root"]).create(
+    client = CampaignClient(ctx.obj["campaign_root"])
+    data = client.create(
         title=title,
         objective=objective,
         template=template,
@@ -63,10 +75,90 @@ def campaigns_create(
         tier=tier,
         output_format=output_format,
     )
+    persona_updates: dict[str, object] = {}
+    if persona_debate_rounds is not None:
+        persona_updates["persona_debate_rounds"] = int(persona_debate_rounds)
+    if persona_max_synthesis_attempts is not None:
+        persona_updates["persona_max_synthesis_attempts"] = int(persona_max_synthesis_attempts)
+    if persona_deadlock_policy is not None:
+        persona_updates["persona_deadlock_policy"] = persona_deadlock_policy
+    if persona_updates:
+        client.update_metadata(data["campaign_id"], persona_updates)
+        data["persona_overrides"] = persona_updates
     if as_json:
         _emit_json({"ok": True, "campaign": data})
         return
     click.echo(f"{data['campaign_id']}: {data['status']}")
+
+
+@campaigns.command("update-budget-cap")
+@click.argument("campaign_ref")
+@click.argument("new_cap_usd", type=float)
+@click.option("--reason", default="", help="Optional reason recorded with the audit event.")
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def campaigns_update_budget_cap(
+    ctx: click.Context, campaign_ref: str, new_cap_usd: float, reason: str, as_json: bool,
+) -> None:
+    """Bump (or shrink) a campaign's USD budget cap. Effective on the next run."""
+    data = CampaignClient(ctx.obj["campaign_root"]).update_budget_cap(
+        campaign_ref, new_cap_usd, reason=reason
+    )
+    if as_json:
+        _emit_json(data)
+        return
+    click.echo(
+        f"{data['campaign_id']}: budget cap "
+        f"${data['old_cap_usd']} -> ${data['new_cap_usd']}"
+    )
+
+
+@campaigns.command("budget")
+@click.argument("campaign_ref")
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def campaigns_budget(ctx: click.Context, campaign_ref: str, as_json: bool) -> None:
+    """Read the live budget state for a campaign (cap, spend, per-model).
+
+    Combines the campaign's `budget_cap_usd` with the latest
+    `budget_state.json` from its newest run workspace.
+    """
+    import json as _json
+    from pathlib import Path
+
+    client = CampaignClient(ctx.obj["campaign_root"])
+    info = client.inspect(campaign_ref).to_dict()
+    cap = (info.get("budget") or {}).get("limit_usd")
+    workspace = info.get("workspace_root") or info.get("path")
+    runtime: dict[str, object] = {}
+    if workspace:
+        runs_dir = Path(workspace) / "runs"
+        if runs_dir.is_dir():
+            run_dirs = sorted(
+                (p for p in runs_dir.iterdir() if p.is_dir()),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for run_dir in run_dirs:
+                state_path = run_dir / "budget_state.json"
+                if state_path.exists():
+                    try:
+                        runtime = _json.loads(state_path.read_text())
+                        runtime["run_id"] = run_dir.name
+                    except (OSError, ValueError):
+                        pass
+                    break
+    out = {
+        "ok": True,
+        "campaign_id": info.get("campaign_id"),
+        "limit_usd": cap,
+        "runtime": runtime,
+    }
+    if as_json:
+        _emit_json(out)
+        return
+    spent = runtime.get("total_usd")
+    click.echo(f"{out['campaign_id']}: ${spent or 0:.4f} / ${cap or 0:.2f}")
 
 
 @campaigns.command("delete")

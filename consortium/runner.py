@@ -108,6 +108,85 @@ def _campaign_root_for_args(args) -> Path:
     return project_root or Path.cwd()
 
 
+def _resolve_budget_cap(args, budget_config: dict) -> float | None:
+    """Resolve the effective USD budget cap for this run.
+
+    Precedence: campaign.budget_cap_usd > --budget CLI > YAML usd_limit > 3.0.
+    Returns ``None`` only if the caller should fall back to whatever is
+    already in ``budget_config`` (i.e., the YAML default we copied earlier).
+    """
+    # 1. Campaign cap (authoritative when attached to a campaign)
+    campaign_id = getattr(args, "campaign_id", None) or os.getenv("MSC_CAMPAIGN_ID")
+    if campaign_id:
+        try:
+            from msc_sdk.campaign_store import CampaignStore
+
+            root = _campaign_root_for_args(args)
+            store = CampaignStore(root)
+            info = store.inspect_dict(campaign_id)
+            cap = (info.get("budget") or {}).get("limit_usd")
+            if cap is not None:
+                return float(cap)
+        except Exception:
+            logger.warning("Could not read campaign budget cap for %s", campaign_id, exc_info=True)
+
+    # 2. CLI --budget (only honored when no campaign attached, per plan)
+    cli_budget = getattr(args, "budget", None)
+    if cli_budget is not None:
+        try:
+            return float(cli_budget)
+        except (TypeError, ValueError):
+            pass
+
+    # 3. YAML usd_limit (already in budget_config); 4. fallback to 3.0
+    yaml_cap = budget_config.get("usd_limit") if budget_config else None
+    if yaml_cap is not None:
+        try:
+            return float(yaml_cap)
+        except (TypeError, ValueError):
+            pass
+    return 3.0
+
+
+def _campaign_results_dir(args, campaign_run_id: str | None, timestamp: str) -> str | None:
+    """If attached to a campaign, return the per-run workspace under that bundle.
+
+    Returns ``None`` for non-campaign runs (foreground `msc run` without
+    `--campaign-id`); the caller falls back to the legacy
+    ``results/consortium_<timestamp>/`` directory in that case.
+
+    The chosen ``run_id`` MUST line up with whatever ``MSC_CAMPAIGN_RUN_ID``
+    ends up being after ``_record_campaign_run_started``; otherwise the
+    `StageRunContext.from_env` artifact path will diverge from the directory
+    holding logs/budget/checkpoints. Priority must match the resolver:
+    ``--resume-run-id`` > ``CONSORTIUM_RUN_ID`` (sbatch wrapper) >
+    ``MSC_CAMPAIGN_RUN_ID`` (already set) > timestamp fallback.
+    """
+    campaign_id = getattr(args, "campaign_id", None) or os.getenv("MSC_CAMPAIGN_ID")
+    if not campaign_id:
+        return None
+    run_id = (
+        getattr(args, "resume_run_id", None)
+        or os.getenv("CONSORTIUM_RUN_ID")
+        or os.getenv("MSC_CAMPAIGN_RUN_ID")
+        or campaign_run_id
+        or f"run_{timestamp}"
+    )
+    try:
+        from msc_sdk.campaign_store import CampaignStore
+
+        root = _campaign_root_for_args(args)
+        store = CampaignStore(root)
+        info = store.inspect_dict(campaign_id)
+        workspace_root = info.get("workspace_root") or info.get("path")
+        if not workspace_root:
+            return None
+        return os.path.join(str(workspace_root), "runs", run_id)
+    except Exception:
+        logger.warning("Could not derive campaign results dir for %s", campaign_id, exc_info=True)
+        return None
+
+
 def _record_campaign_run_started(args, *, workspace_dir: str | None, command: list[str], dry_run: bool = False) -> str | None:
     campaign_id = getattr(args, "campaign_id", None) or os.getenv("MSC_CAMPAIGN_ID")
     if not campaign_id:
@@ -117,6 +196,34 @@ def _record_campaign_run_started(args, *, workspace_dir: str | None, command: li
 
         root = _campaign_root_for_args(args)
         store = CampaignStore(root)
+
+        # SLURM-detached path: msc hpc submit already called record_run_started.
+        # This invocation is just a fresh *attempt* on the same logical run, so
+        # we emit RunAttemptStarted (preserving the run_id) instead of creating
+        # another row in the runs table.
+        explicit_run_id = getattr(args, "resume_run_id", None) or os.getenv("CONSORTIUM_RUN_ID")
+        if explicit_run_id:
+            attempt = int(os.getenv("CONSORTIUM_RUN_ATTEMPT", "1") or "1")
+            store.append_event(
+                campaign_id,
+                "RunAttemptStarted",
+                actor="runner",
+                payload={
+                    "run_id": explicit_run_id,
+                    "attempt": attempt,
+                    "pid": os.getpid(),
+                    "slurm_job_id": os.getenv("SLURM_JOB_ID"),
+                    "hostname": _safe_hostname(),
+                    "workspace_dir": workspace_dir,
+                },
+            )
+            os.environ["MSC_CAMPAIGN_ID"] = campaign_id
+            os.environ["MSC_CAMPAIGN_ROOT"] = str(root)
+            os.environ["MSC_CAMPAIGN_RUN_ID"] = explicit_run_id
+            if getattr(args, "campaign_graph_version", None):
+                os.environ["MSC_CAMPAIGN_GRAPH_VERSION"] = str(args.campaign_graph_version)
+            return explicit_run_id
+
         record = store.record_run_started(
             campaign_id,
             command=command,
@@ -134,6 +241,14 @@ def _record_campaign_run_started(args, *, workspace_dir: str | None, command: li
     except Exception:
         logger.warning("Failed to attach run to campaign %s", campaign_id, exc_info=True)
         return None
+
+
+def _safe_hostname() -> str:
+    try:
+        import socket
+        return socket.gethostname()
+    except Exception:
+        return ""
 
 
 def _record_campaign_run_exited(args, run_id: str | None, *, exit_code: int | None, status: str | None = None, metadata: dict | None = None) -> None:
@@ -890,11 +1005,28 @@ def main():
         input_queue = setup_user_input_socket(args.callback_host, args.callback_port)
         logger.info("Interruption port available at %s:%s", args.callback_host, args.callback_port)
         # Also start HTTP steering server on port+1 for programmatic clients (e.g. OpenClaw)
-        add_http_steering(input_queue, host=args.callback_host, port=args.callback_port + 1)
+        try:
+            add_http_steering(input_queue, host=args.callback_host, port=args.callback_port + 1)
+        except OSError as exc:
+            # In detached SLURM runs we sometimes can't bind 5002 (another job on
+            # the same node, partition restrictions, etc.). File-based steering
+            # still works, so don't crash.
+            logger.warning("HTTP steering server unavailable: %s", exc)
     else:
         from queue import Queue
         input_queue = Queue()
         logger.info("[PoggioAI] Steering sockets disabled (--no-steering)")
+
+    # File-based steering: works across compute / login nodes via shared FS.
+    # Always-on whenever the caller passes both --steering-inbox and -outbox.
+    steering_inbox = getattr(args, "steering_inbox", None)
+    steering_outbox = getattr(args, "steering_outbox", None)
+    if steering_inbox and steering_outbox and input_queue is not None:
+        try:
+            from consortium.interaction.steering_file import start_inbox_poller
+            start_inbox_poller(input_queue, steering_inbox, steering_outbox)
+        except Exception:
+            logger.warning("Failed to start file-based steering poller", exc_info=True)
 
     logger.info("LangGraph Research System Initialized — model: %s", model_name)
 
@@ -945,10 +1077,21 @@ def main():
         task = args.task or _CONTINUATION_TASK
         logger.info("Resuming from: %s", results_base_dir)
     else:
-        results_base_dir = os.path.join("results", f"consortium_{timestamp}")
+        # When attached to a campaign, root the workspace under the campaign's
+        # bundle so the artifact contract resolver (StageRunContext.from_env)
+        # finds the right place to write. Without this, the runner mints a
+        # fresh `results/consortium_<timestamp>/` that's not connected to the
+        # campaign — every stage's artifacts end up orphaned and the campaign
+        # workspace stays empty.
+        campaign_ws = _campaign_results_dir(args, campaign_run_id, timestamp)
+        if campaign_ws:
+            results_base_dir = campaign_ws
+            logger.info("Created campaign-attached workspace: %s", results_base_dir)
+        else:
+            results_base_dir = os.path.join("results", f"consortium_{timestamp}")
+            logger.info("Created workspace: %s", results_base_dir)
         os.makedirs(results_base_dir, exist_ok=True)
         task = args.task or _DEFAULT_TASK
-        logger.info("Created workspace: %s", results_base_dir)
 
     os.environ["RESULTS_BASE_DIR"] = results_base_dir
     os.environ["CONSORTIUM_OUTPUT_FORMAT"] = getattr(args, "output_format", "latex")
@@ -1058,7 +1201,15 @@ def main():
         logger.info("LaTeX toolchain: pdflatex=%s, bibtex=%s", pdflatex_path, bibtex_path)
 
     # --- Model setup ---
-    budget_config = llm_config.get("budget", {}) if llm_config else {}
+    budget_config = dict(llm_config.get("budget", {})) if llm_config else {}
+    # Budget cap precedence: campaign DB > CLI --budget > YAML usd_limit > 3.0.
+    # The runner used to read only the YAML value, ignoring the campaign's
+    # `budget_cap_usd` and the `--budget` flag entirely. That's why a campaign
+    # created with --budget 5 still ran against the YAML default of $3.
+    effective_cap = _resolve_budget_cap(args, budget_config)
+    if effective_cap is not None:
+        budget_config["usd_limit"] = float(effective_cap)
+        logger.info("Effective budget cap: $%s", effective_cap)
     model = create_model(
         model_name, reasoning_effort, verbosity, budget_tokens,
         effort=effort,

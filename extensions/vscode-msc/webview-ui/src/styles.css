@@ -210,6 +210,249 @@ h3 { font-size: 13px; margin: 18px 0 8px; }
   gap: 14px;
   align-items: start;
 }
+.campaign-shell {
+  display: grid;
+  gap: 14px;
+}
+.campaign-header {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+.campaign-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+  gap: 14px;
+  align-items: start;
+  min-height: calc(100vh - 160px);
+}
+.campaign-main {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.campaign-chat-column {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  max-height: calc(100vh - 32px);
+}
+.overseer-chat {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  max-height: calc(100vh - 32px);
+}
+.overseer-head {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.overseer-head h2 {
+  margin: 4px 0 0;
+}
+.overseer-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.overseer-chat > .model-control {
+  max-width: none;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.overseer-chat .chat-panel {
+  border: 0;
+  min-height: 0;
+  max-height: none;
+  grid-template-rows: auto auto auto minmax(220px, 1fr) auto;
+}
+.overseer-chat .chat-status-row {
+  display: none;
+}
+.overseer-chat .chat-transcript {
+  min-height: 260px;
+  max-height: calc(100vh - 440px);
+}
+.overseer-chat .suggestion-row {
+  max-height: 96px;
+  overflow: auto;
+}
+.overseer-chat .chat-composer textarea {
+  min-height: 84px;
+}
+.node-detail {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+.node-detail.empty {
+  text-align: left;
+}
+.node-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.node-detail-head h2 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.node-detail-head .pill {
+  font-size: 11px;
+  text-transform: lowercase;
+}
+.node-detail-head .running-pill {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.node-detail-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.node-detail-headline {
+  display: grid;
+  gap: 6px;
+}
+.inline-preview {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+.inline-preview.empty {
+  color: var(--muted);
+}
+.inline-preview .preview-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.inline-preview .preview-head h2 {
+  margin: 0;
+  font-size: 13px;
+}
+.inline-preview .preview-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.inline-preview .preview-body {
+  min-height: 0;
+}
+.inline-preview .preview-body > pre,
+.inline-preview .preview-body > .rendered-preview {
+  max-height: 520px;
+  overflow: auto;
+}
+.inline-preview .preview-body img,
+.inline-preview .preview-body iframe {
+  width: 100%;
+  min-height: 320px;
+  border: 1px solid var(--border);
+}
+.headline-placeholder {
+  display: grid;
+  gap: 10px;
+  justify-items: flex-start;
+}
+.node-detail-meta summary,
+.node-detail-outputs summary,
+.node-history-drawer summary {
+  cursor: pointer;
+  color: var(--muted);
+  padding: 6px 2px;
+  border-top: 1px solid var(--border);
+}
+.node-detail-meta[open] summary,
+.node-detail-outputs[open] summary,
+.node-history-drawer[open] summary {
+  color: var(--fg);
+}
+.node-detail-meta .definition-list {
+  margin-top: 8px;
+}
+.node-history-drawer {
+  border-top: 1px solid var(--border);
+}
+.run-history-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: grid;
+  gap: 8px;
+}
+.run-history-item {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+.run-history-item.latest {
+  border-left: 3px solid var(--accent);
+}
+.run-history-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.run-history-artifacts {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.run-history-artifacts li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.run-history-artifacts li span:first-child {
+  font-weight: 600;
+}
+.run-history-artifacts li button {
+  margin-left: auto;
+}
+.node-detail-inspector .inspector-tabs button {
+  min-width: 110px;
+}
+.node-detail-inspector .inspector-body {
+  padding: 0;
+}
+@media (max-width: 1100px) {
+  .campaign-layout {
+    grid-template-columns: 1fr;
+  }
+  .campaign-chat-column {
+    position: static;
+    max-height: none;
+  }
+  .overseer-chat {
+    max-height: none;
+  }
+  .overseer-chat .chat-transcript {
+    max-height: 50vh;
+  }
+}
 .chat-panel, .context-rail, .inspector-stack {
   border: 1px solid var(--border);
   background: var(--panel);
@@ -604,6 +847,23 @@ marker path {
 .graph-svg-node.selected > circle:not(.node-port) {
   fill: var(--accent);
 }
+.graph-svg-node .active-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  opacity: 0.85;
+  filter: drop-shadow(0 0 6px var(--accent));
+  animation: node-pulse 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+.graph-svg-node.active rect {
+  stroke: var(--accent);
+  stroke-width: 2.4;
+}
+@keyframes node-pulse {
+  0%, 100% { opacity: 0.95; stroke-width: 2; }
+  50% { opacity: 0.45; stroke-width: 3.4; }
+}
 .graph-svg-node.status-completed > circle:not(.node-port),
 .graph-svg-node.status-ready > circle:not(.node-port) {
   fill: var(--good);
@@ -842,6 +1102,222 @@ marker path {
 .stack { display: grid; gap: 10px; }
 .log-list { display: grid; gap: 6px; }
 .log-list code { background: var(--bg); padding: 6px; overflow-wrap: anywhere; }
+
+/* Persona-council deadlock banner: lives at the top of the Decisions tab
+   when the campaign's persona_council loop hit the safety cap without
+   consensus. Replaces the generic decision card for that specific decision. */
+.deadlock-banner {
+  border: 1px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, var(--panel));
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.deadlock-banner-head h3 {
+  margin: 4px 0 0;
+}
+.deadlock-rationales {
+  display: grid;
+  gap: 6px;
+}
+.persona-rationale {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  padding: 8px 10px;
+}
+.persona-rationale summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.persona-rationale summary::-webkit-details-marker { display: none; }
+.persona-rationale[open] summary { font-weight: 600; }
+.persona-rationale-text {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 10px;
+  margin-top: 8px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+.persona-rationale.verdict-reject { border-left: 3px solid var(--bad); }
+.persona-rationale.verdict-accept { border-left: 3px solid var(--good); }
+.persona-rationale.verdict-unknown { border-left: 3px solid var(--muted); }
+.deadlock-proposal code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.deadlock-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.deadlock-editing-note,
+.deadlock-confirm-accept {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+.deadlock-editing-note {
+  border-left: 3px solid var(--accent);
+}
+
+/* Restart buttons share a warning palette: visually distinct from the
+   neutral header buttons so the user notices they're destructive, but
+   not as aggressive as the .danger Delete button. */
+.restart-node-btn,
+.restart-campaign-btn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.restart-node-btn:hover:not(:disabled),
+.restart-campaign-btn:hover {
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg));
+}
+.restart-node-btn:disabled {
+  border-color: var(--border);
+  color: var(--muted);
+  background: transparent;
+}
+.restart-confirm-modal .restart-checklist {
+  margin: 6px 0 12px 18px;
+  padding: 0;
+  list-style: disc;
+}
+.restart-confirm-modal .restart-checklist code {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 1px 4px;
+}
+.restart-confirm-modal .restart-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.advanced-section { display: grid; gap: 10px; margin-top: 4px; }
+.advanced-toggle {
+  align-self: flex-start;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.advanced-toggle:hover { color: var(--fg); }
+
+.budget-tab { display: grid; gap: 14px; }
+.budget-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.budget-head h2 { margin: 0; }
+.budget-head-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.budget-bar {
+  width: 100%;
+  height: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.budget-bar-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+.budget-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg);
+}
+.budget-table th, .budget-table td {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  font-size: 12px;
+}
+.uncovered-list { display: grid; gap: 8px; }
+.uncovered-row {
+  border: 1px solid var(--warn);
+  background: var(--bg);
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+.uncovered-row strong { color: var(--warn); }
+.uncovered-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.council-feed {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.council-feed summary {
+  cursor: pointer;
+  color: var(--muted);
+  padding: 4px 0;
+}
+.council-feed[open] summary { color: var(--fg); font-weight: 600; }
+.council-attempts-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: grid;
+  gap: 8px;
+}
+.council-attempt-row {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+.council-attempt-row.latest { border-left: 3px solid var(--accent); }
+.council-attempt-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.council-verdicts {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.council-verdicts li { display: flex; align-items: center; gap: 6px; }
+.council-proposal-preview pre {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 8px;
+  margin-top: 4px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
 
 @media (max-width: 900px) {
   .metrics-grid, .dashboard-loading, .split-layout, .artifact-layout, .filters, .form-grid, .openclaude-layout, .graph-primary-layout, .model-control { grid-template-columns: 1fr; }

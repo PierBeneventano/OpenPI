@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import click
@@ -14,6 +16,7 @@ from consortium.cli.core.paths import find_project_root
 from msc_sdk.openclaude import (
     DEFAULT_OPENCLAUDE_MODEL,
     OPENCLAUDE_BASE_URL,
+    OPENCLAUDE_NPM_PACKAGE,
     openclaude_campaign_harness,
     openclaude_context_pack,
     openclaude_env_contract,
@@ -46,6 +49,71 @@ def openclaude_readiness_cmd(ctx: click.Context, as_json: bool) -> None:
         _emit_json(data)
         return
     click.echo("ready" if data["launch_ready"] else "not ready")
+
+
+@openclaude.command("install")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.option("--force", is_flag=True, help="Reinstall even if openclaude is already on PATH.")
+def openclaude_install_cmd(as_json: bool, force: bool) -> None:
+    """Install the openclaude CLI via npm into the same env as `msc`."""
+    result = _install_openclaude(force=force)
+    if as_json:
+        _emit_json(result)
+    else:
+        if result["ok"] and result.get("already_installed"):
+            click.echo(f"already installed at {result['path']}")
+        elif result["ok"]:
+            click.echo(f"installed at {result['path']}")
+        else:
+            click.echo(f"install failed: {result.get('error') or result.get('error_code')}", err=True)
+    if not result["ok"]:
+        raise SystemExit(1)
+
+
+def _install_openclaude(*, force: bool) -> dict:
+    existing = shutil.which("openclaude")
+    if existing and not force:
+        return {"ok": True, "already_installed": True, "path": existing, "package": OPENCLAUDE_NPM_PACKAGE}
+
+    npm = _find_npm()
+    if not npm:
+        return {
+            "ok": False,
+            "error_code": "npm_missing",
+            "error": "npm not found; install Node.js or activate the env that ships `msc`.",
+            "package": OPENCLAUDE_NPM_PACKAGE,
+        }
+
+    proc = subprocess.run(
+        [npm, "install", "-g", OPENCLAUDE_NPM_PACKAGE],
+        capture_output=True,
+        text=True,
+    )
+    installed = shutil.which("openclaude")
+    if proc.returncode == 0 and installed:
+        return {
+            "ok": True,
+            "installed": True,
+            "path": installed,
+            "package": OPENCLAUDE_NPM_PACKAGE,
+            "npm": npm,
+        }
+    return {
+        "ok": False,
+        "error_code": "install_failed",
+        "error": (proc.stderr or proc.stdout or "").strip()[-1000:] or f"npm exit {proc.returncode}",
+        "exit_code": proc.returncode,
+        "npm": npm,
+        "package": OPENCLAUDE_NPM_PACKAGE,
+    }
+
+
+def _find_npm() -> str | None:
+    bin_dir = Path(sys.executable).resolve().parent
+    candidate = bin_dir / ("npm.cmd" if os.name == "nt" else "npm")
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return shutil.which("npm")
 
 
 @openclaude.command("env")
@@ -188,7 +256,12 @@ def openclaude_launch_cmd(
     env["OPENAI_API_KEY"] = env["OPENROUTER_API_KEY"]
     env["OPENAI_BASE_URL"] = OPENCLAUDE_BASE_URL
     env["OPENAI_MODEL"] = ctx.obj["openclaude_model"]
-    proc = subprocess.run(plan["command"], cwd=project_root, env=env)
+    proc = subprocess.run(
+        plan["command"],
+        cwd=project_root,
+        env=env,
+        stdin=subprocess.DEVNULL,
+    )
     raise SystemExit(proc.returncode)
 
 

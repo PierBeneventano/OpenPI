@@ -21,6 +21,10 @@
         "title": "MSc: Open Dashboard"
       },
       {
+        "command": "mscDashboard.openSetup",
+        "title": "MSc: Open Setup"
+      },
+      {
         "command": "mscDashboard.setKeys",
         "title": "MSc: Configure API Keys"
       }

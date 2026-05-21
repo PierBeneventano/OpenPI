@@ -668,6 +668,125 @@ class CampaignStore:
             actor=actor,
         )
 
+    def reset_graph_node_statuses(
+        self,
+        campaign_ref: str | Path,
+        *,
+        new_status: str = "pending",
+    ) -> dict[str, Any]:
+        """Flip every node's status back to ``new_status`` for this campaign.
+
+        Used by ``msc hpc restart-campaign`` after archiving the prior run dir
+        so the next ``hpc submit`` sees a clean graph_nodes table and the
+        runner replays from the entry node. The campaigns row's ``status``
+        column is also bumped to ``running`` so the UI doesn't display the
+        prior ``completed`` / ``human_decision_required`` label.
+        """
+        campaign_id = self.resolve_ref(campaign_ref)
+        graph_version = self.graph(campaign_id).get("version")
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "UPDATE graph_nodes SET status=? WHERE campaign_id=? AND graph_version=?",
+                (new_status, campaign_id, graph_version),
+            )
+            affected = cursor.rowcount
+            conn.execute(
+                "UPDATE campaigns SET status=?, updated_at=? WHERE id=?",
+                ("approved", now_iso(), campaign_id),
+            )
+        return {"ok": True, "campaign_id": campaign_id,
+                "graph_version": graph_version, "nodes_reset": affected}
+
+    def update_budget_cap(
+        self,
+        campaign_ref: str | Path,
+        new_cap_usd: float,
+        *,
+        actor: str = "user",
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Bump the campaign's budget_cap_usd. Direct write + audit event.
+
+        Unlike ``change_tier_model``, this is not a graph proposal: the cap
+        is operational metadata that any user with workspace access can
+        adjust mid-run (e.g. when their campaign nears the cap).
+        """
+        campaign_id = self.resolve_ref(campaign_ref)
+        new_cap = float(new_cap_usd)
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT budget_cap_usd FROM campaigns WHERE id=?", (campaign_id,)
+            ).fetchone()
+            old_cap = float(row["budget_cap_usd"]) if row and row["budget_cap_usd"] is not None else None
+            conn.execute(
+                "UPDATE campaigns SET budget_cap_usd=?, updated_at=? WHERE id=?",
+                (new_cap, now_iso(), campaign_id),
+            )
+            event = self._append_event(
+                conn,
+                campaign_id=campaign_id,
+                event_type="BudgetCapUpdated",
+                actor=actor,
+                payload={"old_cap_usd": old_cap, "new_cap_usd": new_cap, "reason": reason},
+            )
+        return {"ok": True, "campaign_id": campaign_id, "old_cap_usd": old_cap,
+                "new_cap_usd": new_cap, "event": event}
+
+    def update_campaign_metadata(
+        self,
+        campaign_ref: str | Path,
+        updates: dict[str, Any],
+        *,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        """Persist arbitrary key/value updates onto a campaign via event sourcing.
+
+        We store updates as ``CampaignMetadataUpdated`` events (rather than a
+        column on the campaigns table) so this works on existing DBs without
+        a schema migration. ``get_campaign_metadata`` replays all such events
+        and merges them on read.
+        """
+        campaign_id = self.resolve_ref(campaign_ref)
+        with self.connect() as conn:
+            event = self._append_event(
+                conn,
+                campaign_id=campaign_id,
+                event_type="CampaignMetadataUpdated",
+                actor=actor,
+                payload={"updates": updates},
+            )
+            conn.execute("UPDATE campaigns SET updated_at=? WHERE id=?", (now_iso(), campaign_id))
+        merged = self.get_campaign_metadata(campaign_id)
+        return {"ok": True, "campaign_id": campaign_id, "metadata": merged, "event": event}
+
+    def get_campaign_metadata(self, campaign_ref: str | Path) -> dict[str, Any]:
+        """Replay ``CampaignMetadataUpdated`` events and return the merged blob.
+
+        Keys with value ``None`` in an update remove that key (so the UI's
+        "clear field" semantics work without a separate delete API).
+        """
+        campaign_id = self.resolve_ref(campaign_ref)
+        merged: dict[str, Any] = {}
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT payload_json FROM campaign_events "
+                "WHERE campaign_id=? AND type='CampaignMetadataUpdated' "
+                "ORDER BY created_at, id",
+                (campaign_id,),
+            ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            updates = payload.get("updates") or {}
+            for k, v in updates.items():
+                if v is None:
+                    merged.pop(k, None)
+                else:
+                    merged[k] = v
+        return merged
+
     def change_tier_model(
         self,
         campaign_ref: str | Path,

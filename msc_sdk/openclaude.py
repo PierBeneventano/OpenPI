@@ -15,6 +15,7 @@ from .validation import public_operation_contract
 
 OPENCLAUDE_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_OPENCLAUDE_MODEL = "openai/gpt-5-mini"
+OPENCLAUDE_NPM_PACKAGE = "@gitlawb/openclaude"
 OPENCLAUDE_MODEL_ALIASES = {
     "fast": "openai/gpt-5-mini",
     "balanced": "anthropic/claude-sonnet-4.5",

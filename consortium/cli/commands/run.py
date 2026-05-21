@@ -69,6 +69,12 @@ def _should_use_repo_env(project_root: Path | None) -> bool:
     help="Path to directory with prior paper (.tex/.pdf) + feedback (.md/.tex) for revision mode.",
 )
 @click.option("--iterate-start-stage", type=str, default=None, help="Override entry stage for iterate mode.")
+@click.option("--detach/--foreground", "detach", default=None,
+              help="Force/forbid sbatch submission. Defaults to auto-detect: sbatch on HPC, foreground otherwise.")
+@click.option("--wall", type=str, default=None, help="SLURM wall time when detached (e.g. '2-00:00:00').")
+@click.option("--partition", type=str, default=None, help="SLURM partition override when detached.")
+@click.option("--cpus", type=int, default=None, help="cpus-per-task for the detached orchestrator job.")
+@click.option("--mem", type=str, default=None, help="Memory request when detached (e.g. '32G').")
 @click.pass_context
 def run(
     ctx: click.Context,
@@ -91,6 +97,11 @@ def run(
     campaign_graph_version: int | None,
     iterate: str | None,
     iterate_start_stage: str | None,
+    detach: bool | None,
+    wall: str | None,
+    partition: str | None,
+    cpus: int | None,
+    mem: str | None,
 ) -> None:
     """Run a research pipeline on a question or topic.
 
@@ -326,6 +337,51 @@ def run(
         env.setdefault("CONSORTIUM_VLM_MODEL", cheap_model)
         env.setdefault("CONSORTIUM_LIVE_SMOKE", "1")
 
+    # ── Decide foreground vs detached (sbatch) ──────────────────────
+    # Auto-detect: if sbatch is on PATH and we have a campaign to attach to,
+    # submit to SLURM by default. The orchestrator process survives the IDE
+    # closing because it runs inside the batch job, not as our subprocess.
+    from consortium.cli.core.slurm_submit import is_sbatch_available
+
+    should_detach = False
+    if detach is True:
+        should_detach = True
+    elif detach is False:
+        should_detach = False
+    elif detach is None and not dry_run and is_sbatch_available() and campaign_id:
+        should_detach = True
+
+    if should_detach and not campaign_id:
+        console.print(
+            "[bold white on red] Error [/] --detach requires --campaign-id "
+            "(detached runs are tracked against a campaign in .msc/campaigns.db)."
+        )
+        raise SystemExit(2)
+
+    if should_detach:
+        try:
+            return _dispatch_to_hpc_submit(
+                ctx=ctx,
+                env=env,
+                campaign_id=campaign_id,
+                campaign_root=campaign_root or str(project_root) if project_root else campaign_root,
+                argv=argv,
+                task=task,
+                tier=tier_name,
+                budget=effective_budget,
+                output_format=effective_output,
+                max_run_seconds=max_run_seconds,
+                wall=wall,
+                partition=partition,
+                cpus=cpus,
+                mem=mem,
+                quiet=quiet,
+            )
+        except Exception as exc:
+            console.print(f"[bold white on red] Error [/] SLURM submission failed: {exc}")
+            console.print("[dim]Falling back to foreground execution. Use --foreground to suppress this fallback.[/dim]")
+            # fall through to foreground
+
     # Use streaming display if available and requested
     use_streaming = stream and not dry_run and not quiet and sys.stdout.isatty()
 
@@ -347,3 +403,68 @@ def run(
             "Reinstall with: [bold white]python -m pip install -e .[/]"
         )
         raise SystemExit(1)
+
+
+def _dispatch_to_hpc_submit(
+    *, ctx, env: dict[str, str], campaign_id: str, campaign_root: str | None,
+    argv: list[str], task: str | None, tier: str | None, budget: int | None,
+    output_format: str | None, max_run_seconds: int | None,
+    wall: str | None, partition: str | None, cpus: int | None, mem: str | None,
+    quiet: bool,
+) -> None:
+    """Shell out to ``msc hpc submit`` for a detached run.
+
+    Subprocessing is intentional: ``hpc submit`` calls ``sbatch`` which is a
+    short, well-defined operation, and the foreground ``msc run`` process
+    should exit as soon as the job is queued (the IDE doesn't want to wait).
+    """
+    # Re-extract any "free" runner args from argv beyond the explicit kwargs
+    # so that --counsel / --math / --tree-search / etc. ride through too.
+    forwarded: list[str] = []
+    skip_next = False
+    consumed = {"--task", "--tier", "--budget", "--output-format", "--max-run-seconds",
+                "--campaign-id", "--campaign-root", "--campaign-graph-version"}
+    for index, value in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if index < 3:  # python, -m, consortium.runner
+            continue
+        if value in consumed:
+            skip_next = True
+            continue
+        if any(value.startswith(name + "=") for name in consumed):
+            continue
+        forwarded.append(value)
+
+    submit_cmd = [sys.executable, "-m", "consortium.cli.main", "hpc",
+                  "--root", campaign_root or ".", "submit", campaign_id]
+    if task:
+        submit_cmd += ["--task", task]
+    if tier:
+        submit_cmd += ["--tier", tier]
+    if budget is not None:
+        submit_cmd += ["--budget", str(budget)]
+    if output_format:
+        submit_cmd += ["--output-format", output_format]
+    if max_run_seconds is not None:
+        submit_cmd += ["--max-run-seconds", str(max_run_seconds)]
+    if partition:
+        submit_cmd += ["--partition", partition]
+    if wall:
+        submit_cmd += ["--wall", wall]
+    if cpus is not None:
+        submit_cmd += ["--cpus", str(cpus)]
+    if mem:
+        submit_cmd += ["--mem", mem]
+    for extra in forwarded:
+        submit_cmd += ["--extra-runner-arg", extra]
+    if not quiet:
+        submit_cmd += ["--json"]
+
+    result = subprocess.run(submit_cmd, env=env, capture_output=quiet, text=True)
+    if quiet and result.stdout:
+        click.echo(result.stdout, nl=False)
+    raise SystemExit(result.returncode)
+
+

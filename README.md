@@ -42,22 +42,23 @@ python -m pip install -e ".[dev]"
 
 If you do not need dev extras, `python -m pip install -e .` is also supported.
 
-### 2. Configure your API keys
+### 2. One-place setup (under 5 minutes)
 
-Pick one surface — both write to the same `~/.msc/.env` (mode 600) and use the same SDK underneath. There is no separate "VSCode key store" to keep in sync.
+The fastest path is the dashboard's **Setup** tab. It checks everything (API key, OpenClaude binary, Python, CLI, optional tooling) in a single checklist and lets you fix any red item from the same panel.
 
-**Terminal:** run the full tier-first wizard, which also writes `~/.msc/config.yaml` for CLI defaults.
+1. Open the dashboard: `MSc: Open Dashboard` (or `MSc: Open Setup` to land directly).
+2. Paste your OpenRouter key into the **OpenRouter API key** row. It's written to `~/.msc/.env` (mode 600).
+3. Click **Install OpenClaude**. The dashboard runs `msc openclaude install`, which `npm install -g @gitlawb/openclaude` into the same environment that ships `msc` itself.
+4. When all required rows turn green, close the panel and start a campaign.
+
+Both the terminal and the dashboard share `~/.msc/.env` — there is no separate "VSCode key store" to keep in sync.
+
+**Terminal equivalents** (one source of truth):
 
 ```bash
-msc setup
-```
-
-**VSCode extension:** open the dashboard (`MSc: Open Dashboard`) or run `MSc: Configure API Keys` from the command palette. On first launch with no OpenRouter key configured, the extension prompts you with a notification and an onboarding panel.
-
-Once a key is set, you can manage it from either surface:
-
-```bash
-msc config keys list                          # who's set, and from where
+msc setup                       # tier-first interactive wizard (also writes ~/.msc/config.yaml)
+msc openclaude install          # idempotent OpenClaude install
+msc config keys list            # who's set, and from where
 echo "sk-or-..." | msc config keys set OPENROUTER_API_KEY --stdin
 msc config keys unset OPENROUTER_API_KEY
 ```
@@ -67,7 +68,8 @@ The setup flow is tier-first. Your default tier defines the default model, budge
 ### 3. Verify the environment
 
 ```bash
-msc doctor
+msc doctor                      # full environment check
+msc project setup-state --json  # same checks the dashboard Setup tab uses
 ```
 
 `msc doctor` validates Python, package installation, API keys, optional tooling, and campaign/runtime availability. It also shows where each credential came from, such as `shell`, `config-dir`, or `repo-env`.

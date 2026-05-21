@@ -4,10 +4,12 @@ This guide shows the supported way to go from a research idea to an autonomous M
 
 ## Prerequisites
 
+Run the dashboard's Setup tab (or `msc setup` + `msc openclaude install`) first — see the [README "One-place setup" section](README.md#2-one-place-setup-under-5-minutes). When that page reports all required rows green, you have:
+
 - `python -m pip install -e ".[dev]"` completed in this checkout
-- `msc setup` completed successfully
-- `msc doctor` passes
-- OpenRouter configured through your shell, `--config-dir`, or `~/.msc/.env`
+- OpenRouter key in `~/.msc/.env` (or shell / `--config-dir` / repo `.env`)
+- OpenClaude binary on PATH (for the chat steering UI)
+- `msc doctor` passing
 - Optional: LaTeX, SLURM, OpenClaw, and notification credentials
 
 ## Canonical Workflow: `msc campaign`

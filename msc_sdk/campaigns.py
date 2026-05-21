@@ -33,7 +33,35 @@ class CampaignClient:
         }
 
     def workspace(self, ref: str | Path) -> dict[str, Any]:
+        # Best-effort reconcile of any detached SLURM runs before we read.
+        # This catches the case where the orchestrator (and the heartbeat)
+        # both died between extension polls — without it, the UI would keep
+        # showing a "running" status for a run that no longer exists.
+        # Failures are deliberately swallowed: reconciliation is opportunistic
+        # and the workspace read is the load-bearing operation.
+        self._reconcile_detached_runs(ref)
         return self.store.workspace_read_model(ref)
+
+    def _reconcile_detached_runs(self, ref: str | Path) -> None:
+        import os, subprocess, sys
+        try:
+            campaign_id = self.store.resolve_ref(ref)
+        except FileNotFoundError:
+            return
+        if os.environ.get("MSC_SKIP_RECONCILE") == "1":
+            return
+        try:
+            # Python import overhead alone for `consortium.cli.main` is ~1.5s on
+            # a cold cache; add an squeue call per open run on top. 20s is
+            # comfortable; if even that isn't enough the reconcile just runs
+            # next time workspace() is called.
+            subprocess.run(
+                [sys.executable, "-m", "consortium.cli.main", "hpc",
+                 "--root", str(self.root), "reconcile", campaign_id, "--json"],
+                capture_output=True, timeout=20, check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
 
     def graph(self, ref: str | Path) -> dict[str, Any]:
         return self.store.graph(ref)
@@ -243,6 +271,123 @@ class CampaignClient:
         actor: str = "user",
     ) -> dict[str, Any]:
         return self.store.propose_repair(campaign_ref, node_id=node_id, reason=reason, actor=actor)
+
+    def update_budget_cap(
+        self,
+        campaign_ref: str | Path,
+        new_cap_usd: float,
+        *,
+        actor: str = "user",
+        reason: str = "",
+    ) -> dict[str, Any]:
+        return self.store.update_budget_cap(
+            campaign_ref, new_cap_usd, actor=actor, reason=reason
+        )
+
+    def reset_node_statuses(
+        self,
+        campaign_ref: str | Path,
+        *,
+        new_status: str = "pending",
+    ) -> dict[str, Any]:
+        return self.store.reset_graph_node_statuses(campaign_ref, new_status=new_status)
+
+    def get_council_deadlock(self, campaign_ref: str | Path) -> dict[str, Any] | None:
+        """Return the latest persona_council_deadlock blob or None.
+
+        The blob is the structured payload `_open_deadlock_decision` writes
+        into campaign metadata when the council exhausts its safety cap.
+        Shape: ``{decision_id, node_id, verdicts, rationales, proposal_path,
+        attempts, opened_at, status}`` where ``status`` ∈
+        ``{"open","accepted_as_is","edited","aborted"}``.
+        """
+        meta = self.store.get_campaign_metadata(campaign_ref) or {}
+        blob = meta.get("persona_council_deadlock")
+        return blob if isinstance(blob, dict) else None
+
+    def resolve_council_deadlock(
+        self,
+        campaign_ref: str | Path,
+        *,
+        mode: str,
+        actor: str = "user",
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Mark a persona_council deadlock as resolved by a human.
+
+        ``mode`` must be ``"accept_as_is"`` (use the latest synthesized draft
+        verbatim) or ``"edited"`` (the user has already edited the file at
+        ``proposal_path``; runner reads the file on resume). Either way:
+
+        1. The deadlock blob's ``status`` flips to ``mode`` (still present
+           in metadata) so the runner's ``_check_resolved_deadlock`` honors it
+           on the next ``hpc submit``.
+        2. The underlying approval row gets ``decide_approval(approved=True)``
+           for the audit trail.
+        3. A ``PersonaCouncilResolved`` event lands so the run-history drawer
+           shows the boundary.
+
+        Returns ``{ok, campaign_id, decision_id, mode, proposal_path}``.
+        Raises if no open deadlock exists (idempotency guard).
+        """
+        if mode not in ("accept_as_is", "edited"):
+            raise ValueError(f"mode must be 'accept_as_is' or 'edited', got {mode!r}")
+        campaign_id = self.store.resolve_ref(campaign_ref)
+        blob = self.get_council_deadlock(campaign_id)
+        if not blob:
+            raise FileNotFoundError(
+                f"No persona_council_deadlock blob found for {campaign_id}; "
+                f"nothing to resolve."
+            )
+        if blob.get("status") != "open":
+            raise ValueError(
+                f"persona_council_deadlock for {campaign_id} is already "
+                f"resolved (status={blob.get('status')!r})."
+            )
+        # Flip the blob's status. We leave the blob in metadata so the
+        # runner's pre-check can find it; it gets cleared after consumption.
+        from datetime import datetime, timezone
+
+        resolved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        new_blob = {**blob, "status": mode, "resolved_at": resolved_at,
+                    "resolved_by": actor, "resolution_reason": reason or None}
+        self.store.update_campaign_metadata(
+            campaign_id, {"persona_council_deadlock": new_blob}, actor=actor
+        )
+        # Auto-approve the underlying decision for the audit chain.
+        decision_id = blob.get("decision_id")
+        if decision_id:
+            try:
+                self.store.decide_approval(decision_id, approved=True, actor=actor)
+            except FileNotFoundError:
+                pass  # approval row missing — best-effort
+        # Standalone audit event.
+        event = self.store.append_event(
+            campaign_id, "PersonaCouncilResolved", actor=actor,
+            payload={
+                "decision_id": decision_id, "mode": mode,
+                "proposal_path": blob.get("proposal_path"),
+                "reason": reason or None,
+            },
+        )
+        return {
+            "ok": True, "campaign_id": campaign_id,
+            "decision_id": decision_id, "mode": mode,
+            "proposal_path": blob.get("proposal_path"),
+            "event_id": event["id"],
+        }
+
+    def update_metadata(
+        self,
+        campaign_ref: str | Path,
+        updates: dict[str, Any],
+        *,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        return self.store.update_campaign_metadata(campaign_ref, updates, actor=actor)
+
+    def metadata(self, campaign_ref: str | Path) -> dict[str, Any]:
+        return self.store.get_campaign_metadata(campaign_ref)
 
     def change_tier_model(
         self,

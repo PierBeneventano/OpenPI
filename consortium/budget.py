@@ -165,13 +165,236 @@ class BudgetManager:
         normalized = self._normalize_model_id(model_id)
         return self.pricing.get(normalized)
 
+    def _suggest_sibling_pricing(self, model_id: str) -> Optional[Dict[str, float]]:
+        """Find a similarly-named model that *does* have pricing.
+
+        Heuristic: strip trailing version/date suffixes and look for a prefix
+        match. Returns the sibling's pricing dict (with a ``"sibling"`` key
+        added) so the caller can surface 'suggested rate based on X' to the
+        user.
+        """
+        if not model_id or not self.pricing:
+            return None
+        normalized = self._normalize_model_id(model_id)
+        candidates = [model_id, normalized]
+        # Try progressively shorter prefixes
+        for ref in candidates:
+            for known in self.pricing:
+                if ref and known and known != ref and (ref.startswith(known) or known.startswith(ref.rsplit("-", 1)[0])):
+                    pricing = dict(self.pricing[known])
+                    pricing["sibling"] = known
+                    return pricing
+        return None
+
+    def _read_pricing_disposition(self, model_id: str) -> Optional[Dict[str, Any]]:
+        """Check the campaign metadata for a previously-chosen disposition.
+
+        If the user already decided how to handle an uncovered model in this
+        campaign (via the VSCode pricing pause UI), don't re-prompt — apply
+        the saved choice. Returns ``None`` outside a campaign context or when
+        no disposition has been recorded yet.
+        """
+        campaign_id = os.environ.get("MSC_CAMPAIGN_ID")
+        campaign_root = os.environ.get("MSC_CAMPAIGN_ROOT")
+        if not campaign_id or not campaign_root:
+            return None
+        try:
+            from msc_sdk.campaign_store import CampaignStore
+
+            meta = CampaignStore(campaign_root).get_campaign_metadata(campaign_id)
+            dispositions = meta.get("pricing_dispositions") or {}
+            return dispositions.get(model_id) or dispositions.get(self._normalize_model_id(model_id))
+        except Exception:
+            return None
+
+    def _pause_for_pricing_decision(self, model_id: str) -> Optional[Dict[str, Any]]:
+        """Open a ``PricingUnknown`` decision and wait for the user's choice.
+
+        Writes a decision via ``propose_repair`` with the suggested sibling
+        rate (if any). Blocks until the user picks one of:
+
+          ``{"action": "use_suggested"}``                — use the sibling rate
+          ``{"action": "set_rate", "input_per_1k": ..., "output_per_1k": ...}``
+          ``{"action": "treat_as_zero"}``                — charge $0 from now on
+          ``{"action": "skip_model"}``                   — calls return error
+
+        The choice is read from
+        ``<campaign>/steering/<run_id>/pricing_inbox.jsonl`` (one record per
+        instruction, latest wins). The chosen disposition is persisted to
+        campaign metadata so we don't re-prompt for the same model later.
+
+        Returns ``None`` if we cannot reach a decision (no campaign context;
+        timeout); callers should fall back to ``fail_closed`` behaviour.
+        """
+        campaign_id = os.environ.get("MSC_CAMPAIGN_ID")
+        campaign_root = os.environ.get("MSC_CAMPAIGN_ROOT")
+        run_id = os.environ.get("MSC_CAMPAIGN_RUN_ID") or os.environ.get("CONSORTIUM_RUN_ID")
+        if not campaign_id or not campaign_root:
+            return None  # foreground / standalone runs: nothing to wait on
+
+        suggestion = self._suggest_sibling_pricing(model_id)
+        try:
+            from msc_sdk.campaign_store import CampaignStore
+
+            store = CampaignStore(campaign_root)
+            reason = (
+                f"Pricing unknown for model '{model_id}'. "
+                + (f"Suggested rate based on {suggestion.get('sibling')}: "
+                   f"${suggestion.get('input_per_1k')}/1k in, "
+                   f"${suggestion.get('output_per_1k')}/1k out. " if suggestion else "")
+                + "Choose: use-suggested / set-rate / treat-as-zero / skip-model."
+            )
+            store.propose_repair(
+                campaign_id,
+                node_id=None,
+                reason=reason,
+                actor="budget",
+            )
+            # Also emit a PricingUnknown event so the UI can surface it
+            store.append_event(
+                campaign_id, "PricingUnknown", actor="budget",
+                payload={"model_id": model_id, "suggestion": suggestion, "run_id": run_id},
+            )
+        except Exception as exc:
+            logger.warning("Could not open pricing-unknown decision for %s: %s", model_id, exc)
+            return None
+
+        # Block on pricing_inbox.jsonl until a disposition arrives.
+        if not run_id:
+            return None
+        inbox_path = os.path.join(
+            campaign_root, "results", campaign_id, "steering", run_id, "pricing_inbox.jsonl"
+        )
+        # Fall back to the standard run_dir layout used by hpc submit
+        if not os.path.isdir(os.path.dirname(inbox_path)):
+            try:
+                from msc_sdk.campaign_store import CampaignStore
+
+                info = CampaignStore(campaign_root).inspect_dict(campaign_id)
+                ws = info.get("workspace_root") or info.get("path")
+                if ws:
+                    inbox_path = os.path.join(str(ws), "steering", run_id, "pricing_inbox.jsonl")
+            except Exception:
+                pass
+        os.makedirs(os.path.dirname(inbox_path), exist_ok=True)
+        logger.warning(
+            "[budget] Paused on uncovered pricing for %s. Waiting on %s. "
+            "Use 'msc hpc set-pricing-disposition' to resume.",
+            model_id, inbox_path,
+        )
+
+        # Poll the inbox for ~15 minutes; check every 2s.
+        deadline = datetime.now(timezone.utc).timestamp() + 15 * 60
+        last_size = 0
+        while datetime.now(timezone.utc).timestamp() < deadline:
+            try:
+                size = os.path.getsize(inbox_path) if os.path.exists(inbox_path) else 0
+                if size > last_size:
+                    last_size = size
+                    with open(inbox_path, "r", encoding="utf-8") as f:
+                        lines = [ln for ln in f.read().splitlines() if ln.strip()]
+                    for ln in reversed(lines):
+                        try:
+                            rec = json.loads(ln)
+                        except json.JSONDecodeError:
+                            continue
+                        if rec.get("model_id") != model_id and rec.get("model_id") is not None:
+                            continue
+                        action = rec.get("action")
+                        if action in ("use_suggested", "set_rate", "treat_as_zero", "skip_model"):
+                            return rec
+            except OSError:
+                pass
+            threading.Event().wait(2.0)
+        logger.warning(
+            "[budget] Pricing-unknown decision for %s timed out after 15min.", model_id
+        )
+        return None
+
+    def _apply_pricing_disposition(
+        self, model_id: str, disposition: Dict[str, Any]
+    ) -> Optional[Dict[str, float]]:
+        """Apply a saved disposition: returns effective pricing, or None to skip.
+
+        Side effect: persists the disposition into the campaign metadata so
+        we don't re-prompt for the same model on subsequent calls.
+        """
+        action = disposition.get("action")
+        suggestion = self._suggest_sibling_pricing(model_id) or {}
+        if action == "use_suggested" and suggestion:
+            effective = {
+                "input_per_1k": float(suggestion.get("input_per_1k", 0.0)),
+                "output_per_1k": float(suggestion.get("output_per_1k", 0.0)),
+            }
+        elif action == "set_rate":
+            try:
+                effective = {
+                    "input_per_1k": float(disposition.get("input_per_1k", 0.0)),
+                    "output_per_1k": float(disposition.get("output_per_1k", 0.0)),
+                }
+            except (TypeError, ValueError):
+                return None
+        elif action == "treat_as_zero":
+            effective = {"input_per_1k": 0.0, "output_per_1k": 0.0}
+        elif action == "skip_model":
+            effective = None
+        else:
+            return None
+
+        # Persist in memory + in campaign metadata for future calls.
+        if effective is not None:
+            self.pricing[model_id] = effective
+        self._persist_pricing_disposition(model_id, {"action": action, **(effective or {})})
+        return effective
+
+    def _persist_pricing_disposition(self, model_id: str, disposition: Dict[str, Any]) -> None:
+        campaign_id = os.environ.get("MSC_CAMPAIGN_ID")
+        campaign_root = os.environ.get("MSC_CAMPAIGN_ROOT")
+        if not campaign_id or not campaign_root:
+            return
+        try:
+            from msc_sdk.campaign_store import CampaignStore
+
+            store = CampaignStore(campaign_root)
+            meta = store.get_campaign_metadata(campaign_id)
+            dispositions = dict(meta.get("pricing_dispositions") or {})
+            dispositions[model_id] = disposition
+            store.update_campaign_metadata(
+                campaign_id, {"pricing_dispositions": dispositions}, actor="budget"
+            )
+        except Exception as exc:
+            logger.warning("Could not persist pricing disposition for %s: %s", model_id, exc)
+
     def _compute_cost(self, model_id: str, prompt_tokens: int, completion_tokens: int) -> float:
         pricing = self._get_pricing(model_id)
         if not pricing:
+            # Check whether the user has previously decided how to treat this
+            # model in this campaign. If so, apply silently.
+            disposition = self._read_pricing_disposition(model_id)
+            if disposition:
+                pricing = self._apply_pricing_disposition(model_id, disposition)
+                if pricing is None and disposition.get("action") == "skip_model":
+                    raise BudgetExceededError(
+                        f"Model '{model_id}' is configured to be skipped (no pricing)."
+                    )
+            else:
+                # First encounter — pause and ask. The runner blocks here
+                # until the user clicks a button in the VSCode pricing UI.
+                disposition = self._pause_for_pricing_decision(model_id)
+                if disposition:
+                    pricing = self._apply_pricing_disposition(model_id, disposition)
+                    if pricing is None and disposition.get("action") == "skip_model":
+                        raise BudgetExceededError(
+                            f"Model '{model_id}' skipped per user disposition."
+                        )
+
+        if not pricing:
+            # No campaign context, timeout, or fail_closed-style fallback.
             if self.fail_closed:
                 raise BudgetExceededError(
                     f"Budget enforcement: no pricing configured for model '{model_id}'. "
-                    f"Add pricing to .llm_config.yaml under budget.pricing."
+                    f"Add pricing to .llm_config.yaml under budget.pricing, "
+                    f"or set a disposition via `msc hpc set-pricing-disposition`."
                 )
             return 0.0
         input_per_1k = float(pricing.get("input_per_1k", 0.0))

@@ -212,3 +212,87 @@ def test_openclaude_skill_preserves_kernel_guardrails():
     assert "confirmation" in skill.lower()
     assert "msc openclaude campaign-harness <campaign> --json" in skill
     assert "campaign execution" in skill
+
+
+def test_openclaude_install_already_installed_is_idempotent(monkeypatch):
+    from consortium.cli.commands import openclaude as cmd
+
+    monkeypatch.setattr(cmd.shutil, "which", lambda name: "/fake/bin/openclaude" if name == "openclaude" else None)
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("subprocess.run must not be invoked when binary already exists")
+
+    monkeypatch.setattr(cmd.subprocess, "run", fail_run)
+
+    result = cmd._install_openclaude(force=False)
+    assert result == {
+        "ok": True,
+        "already_installed": True,
+        "path": "/fake/bin/openclaude",
+        "package": "@gitlawb/openclaude",
+    }
+
+
+def test_openclaude_install_force_calls_npm(monkeypatch):
+    from consortium.cli.commands import openclaude as cmd
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(cmd, "_find_npm", lambda: "/fake/bin/npm")
+
+    state = {"installed": False}
+
+    def fake_which(name):
+        if name != "openclaude":
+            return None
+        return "/fake/bin/openclaude" if state["installed"] else None
+
+    monkeypatch.setattr(cmd.shutil, "which", fake_which)
+
+    class FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        state["installed"] = True
+        return FakeProc()
+
+    monkeypatch.setattr(cmd.subprocess, "run", fake_run)
+
+    result = cmd._install_openclaude(force=True)
+    assert result["ok"] is True
+    assert result.get("installed") is True
+    assert result["path"] == "/fake/bin/openclaude"
+    assert calls == [["/fake/bin/npm", "install", "-g", "@gitlawb/openclaude"]]
+
+
+def test_openclaude_install_reports_npm_missing(monkeypatch):
+    from consortium.cli.commands import openclaude as cmd
+
+    monkeypatch.setattr(cmd.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cmd, "_find_npm", lambda: None)
+
+    result = cmd._install_openclaude(force=False)
+    assert result["ok"] is False
+    assert result["error_code"] == "npm_missing"
+
+
+def test_openclaude_install_reports_failure_stderr(monkeypatch):
+    from consortium.cli.commands import openclaude as cmd
+
+    monkeypatch.setattr(cmd.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cmd, "_find_npm", lambda: "/fake/bin/npm")
+
+    class FakeProc:
+        returncode = 7
+        stdout = ""
+        stderr = "npm ERR! something broke"
+
+    monkeypatch.setattr(cmd.subprocess, "run", lambda *a, **kw: FakeProc())
+
+    result = cmd._install_openclaude(force=False)
+    assert result["ok"] is False
+    assert result["error_code"] == "install_failed"
+    assert "something broke" in result["error"]
+    assert result["exit_code"] == 7

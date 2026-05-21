@@ -150,6 +150,103 @@ def _parse_json_response(text: str) -> Optional[dict]:
 # Core: run_persona_council
 # ---------------------------------------------------------------------------
 
+def _emit_council_event(event_type: str, payload: Dict[str, Any]) -> None:
+    """Append a ``PersonaCouncil*`` event to the campaign event log.
+
+    Best-effort: silently no-ops outside a campaign context (when there's no
+    ``MSC_CAMPAIGN_ID`` set) so the council still works in standalone tests.
+    """
+    campaign_id = os.environ.get("MSC_CAMPAIGN_ID")
+    campaign_root = os.environ.get("MSC_CAMPAIGN_ROOT")
+    if not campaign_id or not campaign_root:
+        return
+    try:
+        from msc_sdk.campaign_store import CampaignStore
+
+        CampaignStore(campaign_root).append_event(
+            campaign_id, event_type, actor="persona_council", payload=payload
+        )
+    except Exception as exc:
+        # Never let event-bookkeeping kill the council itself.
+        print(f"[persona_council] Could not emit {event_type}: {exc}")
+
+
+def _synthesize_proposal(
+    model: str,
+    user_content: str,
+    synthesis_extra: Dict[str, Any],
+    *,
+    fallback_text: str = "",
+) -> str:
+    """Call the synthesizer with enough budget for a real proposal.
+
+    Two failure modes the original code hit on muon-test-v5:
+
+    1. ``max_tokens=8192`` was too tight. With ``reasoning_effort="high"`` on
+       Sonnet/GPT models, internal reasoning tokens consume most of the cap
+       and ``content`` comes back empty. We raise to 32768 so reasoning has
+       room *and* there's a real proposal left over.
+
+    2. When the response *is* empty (truncation, finish_reason=length,
+       safety filter, etc.) the original code silently used ``""``, the
+       personas unanimously rejected the empty string, and the loop spun
+       through 5 attempts producing nothing. We now detect that and retry
+       once with ``reasoning_effort`` dropped so all tokens go to content.
+
+    Returns the proposal text, or ``fallback_text`` if both attempts come
+    back empty.
+    """
+    def _do_call(extra: Dict[str, Any], max_tokens: int) -> tuple[str, str]:
+        resp = litellm.completion(
+            model=model,
+            messages=[
+                {"role": "system", "content": PERSONA_SYNTHESIS_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            max_tokens=max_tokens,
+            **extra,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        finish_reason = ""
+        try:
+            finish_reason = str(getattr(resp.choices[0], "finish_reason", "") or "")
+        except (AttributeError, IndexError):
+            pass
+        return text, finish_reason
+
+    try:
+        text, finish = _do_call(synthesis_extra, max_tokens=32768)
+    except Exception as e:
+        print(f"[persona_council] Synthesis call failed ({e}); using fallback.")
+        return fallback_text
+
+    if text:
+        if finish == "length":
+            print(
+                f"[persona_council] WARNING: synthesis hit max_tokens "
+                f"(finish_reason=length, {len(text)} chars produced). "
+                f"Proposal may be truncated."
+            )
+        return text
+
+    # Empty response. Most common cause: reasoning_effort=high consumed the
+    # whole token budget. Retry once without it so all tokens are output.
+    print(
+        f"[persona_council] WARNING: synthesis returned empty content "
+        f"(finish_reason={finish!r}). Retrying without reasoning_effort=high."
+    )
+    fallback_extra = {k: v for k, v in synthesis_extra.items() if k != "reasoning_effort"}
+    try:
+        text, _ = _do_call(fallback_extra, max_tokens=32768)
+    except Exception as e:
+        print(f"[persona_council] Fallback synthesis failed ({e}); using prior draft.")
+        return fallback_text
+    if text:
+        return text
+    print("[persona_council] WARNING: fallback synthesis also returned empty; using prior draft.")
+    return fallback_text
+
+
 def run_persona_council(
     task: str,
     persona_specs: Optional[List[Dict[str, Any]]] = None,
@@ -157,10 +254,16 @@ def run_persona_council(
     synthesis_model: str = DEFAULT_SYNTHESIS_MODEL,
     budget_manager: Optional[Any] = None,
     timeout_seconds: int = 600,
-    max_post_vote_retries: int = 1,
-) -> Tuple[str, Dict[str, str]]:
+    max_synthesis_attempts: int = 5,
+    max_post_vote_retries: Optional[int] = None,
+) -> Tuple[str, Dict[str, str], bool]:
     """
     Run a 3-persona debate to synthesize a research proposal.
+
+    The council loops: synthesize → vote → (on consensus) return; (on rejection)
+    re-synthesize with the rejection rationale appended. It only gives up when
+    ``max_synthesis_attempts`` is exhausted, and the third return value flags
+    that case so the caller can stop the graph instead of advancing.
 
     Parameters
     ----------
@@ -178,15 +281,24 @@ def run_persona_council(
         If provided, token usage is recorded for every LLM call.
     timeout_seconds : int
         Per-call timeout for ThreadPoolExecutor futures (default 600).
-    max_post_vote_retries : int
-        Max re-synthesis attempts if post-synthesis vote rejects (default 1).
+    max_synthesis_attempts : int
+        Safety cap on the synthesize-vote-revise loop (default 5). Above this,
+        the council halts with ``deadlocked=True``; the caller should park the
+        graph and write a decision rather than silently advancing.
+    max_post_vote_retries : int, optional
+        Deprecated. Back-compat alias: if set, becomes
+        ``max_synthesis_attempts = max_post_vote_retries + 1``.
 
     Returns
     -------
-    (proposal_text, verdicts) : tuple[str, dict[str, str]]
-        *proposal_text* is the 1-2 page synthesized proposal.
+    (proposal_text, verdicts, deadlocked) : tuple[str, dict[str, str], bool]
+        *proposal_text* is the latest synthesized 1-2 page proposal.
         *verdicts* maps persona name -> "ACCEPT" | "REJECT" | "UNKNOWN".
+        *deadlocked* is True iff the cap was hit without 2-of-3 ACCEPT.
     """
+    # Back-compat for old call sites that still pass max_post_vote_retries.
+    if max_post_vote_retries is not None:
+        max_synthesis_attempts = max(1, int(max_post_vote_retries) + 1)
     specs = persona_specs or DEFAULT_PERSONA_MODEL_SPECS
 
     # ------------------------------------------------------------------
@@ -350,21 +462,10 @@ def run_persona_council(
 
     _routed_synthesis = resolve_or_model(synthesis_model)
     _synthesis_extra = {"reasoning_effort": "high"} if any(p in synthesis_model for p in ("claude", "gpt")) else {}
-    try:
-        resp = litellm.completion(
-            model=_routed_synthesis,
-            messages=[
-                {"role": "system", "content": PERSONA_SYNTHESIS_PROMPT},
-                {"role": "user", "content": synthesis_input},
-            ],
-            max_tokens=8192,
-            **_synthesis_extra,
-        )
-        proposal_text = resp.choices[0].message.content or ""
-        # Budget recorded automatically via litellm.completion monkey-patch
-    except Exception as e:
-        print(f"[persona_council] Synthesis failed ({e}), using first evaluation as fallback.")
-        proposal_text = evaluations[0] if evaluations else f"[synthesis error: {e}]"
+    proposal_text = _synthesize_proposal(
+        _routed_synthesis, synthesis_input, _synthesis_extra,
+        fallback_text=evaluations[0] if evaluations else "",
+    )
 
     # ------------------------------------------------------------------
     # Phase 4 — Post-synthesis accountability vote (parallel)
@@ -400,9 +501,30 @@ def run_persona_council(
         vote_verdict = _extract_verdict(vote_text)
         return idx, vote_verdict, vote_text
 
-    for post_vote_attempt in range(max_post_vote_retries + 1):
-        post_verdicts: Dict[str, str] = {}
-        post_vote_texts: Dict[str, str] = {}
+    # Loop the synthesize -> vote -> revise cycle until 2-of-3 ACCEPT or we hit
+    # the safety cap. Each attempt's verdicts + proposal preview is emitted as
+    # a PersonaCouncilAttempt event so the VSCode UI can render progress live.
+    consensus = False
+    attempt = 0
+    post_verdicts: Dict[str, str] = {}
+    post_vote_texts: Dict[str, str] = {}
+
+    # Guard: if the initial synthesis came back empty even after the
+    # fallback retry, voting on it is pure waste. Bail to the deadlock
+    # path immediately so the human can intervene rather than spinning
+    # the loop on an empty string (this was the v5 failure mode before
+    # _synthesize_proposal landed).
+    if not proposal_text.strip():
+        print(
+            "[persona_council] DEADLOCKED before voting: synthesis returned "
+            "empty content; cannot ask personas to evaluate an empty plan."
+        )
+        return proposal_text, {spec["persona"]: "UNKNOWN" for spec in specs}, True, {}
+
+    while attempt < max_synthesis_attempts:
+        attempt += 1
+        post_verdicts = {}
+        post_vote_texts = {}
 
         with ThreadPoolExecutor(max_workers=len(specs)) as pool:
             futures = {pool.submit(_post_vote, i, proposal_text): i for i in range(len(specs))}
@@ -428,44 +550,66 @@ def run_persona_council(
                         post_vote_texts[name] = "[vote timed out]"
                         f.cancel()
 
+        accept_count = sum(1 for v in post_verdicts.values() if v == "ACCEPT")
         post_reject_count = sum(1 for v in post_verdicts.values() if v == "REJECT")
         print(
             f"[persona_council] Phase 4 — post-synthesis vote "
-            f"(attempt {post_vote_attempt + 1}): {post_verdicts}"
+            f"(attempt {attempt}/{max_synthesis_attempts}): {post_verdicts}"
         )
 
-        if post_reject_count < 2 or post_vote_attempt >= max_post_vote_retries:
-            # Accept or retries exhausted — use current proposal
-            verdicts = post_verdicts
+        # Emit a per-attempt event so the VSCode node-detail panel can show
+        # the evolving verdicts and the latest proposal preview live.
+        _emit_council_event(
+            "PersonaCouncilAttempt",
+            {
+                "attempt": attempt,
+                "max_attempts": max_synthesis_attempts,
+                "verdicts": post_verdicts,
+                "accept_count": accept_count,
+                "reject_count": post_reject_count,
+                "proposal_preview": proposal_text[:400],
+            },
+        )
+
+        # Consensus is 2-of-3 ACCEPT. The remaining persona is allowed to be
+        # REJECT or UNKNOWN; this matches the existing threshold.
+        if accept_count >= 2:
+            consensus = True
             break
 
-        # 2+ rejected — re-synthesize with objections appended
+        # Below the cap and no consensus — revise with the rejection rationale.
+        # The rejection text is THREADED INTO the next synthesis prompt so the
+        # next attempt isn't just a coin-flip retry but a genuine evolution.
+        if attempt >= max_synthesis_attempts:
+            break  # Out of attempts; fall through to deadlock handling.
+
         objections = "\n\n".join(
             f"=== {name} POST-SYNTHESIS REJECTION ===\n{post_vote_texts[name]}"
             for name, v in post_verdicts.items() if v == "REJECT"
         )
         synthesis_input_retry = (
             synthesis_input + "\n\n"
-            f"POST-SYNTHESIS VOTE: {post_reject_count} of {len(specs)} personas REJECTED "
-            f"the synthesized proposal. Their objections:\n\n{objections}\n\n"
-            "You MUST address these objections in a revised proposal."
+            f"POST-SYNTHESIS VOTE (attempt {attempt}/{max_synthesis_attempts}): "
+            f"{post_reject_count} of {len(specs)} personas REJECTED the synthesized "
+            f"proposal. Their objections:\n\n{objections}\n\n"
+            "You MUST evolve the proposal to address these specific objections. "
+            "Do not merely rephrase; produce a revised plan that genuinely "
+            "responds to the criticisms."
         )
-        try:
-            resp = litellm.completion(
-                model=_routed_synthesis,
-                messages=[
-                    {"role": "system", "content": PERSONA_SYNTHESIS_PROMPT},
-                    {"role": "user", "content": synthesis_input_retry},
-                ],
-                max_tokens=8192,
-                **_synthesis_extra,
-            )
-            proposal_text = resp.choices[0].message.content or ""
-            print("[persona_council] Phase 4 — re-synthesis complete after post-vote rejection.")
-        except Exception as e:
-            print(f"[persona_council] Re-synthesis failed ({e}), keeping original proposal.")
-            verdicts = post_verdicts
+        proposal_text = _synthesize_proposal(
+            _routed_synthesis, synthesis_input_retry, _synthesis_extra,
+            fallback_text=proposal_text,  # keep previous draft if re-synth fails
+        )
+        if not proposal_text.strip():
+            print(f"[persona_council] Re-synthesis returned empty on attempt {attempt}; halting.")
             break
+        print(
+            f"[persona_council] Phase 4 — re-synthesis complete after "
+            f"attempt {attempt} rejection."
+        )
+
+    verdicts = post_verdicts
+    deadlocked = not consensus
 
     # Warn about UNKNOWN verdicts (parse failures or errors)
     unknown_personas = [name for name, v in verdicts.items() if v == "UNKNOWN"]
@@ -473,11 +617,23 @@ def run_persona_council(
         print(
             f"[persona_council] WARNING: Phase 4 — {len(unknown_personas)} persona(s) "
             f"returned UNKNOWN verdict (parse failure or error): {unknown_personas}. "
-            f"These were not counted toward re-synthesis threshold."
+            f"These were not counted toward consensus threshold."
         )
 
-    print(f"[persona_council] Complete. Final verdicts: {verdicts}")
-    return proposal_text, verdicts
+    if deadlocked:
+        print(
+            f"[persona_council] DEADLOCKED after {attempt} attempts. "
+            f"Final verdicts: {verdicts}. Caller should halt the stage and "
+            f"open a human-decision."
+        )
+    else:
+        print(f"[persona_council] CONSENSUS reached on attempt {attempt}. "
+              f"Final verdicts: {verdicts}")
+    # 4-tuple: includes the final per-persona vote texts so the node wrapper
+    # can attach them to the deadlock decision metadata for the UI to render.
+    # Callers that unpack a 3-tuple are unaffected — _run_persona_council_compat
+    # below preserves the old shape for them.
+    return proposal_text, verdicts, deadlocked, post_vote_texts
 
 
 # ---------------------------------------------------------------------------
@@ -663,7 +819,9 @@ def create_persona_council_node(
     synthesis_model: str = DEFAULT_SYNTHESIS_MODEL,
     budget_manager: Optional[Any] = None,
     timeout_seconds: int = 600,
-    max_post_vote_retries: int = 1,
+    max_synthesis_attempts: int = 5,
+    deadlock_policy: str = "pause",
+    max_post_vote_retries: Optional[int] = None,
 ) -> Callable:
     """
     Return a LangGraph node callable that runs the persona council.
@@ -671,19 +829,83 @@ def create_persona_council_node(
     The node reads ``state["task"]``, invokes :func:`run_persona_council`,
     writes campaign-attached artifacts through the contract runtime when
     available, and returns a state-update dict.
+
+    Parameters
+    ----------
+    max_synthesis_attempts : int
+        Safety cap on the council's evolve-and-vote loop (default 5).
+    deadlock_policy : {"pause", "best_effort"}
+        On safety-cap exhaustion without consensus: ``"pause"`` (default)
+        halts the stage and opens a human-decision; ``"best_effort"`` writes
+        the latest proposal and lets the graph advance.
+    max_post_vote_retries : int, optional
+        Deprecated alias; if set, becomes
+        ``max_synthesis_attempts = max_post_vote_retries + 1``.
     """
+    # Back-compat for older callers
+    if max_post_vote_retries is not None:
+        max_synthesis_attempts = max(1, int(max_post_vote_retries) + 1)
+
+    # Allow per-campaign overrides via metadata. The campaign client wrote
+    # `persona_max_synthesis_attempts` / `persona_deadlock_policy` when the
+    # user adjusted the Advanced section of the New Campaign modal.
+    campaign_id = os.environ.get("MSC_CAMPAIGN_ID")
+    campaign_root = os.environ.get("MSC_CAMPAIGN_ROOT")
+    if campaign_id and campaign_root:
+        try:
+            from msc_sdk.campaign_store import CampaignStore
+
+            meta = CampaignStore(campaign_root).get_campaign_metadata(campaign_id)
+            override_attempts = meta.get("persona_max_synthesis_attempts")
+            if override_attempts is not None:
+                max_synthesis_attempts = max(1, int(override_attempts))
+            override_policy = meta.get("persona_deadlock_policy")
+            if override_policy in ("pause", "best_effort"):
+                deadlock_policy = override_policy
+            override_rounds = meta.get("persona_debate_rounds")
+            if override_rounds is not None:
+                max_debate_rounds = max(1, int(override_rounds))
+        except Exception:
+            pass  # silent fallback to args defaults
 
     def persona_council_node(state: dict) -> dict:
+        # Pre-check: if a previous deadlock has been resolved by a human
+        # (either accept_as_is or edited), skip the council entirely and use
+        # the resolved proposal as our output. This is what makes the
+        # 'Accept as-is' / 'Edit plan and proceed' UI buttons actually take
+        # effect on the next `hpc submit` — without it, the council would
+        # just deadlock the same way again.
+        resolved = _check_resolved_deadlock()
+        if resolved:
+            print(
+                f"[persona_council] Honoring human-resolved deadlock: "
+                f"status={resolved['status']} proposal_path={resolved['proposal_path']}"
+            )
+            return {
+                "agent_outputs": {
+                    **state.get("agent_outputs", {}),
+                    "persona_council": resolved["proposal_text"],
+                },
+                "research_proposal": resolved["proposal_text"],
+                "persona_council_consensus": True,
+                "persona_council_human_resolved": True,
+                "persona_council_resolution": resolved["status"],
+                "artifacts": {
+                    **state.get("artifacts", {}),
+                    "research_proposal": resolved["proposal_path"],
+                },
+            }
+
         task = state.get("agent_task") or state.get("task", "")
 
-        proposal, verdicts = run_persona_council(
+        proposal, verdicts, deadlocked, rationales = run_persona_council(
             task=task,
             persona_specs=persona_specs,
             max_debate_rounds=max_debate_rounds,
             synthesis_model=synthesis_model,
             budget_manager=budget_manager,
             timeout_seconds=timeout_seconds,
-            max_post_vote_retries=max_post_vote_retries,
+            max_synthesis_attempts=max_synthesis_attempts,
         )
 
         proposal_path = ""
@@ -740,12 +962,14 @@ def create_persona_council_node(
             except Exception as e:
                 print(f"[persona_council_node] Failed to write verdicts: {e}")
 
-        return {
+        state_update: Dict[str, Any] = {
             "agent_outputs": {
                 **state.get("agent_outputs", {}),
                 "persona_council": proposal,
             },
             "research_proposal": proposal,
+            "persona_council_consensus": not deadlocked,
+            "persona_council_verdicts": verdicts,
             "artifacts": {
                 **state.get("artifacts", {}),
                 "research_proposal": proposal_path,
@@ -753,8 +977,155 @@ def create_persona_council_node(
             },
         }
 
+        if deadlocked and deadlock_policy == "pause":
+            # Halt the stage: open a human-decision and signal the graph router
+            # to park rather than advance. The proposal is still written above
+            # so the user can read what the personas couldn't agree on.
+            _open_deadlock_decision(
+                verdicts=verdicts,
+                rationales=rationales,
+                proposal_path=proposal_path,
+                attempts=max_synthesis_attempts,
+            )
+            state_update["critical_failure"] = "persona_council_deadlock"
+            state_update["human_decision_required"] = True
+
+        return state_update
+
     persona_council_node.__name__ = "persona_council"
     return persona_council_node
+
+
+def _check_resolved_deadlock() -> Optional[Dict[str, Any]]:
+    """Look for a previously-resolved persona_council_deadlock in campaign metadata.
+
+    Returns ``None`` outside a campaign context or when no resolved blob
+    exists. On a hit, reads the proposal file from disk and returns
+    ``{"proposal_text", "proposal_path", "status"}`` so the node can return
+    the resolved proposal as its output instead of running the council.
+
+    Also *clears* the blob after consumption — a fresh deadlock in a later
+    attempt opens its own decision, rather than silently honoring stale
+    resolution.
+    """
+    campaign_id = os.environ.get("MSC_CAMPAIGN_ID")
+    campaign_root = os.environ.get("MSC_CAMPAIGN_ROOT")
+    if not campaign_id or not campaign_root:
+        return None
+    try:
+        from msc_sdk.campaign_store import CampaignStore
+
+        store = CampaignStore(campaign_root)
+        meta = store.get_campaign_metadata(campaign_id)
+        blob = meta.get("persona_council_deadlock") or {}
+        status = blob.get("status")
+        if status not in ("accepted_as_is", "edited"):
+            return None
+        proposal_path = blob.get("proposal_path") or ""
+        if not proposal_path or not os.path.exists(proposal_path):
+            print(
+                f"[persona_council] WARNING: deadlock resolution found but proposal "
+                f"path missing or unreadable: {proposal_path!r}; falling back to "
+                f"running the council."
+            )
+            return None
+        with open(proposal_path, "r", encoding="utf-8") as handle:
+            proposal_text = handle.read()
+        # Clear the blob so a later deadlock isn't silently auto-resolved.
+        store.update_campaign_metadata(
+            campaign_id, {"persona_council_deadlock": None}, actor="persona_council"
+        )
+        # Audit event so the run-history drawer shows the boundary.
+        store.append_event(
+            campaign_id,
+            "PersonaCouncilHumanResolved",
+            actor="persona_council",
+            payload={
+                "decision_id": blob.get("decision_id"),
+                "status": status,
+                "proposal_path": proposal_path,
+                "char_count": len(proposal_text),
+            },
+        )
+        return {
+            "proposal_text": proposal_text,
+            "proposal_path": proposal_path,
+            "status": status,
+        }
+    except Exception as exc:
+        print(f"[persona_council] _check_resolved_deadlock error: {exc}")
+        return None
+
+
+def _open_deadlock_decision(
+    *,
+    verdicts: Dict[str, str],
+    rationales: Dict[str, str],
+    proposal_path: str,
+    attempts: int,
+) -> None:
+    """Open a ``persona_council_deadlock`` decision on the campaign.
+
+    Best-effort: silently no-ops outside a campaign context. The decision
+    carries each persona's final verdict + the artifact path so the UI can
+    surface 'approve current proposal / send guidance / abort' actions.
+
+    Also attaches a structured ``persona_council_deadlock`` blob to the
+    campaign metadata so the VSCode DecisionsTab can render verdicts +
+    per-persona rationales + the latest proposal without having to parse
+    the free-form reason string.
+    """
+    campaign_id = os.environ.get("MSC_CAMPAIGN_ID")
+    campaign_root = os.environ.get("MSC_CAMPAIGN_ROOT")
+    if not campaign_id or not campaign_root:
+        return
+    try:
+        from msc_sdk.campaign_store import CampaignStore
+
+        rejection_summary = ", ".join(f"{k}={v}" for k, v in verdicts.items())
+        store = CampaignStore(campaign_root)
+        proposal = store.propose_repair(
+            campaign_id,
+            node_id="persona_council",
+            reason=(
+                f"Persona council could not reach consensus after the safety cap. "
+                f"Final verdicts: {rejection_summary}. Latest proposal written to "
+                f"{proposal_path}. Choose: edit the plan, accept as-is, or abort."
+            ),
+            actor="persona_council",
+        )
+        # Pull the approval id out of the proposal dict (created by
+        # propose_graph_change). It's nested under proposal["approval"]["id"].
+        decision_id = ""
+        try:
+            decision_id = (proposal.get("approval") or {}).get("id") or ""
+        except Exception:
+            pass
+        # Stash structured details on campaign metadata. The UI's DecisionsTab
+        # banner reads this blob directly to render the "why it failed"
+        # summary; `_check_resolved_deadlock` reads `status` on the next run
+        # to know whether to skip the council.
+        from datetime import datetime, timezone
+
+        now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        store.update_campaign_metadata(
+            campaign_id,
+            {
+                "persona_council_deadlock": {
+                    "decision_id": decision_id,
+                    "node_id": "persona_council",
+                    "verdicts": verdicts,
+                    "rationales": rationales,
+                    "proposal_path": str(proposal_path),
+                    "attempts": int(attempts),
+                    "opened_at": now_iso,
+                    "status": "open",
+                }
+            },
+            actor="persona_council",
+        )
+    except Exception as exc:
+        print(f"[persona_council] Could not open deadlock decision: {exc}")
 
 
 def create_duality_check_node(
